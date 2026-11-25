@@ -1,0 +1,16 @@
+/node_modules/
+/dist/
+/dist-renderer/
+/vendor/ffmpeg/bin/
+/build/sample-media/*.mp4
+/build/builtin-audio/*.m4a
+/e2e/shots/
+/e2e/tmp/
+/e2e/*-harness/build/
+/e2e/*-harness/out/
+/docs/research/
+.env
+.env.*
+!.env.example
+*.log
+*.ffproj

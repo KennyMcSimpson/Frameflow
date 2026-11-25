@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 发行版的严格 CSP：脚本只能来自本地文件，界面不直接连外网（联网都走主进程）。开发时由 vite.config.mjs 补上热更新地址 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: ffmedia: https:; media-src 'self' blob: ffmedia: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ffmedia:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
+    <title>镜流 Frameflow</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+﻿FFmpeg 许可与源码获取说明
+
+镜流 Frameflow 随附 FFmpeg（ffmpeg.exe、ffprobe.exe 及其动态库），许可证为 LGPL v3，全文见同目录 LICENSE.txt。
+FFmpeg 以独立程序形式被调用，未修改其源代码；动态库位于安装目录 resources\ffmpeg，用户可自行替换。
+
+版本：n8.1.3-34-ga35157abb9-20261108
+构建：ffmpeg-n8.1.3-34-ga35157abb9-win64-lgpl-shared-8.1.zip
+构建来源：https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-11-08-12-35
+构建脚本（含全部依赖的版本与补丁）：https://github.com/BtbN/FFmpeg-Builds/tree/c9fe5114060e507409f7ee07edfd82efaf25d767
+FFmpeg 对应源码：https://github.com/FFmpeg/FFmpeg/tree/a35157abb9
+FFmpeg 官方网站：https://ffmpeg.org/
+
+构建配置：--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-lcms2 --enable-vulkan --enable-libshaderc --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --disable-avisynth --enable-chromaprint --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --enable-vapoursynth --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --disable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20261108

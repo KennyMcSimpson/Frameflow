@@ -1,0 +1,339 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "music-inspiration",
+      "kind": "music",
+      "title": "Inspiration",
+      "mood": "欢快",
+      "duration": 138.37,
+      "file": "music-inspiration.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Rafael Krux",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/upbeat.php"
+    },
+    {
+      "id": "music-happy-ukulele",
+      "kind": "music",
+      "title": "Happy Whistling Ukulele",
+      "mood": "欢快",
+      "duration": 123.4,
+      "file": "music-happy-ukulele.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Rafael Krux",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/upbeat.php"
+    },
+    {
+      "id": "music-slice-of-life",
+      "kind": "music",
+      "title": "Slice of Life",
+      "mood": "温馨",
+      "duration": 140.76,
+      "file": "music-slice-of-life.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Bryan Teoh",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/scoring.php"
+    },
+    {
+      "id": "music-funky-energy",
+      "kind": "music",
+      "title": "Funky Energy Loop",
+      "mood": "欢快",
+      "duration": 202.501,
+      "file": "music-funky-energy.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Kevin MacLeod",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/scoring.php"
+    },
+    {
+      "id": "music-lovely-piano",
+      "kind": "music",
+      "title": "Lovely Piano Song",
+      "mood": "温馨",
+      "duration": 95.9,
+      "file": "music-lovely-piano.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Rafael Krux",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/romantic.php"
+    },
+    {
+      "id": "music-horizon-flare",
+      "kind": "music",
+      "title": "Horizon Flare",
+      "mood": "激昂",
+      "duration": 102.4,
+      "file": "music-horizon-flare.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Alexander Nakarada",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/romantic.php"
+    },
+    {
+      "id": "music-fireworks",
+      "kind": "music",
+      "title": "Fireworks",
+      "mood": "动感",
+      "duration": 191,
+      "file": "music-fireworks.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Alexander Nakarada",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/electronic.php"
+    },
+    {
+      "id": "music-arpent",
+      "kind": "music",
+      "title": "Arpent",
+      "mood": "动感",
+      "duration": 162.064,
+      "file": "music-arpent.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Kevin MacLeod",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/electronic.php"
+    },
+    {
+      "id": "music-3am-west-end",
+      "kind": "music",
+      "title": "3 am West End",
+      "mood": "舒缓",
+      "duration": 291.1,
+      "file": "music-3am-west-end.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "statusq",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/electronic.php"
+    },
+    {
+      "id": "music-ice-and-snow",
+      "kind": "music",
+      "title": "Ice and Snow",
+      "mood": "舒缓",
+      "duration": 141.6,
+      "file": "music-ice-and-snow.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Rafael Krux",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/scoring.php"
+    },
+    {
+      "id": "music-action-strike",
+      "kind": "music",
+      "title": "Action Strike",
+      "mood": "激昂",
+      "duration": 134.557,
+      "file": "music-action-strike.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Rafael Krux",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/scoring.php"
+    },
+    {
+      "id": "music-shenzhen-nightlife",
+      "kind": "music",
+      "title": "Shenzhen Nightlife",
+      "mood": "动感",
+      "duration": 263.08,
+      "file": "music-shenzhen-nightlife.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "Kevin MacLeod",
+      "sourceUrl": "https://web.archive.org/web/2021/https://freepd.com/world.php"
+    },
+    {
+      "id": "sfx-whoosh",
+      "kind": "sfx",
+      "title": "转场·快速嗖声",
+      "mood": "转场",
+      "duration": 0.9,
+      "file": "sfx-whoosh.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-whoosh-soft",
+      "kind": "sfx",
+      "title": "转场·轻柔扫过",
+      "mood": "转场",
+      "duration": 1.3,
+      "file": "sfx-whoosh-soft.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-riser",
+      "kind": "sfx",
+      "title": "转场·上升铺垫",
+      "mood": "转场",
+      "duration": 2.2,
+      "file": "sfx-riser.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-impact",
+      "kind": "sfx",
+      "title": "强调·重低音冲击",
+      "mood": "强调",
+      "duration": 1.49,
+      "file": "sfx-impact.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-click",
+      "kind": "sfx",
+      "title": "界面·点击",
+      "mood": "界面",
+      "duration": 0.07,
+      "file": "sfx-click.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-pop",
+      "kind": "sfx",
+      "title": "界面·弹出",
+      "mood": "界面",
+      "duration": 0.2,
+      "file": "sfx-pop.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-ding",
+      "kind": "sfx",
+      "title": "提示·叮",
+      "mood": "提示",
+      "duration": 1.705,
+      "file": "sfx-ding.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-success",
+      "kind": "sfx",
+      "title": "提示·完成",
+      "mood": "提示",
+      "duration": 1.06,
+      "file": "sfx-success.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-error",
+      "kind": "sfx",
+      "title": "提示·错误",
+      "mood": "提示",
+      "duration": 0.5,
+      "file": "sfx-error.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-typing",
+      "kind": "sfx",
+      "title": "拟音·键盘打字",
+      "mood": "拟音",
+      "duration": 1.6,
+      "file": "sfx-typing.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    },
+    {
+      "id": "sfx-shutter",
+      "kind": "sfx",
+      "title": "拟音·相机快门",
+      "mood": "拟音",
+      "duration": 0.32,
+      "file": "sfx-shutter.m4a",
+      "license": {
+        "id": "cc0",
+        "name": "CC0 1.0 公有领域贡献",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": "镜流 Frameflow"
+    }
+  ]
+}

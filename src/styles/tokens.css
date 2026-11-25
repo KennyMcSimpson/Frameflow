@@ -1,0 +1,136 @@
+/* 设计令牌 v4 —— 所有模块只用这些变量，不要硬编码颜色（PLAN-v3 §6，Frameflow4 · design 修订）。
+   底色为去色偏的石墨中性阶，避免干扰对画面色彩的判断；
+   主色（人的操作）= --accent，AI 相关 = --ai。旧变量名保留为别名。
+   v4：文字对比度达标（正文 ≥4.5:1，见下方注释）；中文优先字体；控件高度 / 字重 / 阴影 / 焦点环成套；
+       系统或应用里打开「减少动态效果」时所有时长归零。 */
+:root {
+  color-scheme: dark;
+  accent-color: var(--accent);   /* 原生复选框 / 单选 / 滑杆跟随主色 */
+
+  /* ---- 背景 6 级 ---- */
+  --bg-0: #0e0e10;       /* 最底层：时间线、监视器四周 */
+  --bg-1: #161618;       /* 面板 */
+  --bg-2: #1e1f22;       /* 卡片 / 输入框 */
+  --bg-3: #27282c;       /* 悬停 */
+  --bg-4: #303135;       /* 按下 / 选中底（兼容） */
+  --bg-5: #3a3b40;       /* 浮在 bg-4 之上的悬停（例如圆形图标按钮） */
+  --viewer: #0a0a0b;
+  --scrim: rgba(4, 4, 6, 0.62);        /* 对话框遮罩 */
+  --scrim-soft: rgba(0, 0, 0, 0.32);   /* 抽屉遮罩 */
+
+  /* ---- 半透明叠加：任何底色上都能用的悬停 / 按下 ---- */
+  --fill-1: rgba(255, 255, 255, 0.04);
+  --fill-2: rgba(255, 255, 255, 0.07);
+  --fill-3: rgba(255, 255, 255, 0.11);
+  --hover-bg: var(--fill-2);
+
+  /* ---- 线 ---- */
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --line-hover: rgba(255, 255, 255, 0.2);
+  --line-2: var(--line-strong);   /* 兼容旧名 */
+
+  /* ---- 文字（对比度：bg-0 / bg-1 / bg-2 / bg-3） ----
+     text-0 正文与标题；text-1 次要正文（≥8:1）；text-2 说明文字（6.0 / 5.7 / 5.2 / 4.6，均 ≥4.5）；
+     text-3 只用于占位、禁用与装饰性小字（4.0 / 3.8 / 3.4 / 3.1，均 ≥3），不要用来写需要读的句子。 */
+  --text-0: #eeeef0;
+  --text-1: #b4b5ba;
+  --text-2: #8e9096;
+  --text-3: #707278;
+  --fg-0: var(--text-0);   /* 别名：部分模块写作 fg */
+  --fg-1: var(--text-1);
+  --fg-2: var(--text-2);
+  --fg-3: var(--text-3);
+
+  /* ---- 主色：唯一强调色 ---- */
+  --accent: #c8e250;
+  --accent-hover: #d6ec6c;
+  --accent-press: #b4cc3f;
+  --accent-ink: #15170b;
+  --accent-soft: rgba(200, 226, 80, 0.13);
+  --accent-line: rgba(200, 226, 80, 0.45);
+  --accent-glow: rgba(200, 226, 80, 0.55);   /* 主按钮下方的光晕 */
+  --focus-ring: var(--accent);               /* 键盘焦点环（:focus-visible） */
+  --sel-ring: inset 0 0 0 2px var(--accent); /* 选中描边（box-shadow，向内画，不会被 overflow 裁掉） */
+
+  /* ---- AI ---- */
+  --ai: #9d8cff;
+  --ai-hover: #b3a6ff;
+  --ai-ink: #140f33;
+  --ai-soft: rgba(157, 140, 255, 0.14);
+  --ai-soft-hover: rgba(157, 140, 255, 0.24);
+  --ai-line: rgba(157, 140, 255, 0.42);
+  --violet: var(--ai);            /* 兼容旧名 */
+  --violet-soft: var(--ai-soft);
+
+  /* ---- 状态：文字色 / 浅底 / 描边 ---- */
+  --ok: #4cc38a;     --ok-soft: rgba(76, 195, 138, 0.14);    --ok-line: rgba(76, 195, 138, 0.4);
+  --warn: #f0b44c;   --warn-soft: rgba(240, 180, 76, 0.14);  --warn-line: rgba(240, 180, 76, 0.4);
+  --danger: #f2555a; --danger-soft: rgba(242, 85, 90, 0.14); --danger-line: rgba(242, 85, 90, 0.4);
+  --info: #6cb2ff;   --info-soft: rgba(108, 178, 255, 0.13); --info-line: rgba(108, 178, 255, 0.4);
+  --success: var(--ok); --warning: var(--warn); --error: var(--danger);   /* 别名 */
+
+  /* ---- 轨道色 ---- */
+  --track-video: #3b5568;
+  --track-video-sel: #5a7f99;
+  --track-overlay: #5a4f86;
+  --track-text: #7a5a3a;
+  --track-audio: #2e6650;
+  --track-previz: #4a3f6a;
+
+  /* ---- 字号 ----
+     10 纯数字角标 · 11 辅助小字 · 12 说明 / 次要控件 · 13 默认正文与控件 · 14 强调正文 · 15 小标题 · 16/18 标题 · 20/24/32 大标题。
+     中文在 11px 以下难以辨认，10px 只给数字角标用。 */
+  --fs-10: 10px; --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px;
+  --fs-16: 16px; --fs-18: 18px; --fs-20: 20px; --fs-24: 24px; --fs-32: 32px;
+  --fs-xxs: var(--fs-10); --fs-xs: var(--fs-11); --fs-s: var(--fs-12); --fs: var(--fs-13); --fs-m: var(--fs-14);
+  --fs-l: var(--fs-15); --fs-xl: var(--fs-18); --fs-xxl: var(--fs-24);
+  /* 行高：tight 标题与单行控件 · ui 界面默认 · body 中文段落 */
+  --lh-tight: 1.25; --lh-ui: 1.4; --lh-body: 1.65;
+  /* 字重：微软雅黑 UI 只有常规和粗体两档（500 会显示成常规，600 显示成粗体），全应用只用这两档 */
+  --fw-regular: 400; --fw-semibold: 600;
+
+  /* ---- 间距：4px 网格 ---- */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-7: 28px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
+  --gap: var(--space-2); --pad: var(--space-3);
+
+  /* ---- 圆角 ---- */
+  --radius-xs: 4px; --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 20px; --radius-pill: 999px;
+  --radius-s: 6px; --radius: var(--radius-sm); --radius-l: var(--radius-md);   /* 兼容旧名 */
+
+  /* ---- 控件：按钮 / 输入框 / 下拉 / 页签 / 分段 统一三档高度 ---- */
+  --control-h-sm: 24px; --control-h: 30px; --control-h-lg: 38px;
+  --control-radius: var(--radius-s); --control-radius-sm: var(--radius-xs);
+
+  /* ---- 阴影 ---- */
+  --shadow-s: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.35), 0 12px 30px -6px rgba(0, 0, 0, 0.55);
+  --shadow-float: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 18px 48px -8px rgba(0, 0, 0, 0.7), 0 6px 16px rgba(0, 0, 0, 0.35);
+  /* 层级高度：1 卡片 · 2 菜单 / 提示 · 3 对话框 / 抽屉 */
+  --elev-1: var(--shadow-s); --elev-2: var(--shadow); --elev-3: var(--shadow-float);
+
+  /* ---- 字体：中文优先，中英混排时基线和行高一致（雅黑 UI 的英文数字本身就是 Segoe 字形） ---- */
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "SF Mono", "Microsoft YaHei UI", monospace;
+
+  /* ---- 浮层 / 滚动条 ---- */
+  --tooltip-bg: #2b2c30;
+  --scrollbar: rgba(255, 255, 255, 0.12);
+  --scrollbar-hover: rgba(255, 255, 255, 0.22);
+
+  /* ---- 尺寸 / 动效 / 层级 ---- */
+  --topbar-h: 48px;
+  --statusbar-h: 24px;
+  --dur-1: 80ms; --dur-2: 120ms; --dur-3: 180ms; --dur-4: 240ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --z-topbar: 20; --z-drawer: 50; --z-modal: 100; --z-menu: 120; --z-toast: 130; --z-tour: 140; --z-tooltip: 150;
+}
+
+/* 减少动态效果：跟随系统设置（Windows「设置 → 辅助功能 → 视觉效果 → 动画效果」关掉时生效）；
+   应用内开关可在 <html> 上加 data-reduce-motion="true" 或 class="reduce-motion"。所有用 --dur-* 的过渡与动画随之归零。 */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; --dur-4: 0ms; }
+}
+:root[data-reduce-motion="true"], :root.reduce-motion { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; --dur-4: 0ms; }

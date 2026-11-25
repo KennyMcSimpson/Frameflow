@@ -1,0 +1,100 @@
+{
+  "name": "frameflow-studio",
+  "productName": "Frameflow",
+  "version": "2.0.0",
+  "description": "镜流 Frameflow — AI 视频工作站：创作、精修、拆片学习",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "author": { "name": "镜流 Frameflow" },
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:renderer": "vite build",
+    "start": "vite build && electron .",
+    "test": "node --test \"tests/*.test.mjs\"",
+    "e2e": "vite build && node e2e/smoke.mjs",
+    "e2e:packaged": "node e2e/packaged.mjs",
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "fetch:builtin-audio": "node scripts/fetch-builtin-audio.mjs",
+    "fetch:sample-media": "node scripts/fetch-sample-media.mjs",
+    "gen:licenses": "node scripts/gen-licenses.mjs",
+    "check:artifacts": "node scripts/check-artifacts.mjs",
+    "dist": "node scripts/fetch-ffmpeg.mjs && vite build && node scripts/gen-licenses.mjs && electron-builder --win && node scripts/check-artifacts.mjs",
+    "dist:portable": "node scripts/fetch-ffmpeg.mjs && vite build && node scripts/gen-licenses.mjs && electron-builder --win portable && node scripts/check-artifacts.mjs"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "45.2.2",
+    "electron-builder": "^26.0.0",
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0",
+    "playwright": "^1.55.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vite": "^7.1.0",
+    "zustand": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.frameflow.desktop",
+    "productName": "Frameflow",
+    "copyright": "Copyright © 2026 镜流 Frameflow",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "electronLanguages": ["zh-CN", "en-US"],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
+    "afterPack": "scripts/after-pack.cjs",
+    "extraResources": [
+      { "from": "build/sample-media", "to": "sample-media", "filter": ["*.mp4", "manifest.json"] },
+      { "from": "vendor/ffmpeg/bin", "to": "ffmpeg", "filter": ["ffmpeg.exe", "ffprobe.exe", "*.dll", "ffmpeg-build.json"] },
+      { "from": "vendor/ffmpeg", "to": "licenses/ffmpeg", "filter": ["LICENSE.txt", "SOURCE.txt"] },
+      { "from": "build/THIRD_PARTY_LICENSES.txt", "to": "licenses/THIRD_PARTY_LICENSES.txt" },
+      { "from": "build/privacy.txt", "to": "licenses/privacy.txt" },
+      { "from": "build/builtin-audio", "to": "builtin-audio", "filter": ["*.m4a", "manifest.json"] }
+    ],
+    "fileAssociations": [
+      { "ext": "ffproj", "name": "Frameflow Project", "description": "镜流 Frameflow 项目", "role": "Editor", "icon": "build/icon.ico" }
+    ],
+    "files": [
+      "electron/**/*",
+      "dist-renderer/**/*",
+      "build/icon.ico",
+      "build/icon.png",
+      "package.json",
+      "!**/*.map",
+      "!**/node_modules/@types/**",
+      "!**/node_modules/ffmpeg-static/**",
+      "!**/node_modules/ffprobe-static/**"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "artifactName": "Frameflow-${version}-${arch}.${ext}",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "license": "build/license.txt",
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "镜流 Frameflow",
+      "installerLanguages": ["zh_CN"],
+      "language": "2052",
+      "uninstallDisplayName": "镜流 Frameflow ${version}"
+    },
+    "portable": {
+      "artifactName": "Frameflow-Portable-${version}.exe"
+    }
+  }
+}

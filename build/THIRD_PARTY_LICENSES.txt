@@ -1,0 +1,256 @@
+﻿Frameflow（镜流 Frameflow）2.0.0 第三方软件与素材许可声明
+
+本软件包含或随附下列第三方软件与素材，它们的版权归各自的作者所有，并按各自的许可提供。
+本文件位于安装目录 resources\licenses\THIRD_PARTY_LICENSES.txt。
+
+────────────────────────────────────────────────────────────
+一、FFmpeg（音视频处理）
+────────────────────────────────────────────────────────────
+版本：n8.1.3-34-ga35157abb9-20261108
+构建：ffmpeg-n8.1.3-34-ga35157abb9-win64-lgpl-shared-8.1.zip（https://github.com/BtbN/FFmpeg-Builds，Windows 64 位 LGPL 共享库构建）
+许可：GNU 宽通用公共许可证（LGPL）第 3 版
+文件：安装目录 resources\ffmpeg 下的 ffmpeg.exe、ffprobe.exe 以及 av*.dll、sw*.dll。
+本软件以独立程序的方式调用 FFmpeg，没有修改其源代码。你可以用自己编译的兼容版本替换上述文件。
+许可全文：resources\licenses\ffmpeg\LICENSE.txt
+源代码获取方式：resources\licenses\ffmpeg\SOURCE.txt
+构建来源：https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-11-08-12-35
+FFmpeg 源代码：https://github.com/FFmpeg/FFmpeg/tree/a35157abb9
+FFmpeg 是 FFmpeg 项目创始人 Fabrice Bellard 的商标，本软件与 FFmpeg 项目没有隶属关系。
+
+────────────────────────────────────────────────────────────
+二、Electron 与 Chromium（应用运行环境）
+────────────────────────────────────────────────────────────
+Electron 45.2.2，MIT 许可，版权所有 (c) Electron contributors / GitHub Inc.
+Electron 许可全文：安装目录 LICENSE.electron.txt
+Chromium 及其组件的许可：安装目录 LICENSES.chromium.html
+
+────────────────────────────────────────────────────────────
+三、打包进程序的开源库
+────────────────────────────────────────────────────────────
+react 19.3.1 — MIT（https://react.dev/）
+react-dom 19.3.1 — MIT（https://react.dev/）
+scheduler 0.28.0 — MIT（https://react.dev/）
+zustand 5.1.0 — MIT（https://github.com/pmndrs/zustand）
+各库的许可全文见本文件末尾的附录。
+
+────────────────────────────────────────────────────────────
+四、移植进本软件的开源代码
+────────────────────────────────────────────────────────────
+本软件的部分源代码改写自下列开源项目，按其许可保留版权声明：
+  · Lucide 图标 — ISC，https://github.com/lucide-icons/lucide
+    用于：界面图标的部分路径
+  · Feather 图标 — MIT，https://github.com/feathericons/feather
+    用于：界面图标的部分路径
+  · Color Thief / quantize.js — MIT，https://github.com/lokesh/color-thief
+    用于：拆片分析里的主色提取（改进中位切分）
+  · PySceneDetect — BSD-3-Clause，https://github.com/Breakthrough/PySceneDetect
+    用于：拆片分析里的镜头切换检测（按其算法用 JavaScript 重写）
+许可全文见本文件末尾的附录。
+
+────────────────────────────────────────────────────────────
+五、内置音乐与音效
+────────────────────────────────────────────────────────────
+内置音乐来自 FreePD.com，该站声明全部音乐按 CC0 1.0 公有领域贡献发布（可免费商用、可修改、无需署名）。
+FreePD.com 已于 2025 年关闭，许可声明与曲目页面的存档：https://web.archive.org/web/2021/https://freepd.com/
+本软件对音乐做了响度统一和格式转换。署名不是必需的，但我们仍列出作者以示感谢：
+  · Inspiration — Rafael Krux（欢快） https://web.archive.org/web/2021/https://freepd.com/upbeat.php
+  · Happy Whistling Ukulele — Rafael Krux（欢快） https://web.archive.org/web/2021/https://freepd.com/upbeat.php
+  · Slice of Life — Bryan Teoh（温馨） https://web.archive.org/web/2021/https://freepd.com/scoring.php
+  · Funky Energy Loop — Kevin MacLeod（欢快） https://web.archive.org/web/2021/https://freepd.com/scoring.php
+  · Lovely Piano Song — Rafael Krux（温馨） https://web.archive.org/web/2021/https://freepd.com/romantic.php
+  · Horizon Flare — Alexander Nakarada（激昂） https://web.archive.org/web/2021/https://freepd.com/romantic.php
+  · Fireworks — Alexander Nakarada（动感） https://web.archive.org/web/2021/https://freepd.com/electronic.php
+  · Arpent — Kevin MacLeod（动感） https://web.archive.org/web/2021/https://freepd.com/electronic.php
+  · 3 am West End — statusq（舒缓） https://web.archive.org/web/2021/https://freepd.com/electronic.php
+  · Ice and Snow — Rafael Krux（舒缓） https://web.archive.org/web/2021/https://freepd.com/scoring.php
+  · Action Strike — Rafael Krux（激昂） https://web.archive.org/web/2021/https://freepd.com/scoring.php
+  · Shenzhen Nightlife — Kevin MacLeod（动感） https://web.archive.org/web/2021/https://freepd.com/world.php
+
+内置音效（11 个）由镜流 Frameflow 使用 FFmpeg 合成，按 CC0 1.0 提供，可在你的作品中自由使用：
+  转场·快速嗖声、转场·轻柔扫过、转场·上升铺垫、强调·重低音冲击、界面·点击、界面·弹出、提示·叮、提示·完成、提示·错误、拟音·键盘打字、拟音·相机快门
+
+────────────────────────────────────────────────────────────
+六、示例素材
+────────────────────────────────────────────────────────────
+新手引导和示例工程使用的视频片段按各自的许可提供，可在你的作品中使用，但不得单独再分发或转售素材本身：
+  · shot01-storefront.mp4 — Mixkit · A calm street in paris https://mixkit.co/free-stock-video/a-calm-street-in-paris-4348/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · shot02-enter.mp4 — Mixkit · Two girls chatting at the counter of a coffee shop https://mixkit.co/free-stock-video/two-girls-chatting-at-the-counter-of-a-coffee-shop-41222/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · shot03-grind.mp4 — Mixkit · Coffee powder being poured on the coffee maker filter https://mixkit.co/free-stock-video/coffee-powder-being-poured-on-the-coffee-maker-filter-4984/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · shot04-latte-art.mp4 — Mixkit · Latte art https://mixkit.co/free-stock-video/latte-art-810/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · shot05-first-sip.mp4 — Mixkit · Woman sips from a coffee cup https://mixkit.co/free-stock-video/woman-sips-from-a-coffee-cup-46568/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · shot06-window.mp4 — Mixkit · Writing on a notebook at a coffee shop https://mixkit.co/free-stock-video/writing-on-a-notebook-at-a-coffee-shop-1741/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · shot07-ending.mp4 — Mixkit · Serving a sparkling cappuccino in a cup https://mixkit.co/free-stock-video/serving-a-sparkling-cappuccino-in-a-cup-41859/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+  · broll-milk-froth.mp4 — Mixkit · Frothing milk seen in detail https://mixkit.co/free-stock-video/frothing-milk-seen-in-detail-3576/
+    许可：Mixkit Free License（可免费商用，无需署名；https://mixkit.co/license/#videoFree）
+
+────────────────────────────────────────────────────────────
+七、按需下载的组件（不随安装包分发）
+────────────────────────────────────────────────────────────
+以下组件只有在你主动使用相关功能时才会下载到本机，按各自的许可使用：
+  · yt-dlp — Unlicense（公有领域），https://github.com/yt-dlp/yt-dlp ，用于下载你提供链接的视频。
+  · whisper.cpp — MIT，https://github.com/ggml-org/whisper.cpp ，用于本机语音转文字。
+  · Whisper 语音识别模型 — MIT（OpenAI），从 https://huggingface.co/ggerganov/whisper.cpp 下载。
+从视频网站、素材网站或 AI 服务获得的内容，其权利归原作者或服务条款约定的一方，请在使用前确认授权。
+
+────────────────────────────────────────────────────────────
+附录：开源库与移植代码的许可全文
+────────────────────────────────────────────────────────────
+
+■ react 19.3.1、react-dom 19.3.1、scheduler 0.28.0
+
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+■ zustand 5.1.0
+
+MIT License
+
+Copyright (c) 2019 Paul Henschel
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+■ Lucide 图标（移植代码）
+
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+
+■ Feather 图标（移植代码）
+
+The MIT License (MIT)
+
+Copyright (c) 2013-2023 Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+■ Color Thief / quantize.js（移植代码）
+
+The MIT License (MIT)
+
+Copyright (c) 2015 Lokesh Dhakar
+quantize.js Copyright 2008 Nick Rabinowitz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+■ PySceneDetect（移植代码）
+
+BSD 3-Clause License
+
+Copyright (C) 2014, Brandon Castellano
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
