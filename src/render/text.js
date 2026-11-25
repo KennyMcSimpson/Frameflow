@@ -236,10 +236,11 @@ function easeOutBack(t) {
  * 动画状态（纯函数）。
  * @returns {{alpha:number, scale:number, dy:number /*字号倍数*\/, reveal:number /*0..1 打字进度*\/, typing:boolean}}
  */
-export function textAnimState(animation, progress, local) {
+export function textAnimState(animation, progress, local, durationIn = undefined) {
   const p = clamp01(progress);
   const t = Math.max(0, Number(local) || 0);
-  const duration = p > 0 ? t / p : ENTER + EXIT + 1;
+  const dIn = Number(durationIn);
+  const duration = Number.isFinite(dIn) && dIn > 0 ? dIn : (p > 0 ? t / p : ENTER + EXIT + 1);
   const enterLen = Math.min(ENTER, duration * 0.4);
   const exitLen = Math.min(EXIT, duration * 0.25);
   const inP = enterLen > 0 ? clamp01(t / enterLen) : 1;
@@ -353,21 +354,27 @@ export function drawTextClip(ctx, clip, w, h, progress = 0.5, local = 1) {
   if (!text.trim()) return;
   const preset = PRESET_METRICS[clip.preset] ? clip.preset : 'title';
   const m = PRESET_METRICS[preset];
-  const anim = clip.animIn || clip.animOut || clip.animLoop ? textAnimV3(clip, progress, local) : textAnimState(clip.animation || 'fade', progress, local);
+  const anim = clip.animIn || clip.animOut || clip.animLoop
+    ? textAnimV3(clip, progress, local)
+    : textAnimState(clip.animation || 'fade', progress, local, clip.duration);
   if (anim.alpha <= 0.002) return;
   const u = Math.min(w, h);
-  const custom = !!(clip.stroke || clip.shadow || clip.bg);
+  const hasStroke = !!(clip.stroke && Number(clip.stroke.width) > 0);
+  const hasBg = !!(clip.bg && (clip.bg.color || typeof clip.bg === 'string'));
+  const custom = !!(hasStroke || clip.shadow || hasBg);
   const rel = Number(clip.size) > 0 ? Number(clip.size) : 1;
   const size = Math.max(8, Math.round(u * m.size * rel));
   const color = clip.color || '#ffffff';
+  const align = ['left', 'center', 'right'].includes(clip.align) ? clip.align : (m.align || 'center');
+  const family = typeof clip.font === 'string' && clip.font.trim() ? clip.font.trim() : m.family;
 
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
-  ctx.filter = 'none';
+  ctx.filter = anim.blur > 0.1 ? `blur(${Math.max(0.2, anim.blur * (u > 0 ? u / 1080 : 1)).toFixed(2)}px)` : 'none';
   ctx.globalAlpha *= anim.alpha;
   ctx.textBaseline = 'middle';
-  ctx.textAlign = m.align || 'center';
-  setFont(ctx, m.weight, size, m.family, m.italic);
+  ctx.textAlign = align;
+  setFont(ctx, m.weight, size, family, m.italic);
   setSpacing(ctx, size * m.spacing);
 
   const lines = wrapText(ctx, text, w * m.wrap);
@@ -376,11 +383,13 @@ export function drawTextClip(ctx, clip, w, h, progress = 0.5, local = 1) {
   const lh = size * m.lineHeight;
   const blockH = lh * lines.length;
 
-  // 把中心点夹在画内，文字不会被裁掉一半
+  // 把中心点夹在画内，文字不会被裁掉一半；文字超宽/超高时居中，避免反向夹紧移出画外
   const halfW = blockW / 2 + size * 0.3;
   const halfH = blockH / 2 + size * 0.3;
-  const cx = Math.min(w - halfW, Math.max(halfW, (Number.isFinite(clip.x) ? clip.x : 0.5) * w));
-  const cy = Math.min(h - halfH, Math.max(halfH, (Number.isFinite(clip.y) ? clip.y : 0.5) * h)) + anim.dy * size;
+  const rawX = (clip.x != null && clip.x !== '' && Number.isFinite(Number(clip.x)) ? Number(clip.x) : 0.5) * w;
+  const rawY = (clip.y != null && clip.y !== '' && Number.isFinite(Number(clip.y)) ? Number(clip.y) : 0.5) * h;
+  const cx = halfW * 2 >= w ? w / 2 : Math.min(w - halfW, Math.max(halfW, rawX));
+  const cy = (halfH * 2 >= h ? h / 2 : Math.min(h - halfH, Math.max(halfH, rawY))) + anim.dy * size;
   ctx.translate(cx + (anim.dx || 0) * size, cy);
   if (anim.rot) ctx.rotate(anim.rot);
   if (anim.scale !== 1) ctx.scale(anim.scale, anim.scale);
@@ -388,11 +397,11 @@ export function drawTextClip(ctx, clip, w, h, progress = 0.5, local = 1) {
 
   const shown = revealLines(lines, anim.reveal);
   const left = -blockW / 2;
-  const lineX = m.align === 'left' ? left : 0;
+  const lineX = align === 'left' ? left : align === 'right' ? blockW / 2 : 0;
   const lineY = (i) => -blockH / 2 + lh * (i + 0.5);
 
   if (custom) {
-    paintCustom(ctx, clip, shown, lineX, lineY, blockW, blockH, size, color);
+    paintCustom(ctx, clip, shown, lineX, lineY, blockW, blockH, size, color, u);
   } else if (preset === 'lower-third') {
     const padX = size * 0.75;
     const padY = size * 0.45;
@@ -432,7 +441,7 @@ export function drawTextClip(ctx, clip, w, h, progress = 0.5, local = 1) {
       let idx = 0;
       shown.forEach((l, i) => { if (l) idx = i; });
       const lw = ctx.measureText(shown[idx] || '').width;
-      const startX = m.align === 'left' ? left : -lw / 2;
+      const startX = align === 'left' ? left : align === 'right' ? blockW / 2 - lw : -lw / 2;
       ctx.fillStyle = preset === 'neon' ? '#fffdfa' : color;
       ctx.fillRect(startX + lw + size * 0.08, lineY(idx) - size * 0.5, Math.max(2, size * 0.06), size);
     }
@@ -441,15 +450,20 @@ export function drawTextClip(ctx, clip, w, h, progress = 0.5, local = 1) {
 }
 
 /** v3 自定义样式：背景板 → 阴影 → 描边 → 填充 */
-function paintCustom(ctx, clip, lines, lineX, lineY, blockW, blockH, size, color) {
+function paintCustom(ctx, clip, lines, lineX, lineY, blockW, blockH, size, color, u = 1080) {
+  const pxScale = (u > 0 ? u : 1080) / 1080;
+  const fin = (v, d) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
   const bg = clip.bg;
   if (bg && (bg.color || typeof bg === 'string')) {
     const bgColor = typeof bg === 'string' ? bg : bg.color;
     const pad = size * (Number(bg.pad) > 0 ? Number(bg.pad) : 0.45);
+    const bgRadius = bg.radius != null && bg.radius !== '' && Number.isFinite(Number(bg.radius)) && Number(bg.radius) >= 0
+      ? Number(bg.radius) * pxScale
+      : size * 0.25;
     ctx.save();
-    ctx.globalAlpha *= Number.isFinite(Number(bg.opacity)) ? clamp01(Number(bg.opacity)) : 0.75;
+    ctx.globalAlpha *= clamp01(fin(bg.opacity, 0.75));
     ctx.fillStyle = bgColor;
-    roundedRect(ctx, -blockW / 2 - pad * 1.4, -blockH / 2 - pad, blockW + pad * 2.8, blockH + pad * 2, size * (Number(bg.radius) >= 0 ? Number(bg.radius) : 0.25));
+    roundedRect(ctx, -blockW / 2 - pad * 1.4, -blockH / 2 - pad, blockW + pad * 2.8, blockH + pad * 2, bgRadius);
     ctx.fill();
     ctx.restore();
   }
@@ -461,20 +475,20 @@ function paintCustom(ctx, clip, lines, lineX, lineY, blockW, blockH, size, color
     if (sh) {
       ctx.save();
       ctx.shadowColor = (sh && sh.color) || 'rgba(0,0,0,0.6)';
-      ctx.shadowBlur = size * (Number.isFinite(Number(sh.blur)) ? Number(sh.blur) : 0.3);
-      ctx.shadowOffsetX = size * (Number(sh.x) || 0.04);
-      ctx.shadowOffsetY = size * (Number(sh.y) || 0.06);
+      ctx.shadowBlur = Math.max(0, fin(sh.blur, 8)) * pxScale;
+      ctx.shadowOffsetX = fin(sh.x, 0) * pxScale;
+      ctx.shadowOffsetY = fin(sh.y, 2) * pxScale;
       ctx.fillStyle = color;
       ctx.fillText(line, lineX, y);
       ctx.restore();
     }
-    if (st && Number(st.width) !== 0) {
+    if (st && Number(st.width) > 0) {
       ctx.save();
       ctx.lineJoin = 'round';
       ctx.miterLimit = 2;
       ctx.strokeStyle = st.color || '#000000';
       // stroke.width 在 UI 中以「px@1080p」计（0–12），≈ 字号的 4%/px；描边一半压在字形下，故 ×2
-      ctx.lineWidth = size * (Number(st.width) > 0 ? Number(st.width) * 0.04 : 0.12) * 2;
+      ctx.lineWidth = size * Number(st.width) * 0.04 * 2;
       ctx.strokeText(line, lineX, y);
       ctx.restore();
     }
@@ -483,21 +497,52 @@ function paintCustom(ctx, clip, lines, lineX, lineY, blockW, blockH, size, color
   });
 }
 
+/** 弹跳落定缓动：在目标位多次弹起并收敛到 1 */
+function easeOutBounce(t) {
+  const x = clamp01(t);
+  if (x < 1 / 2.75) return 7.5625 * x * x;
+  if (x < 2 / 2.75) { const u = x - 1.5 / 2.75; return 7.5625 * u * u + 0.75; }
+  if (x < 2.5 / 2.75) { const u = x - 2.25 / 2.75; return 7.5625 * u * u + 0.9375; }
+  const u = x - 2.625 / 2.75;
+  return 7.5625 * u * u + 0.984375;
+}
+
+/** 阻尼弹簧过冲缓动：0→过冲>1→收敛到 1 */
+function springOvershoot(t) {
+  const x = clamp01(t);
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  return 1 - Math.exp(-5 * x) * Math.cos(x * Math.PI * 2.5);
+}
+
 /**
- * v3 入场 / 出场 / 循环动画（纯函数）。animIn/animOut: {type:'fade'|'slide-up'|'slide-down'|'slide-left'|'slide-right'|'pop'|'zoom'|'typewriter', dur}
- * animLoop: {type:'pulse'|'shake'|'float'|'swing', dur}
+ * v3 入场 / 出场 / 循环动画（纯函数）。
+ * animIn/animOut: {type:'none'|'fade'|'slide-up'|'slide-down'|'slide-left'|'slide-right'|'pop'|'zoom'|'typewriter'|'blur'|'bounce', dur}
+ * animLoop: {type:'none'|'breathe'|'pulse'|'shake'|'float'|'wave'|'blink'|'swing', dur}
  */
 export function textAnimV3(clip, progress, local) {
   const p = clamp01(progress);
   const t = Math.max(0, Number(local) || 0);
-  const duration = p > 0 ? t / p : 3;
-  const st = { alpha: 1, scale: 1, dy: 0, dx: 0, rot: 0, reveal: 1, typing: false };
+  const dClip = Number(clip && clip.duration);
+  const duration = Number.isFinite(dClip) && dClip > 0 ? dClip : (p > 0 ? t / p : 3);
+  const st = { alpha: 1, scale: 1, dy: 0, dx: 0, rot: 0, blur: 0, reveal: 1, typing: false };
   const apply = (spec, k) => {
     // k: 0 = 完全不可见（入场起点 / 出场终点），1 = 正常
     const e = easeOutCubic(k);
     switch (spec.type) {
       case 'none': return;
       case 'pop': st.alpha *= clamp01(k * 3); st.scale *= 0.55 + 0.45 * easeOutBack(k); return;
+      case 'bounce':
+        st.alpha *= clamp01(k * 4);
+        st.scale *= 0.35 + 0.65 * springOvershoot(k);
+        st.dy -= 0.75 * (1 - easeOutBounce(k));
+        return;
+      case 'blur': {
+        const b = easeInOut(k);
+        st.alpha *= b;
+        st.blur = Math.max(st.blur, 18 * (1 - b));
+        return;
+      }
       case 'zoom': st.alpha *= e; st.scale *= 1.6 - 0.6 * e; return;
       case 'slide-up': st.alpha *= e; st.dy += 0.9 * (1 - e); return;
       case 'slide-down': st.alpha *= e; st.dy -= 0.9 * (1 - e); return;
@@ -521,11 +566,22 @@ export function textAnimV3(clip, progress, local) {
   const loop = clip.animLoop;
   if (loop && loop.type) {
     const period = Math.max(0.2, Number(loop.dur) || 1.2);
-    const ph = Math.sin((t / period) * Math.PI * 2);
+    const angle = (t / period) * Math.PI * 2;
+    const ph = Math.sin(angle);
     if (loop.type === 'pulse') st.scale *= 1 + 0.06 * ph;
-    else if (loop.type === 'shake') st.dx += 0.04 * Math.sin((t / period) * Math.PI * 14);
+    else if (loop.type === 'breathe') {
+      const b = 0.5 - 0.5 * Math.cos(angle);
+      st.scale *= 0.94 + 0.12 * b;
+      st.alpha *= 0.82 + 0.18 * b;
+    } else if (loop.type === 'shake') st.dx += 0.04 * Math.sin((t / period) * Math.PI * 14);
     else if (loop.type === 'float') st.dy += 0.12 * ph;
-    else if (loop.type === 'swing') st.rot += 0.06 * ph;
+    else if (loop.type === 'wave') {
+      st.dy += 0.14 * ph;
+      st.rot += 0.045 * Math.cos(angle);
+    } else if (loop.type === 'blink') {
+      const b = 0.5 + 0.5 * ph;
+      st.alpha *= 0.15 + 0.85 * b * b;
+    } else if (loop.type === 'swing') st.rot += 0.06 * ph;
   }
   return st;
 }

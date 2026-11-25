@@ -47,17 +47,36 @@ export function useInView() {
 // ---------------- 媒体请求（模块级缓存 + 并发限制） ----------------
 export const mediaQueue = createQueue(2);
 const filmCache = createPromiseCache();
-const filmDone = new Map(); // key -> string[]
+const filmDone = new Map(); // key -> string[] (LRU 上限 200)
+const MAX_FILM_CACHE = 200;
+
+function setFilmDone(key, list) {
+  if (filmDone.has(key)) filmDone.delete(key);
+  filmDone.set(key, list);
+  while (filmDone.size > MAX_FILM_CACHE) {
+    filmDone.delete(filmDone.keys().next().value);
+  }
+}
 
 function loadFilmstrip(path, duration, count, height) {
   const key = `${path}|${count}|${height}`;
-  if (filmDone.has(key)) return Promise.resolve(filmDone.get(key));
-  return filmCache.get(key, () => mediaQueue.push(() => api.call('media:filmstrip', { path, duration, count, height })))
-    .then((r) => {
-      const list = Array.isArray(r) ? r.filter(Boolean) : [];
-      filmDone.set(key, list);
+  if (filmDone.has(key)) {
+    const hit = filmDone.get(key);
+    filmDone.delete(key);
+    filmDone.set(key, hit);
+    return Promise.resolve(hit);
+  }
+  return filmCache.get(key, () => mediaQueue.push(async () => {
+    const r = await api.call('media:filmstrip', { path, duration, count, height });
+    const list = Array.isArray(r) ? r.filter(Boolean) : [];
+    if (!list.length) throw new Error('empty filmstrip');
+    return list;
+  }))
+    .then((list) => {
+      setFilmDone(key, list);
       return list;
-    });
+    })
+    .catch(() => []);
 }
 
 
@@ -70,14 +89,21 @@ const Filmstrip = memo(function Filmstrip({ asset, srcIn, srcOut, width, height,
   const assetDur = Number(asset.duration) > 0 ? Number(asset.duration) : Math.max(srcOut, 1);
   const count = filmstripRequestCount(slots, assetDur, srcOut - srcIn);
   const key = `${asset.path}|${count}|${STRIP_H}`;
-  const [frames, setFrames] = useState(() => filmDone.get(key) || null);
+  const [loaded, setLoaded] = useState(() => (filmDone.has(key) ? { key, frames: filmDone.get(key) } : null));
+  const frames = loaded && loaded.key === key ? loaded.frames : null;
 
   useEffect(() => {
     if (!inView || !asset.path) return undefined;
-    if (filmDone.has(key)) { setFrames(filmDone.get(key)); return undefined; }
+    if (filmDone.has(key)) {
+      const hit = filmDone.get(key);
+      filmDone.delete(key);
+      filmDone.set(key, hit);
+      setLoaded({ key, frames: hit });
+      return undefined;
+    }
     let alive = true;
     loadFilmstrip(asset.path, assetDur, count, STRIP_H)
-      .then((list) => { if (alive && list.length) setFrames(list); })
+      .then((list) => { if (alive && list.length) setLoaded({ key, frames: list }); })
       .catch(() => { /* 失败时保留封面缩略图 */ });
     return () => { alive = false; };
   }, [inView, key, asset.path, assetDur, count]);
@@ -162,7 +188,7 @@ const ClipBlock = memo(function ClipBlock({
       {width > 40 && <span className="tl-clip-title">{name}</span>}
       {(trimming || width > 64) && <span className={'tl-clip-dur mono' + (trimming ? ' on' : '')}>{trimming ? `${duration.toFixed(2)}s` : shortDur(duration)}</span>}
       {flags.length > 0 && width > 30 && <span className="tl-clip-flag" />}
-      {kfs.map((t) => <span key={t} className="tl-kf" style={{ left: (t / Math.max(0.01, speed)) * pps }} />)}
+      {kfs.map((t) => <span key={t} className="tl-kf" style={{ left: t * pps }} />)}
       <div className={'tl-handle l' + (locked ? ' off' : '')} onPointerDown={(e) => onDown(e, clip.id, 'left')} />
       <div className={'tl-handle r' + (locked ? ' off' : '')} onPointerDown={(e) => onDown(e, clip.id, 'right')} />
     </div>
@@ -211,7 +237,8 @@ function VideoTrack({ project, layout, pps, selectedIds, height, tools, onMenu, 
           if (part === 'right') dt = tl.snap(item.end + dt, [item.start, item.end]) - item.end;
           else dt = tl.snap(item.start + dt, [item.start, item.end]) - item.start;
           res = trimVideoClip(item.clip, asset, part, dt);
-          setDraft({ type: 'trim', clipId, patch: { [clipId]: { in: res.in, out: res.out } } });
+          const clipPatch = item.clip.still ? { duration: res.duration } : { in: res.in, out: res.out };
+          setDraft({ type: 'trim', clipId, patch: { [clipId]: clipPatch } });
           tl.edgeScroll(ev.clientX);
         },
         onEnd: (dx, dy, ev, moved, cancelled) => {
@@ -303,8 +330,8 @@ function VideoTrack({ project, layout, pps, selectedIds, height, tools, onMenu, 
         setDraft({
           type: 'roll', cut: idx, delta,
           patch: {
-            [a.clip.id]: { out: (Number(a.clip.out) || 0) + delta * ls },
-            [b.clip.id]: { in: (Number(b.clip.in) || 0) + delta * rs },
+            [a.clip.id]: a.clip.still ? { duration: Math.max(0.2, a.duration + delta) } : { out: (Number(a.clip.out) || 0) + delta * ls },
+            [b.clip.id]: b.clip.still ? { duration: Math.max(0.2, b.duration - delta) } : { in: (Number(b.clip.in) || 0) + delta * rs },
           },
         });
         tl.edgeScroll(ev.clientX);
@@ -321,22 +348,27 @@ function VideoTrack({ project, layout, pps, selectedIds, height, tools, onMenu, 
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
-    const z = live.current.pps;
+    const { pps: z, trackLocked: tLock } = live.current;
+    const locked = !!(tLock || it.clip.locked);
     const tr = it.clip.transitionIn || {};
     const d0 = Number(tr.duration) || 0.5;
     const isCut = !tr.type || tr.type === 'cut';
     let nd = d0;
     startDrag(e, {
       threshold: 3,
-      cursor: 'ew-resize',
+      cursor: locked || isCut ? 'pointer' : 'ew-resize',
       onMove: (dx) => {
-        if (isCut) return;
+        if (isCut || locked) return;
         nd = transitionDurationFromDrag(d0, dx, z, Math.min(3, it.duration / 2));
         setDraft({ type: 'trans', clipId: it.clip.id, duration: nd });
       },
       onEnd: (dx, dy, ev, moved, cancelled) => {
         setDraft(null);
         if (!moved) { useStore.getState().select([it.clip.id]); return; }
+        if (locked && !isCut) {
+          useStore.getState().toast(tLock ? '视频轨已锁定，先在轨道头解锁' : `第 ${it.index + 1} 镜已锁定，先右键解锁再调整转场`);
+          return;
+        }
         if (!cancelled && !isCut && Math.abs(nd - d0) > 1e-3) setTransitionDuration(it.clip.id, nd);
       },
     });

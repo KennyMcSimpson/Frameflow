@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useStore from '../../store.js';
 import api from '../../api.js';
 import { Button, Empty, Icon, ProgressBar, Spinner } from '../../components/ui.jsx';
-import { addAssets, insertAssets } from '../../assetActions.js';
+import { addAssets, insertAssets, addAudioTrack } from '../../assetActions.js';
 import {
   WEB_SOURCES, WEB_SOURCE_MAP, WEB_KINDS, VIDEO_SITE_NOTICE,
   getYtdlpStatus, setYtdlpCache, sourceAvailability, runTrackedJob, downloadWebResult, remoteThumb,
@@ -135,8 +135,8 @@ export default function MediaWebTab({ query, searchNonce, active, initialKind, f
     }
   }, [query, effective, kind]);
 
-  // 顶部搜索框回车 → 搜索
-  const lastNonce = useRef(searchNonce);
+  // 顶部搜索框回车或 ff:open-media 事件 → 搜索
+  const lastNonce = useRef(0);
   useEffect(() => {
     if (searchNonce === lastNonce.current) return;
     lastNonce.current = searchNonce;
@@ -168,6 +168,8 @@ export default function MediaWebTab({ query, searchNonce, active, initialKind, f
       st.toast(`下载${(SOURCE_MAP[r.source] && SOURCE_MAP[r.source].short) || '视频站'}视频需要视频下载组件 yt-dlp，请先点上方「一键安装」`, 'warn');
       return;
     }
+    const projectId = st.project.id;
+    const sameProject = () => { const cur = useStore.getState().project; return !!cur && cur.id === projectId; };
     cancelledRef.current.delete(key);
     setDl(key, { progress: 0, message: '准备下载…', jobId: null, mode, error: null, assetId: null });
     try {
@@ -177,11 +179,18 @@ export default function MediaWebTab({ query, searchNonce, active, initialKind, f
         onProgress: (p) => setDl(key, { progress: p.progress || 0, message: p.message || p.stage || '' }),
       }));
       if (cancelledRef.current.has(key)) return;
+      if (!sameProject()) {
+        setDl(key, null);
+        useStore.getState().toast('下载完成前切换了项目，素材未加入当前项目', 'warn');
+        return;
+      }
       const ok = mode === 'insert'
-        ? insertAssets([asset], undefined, '联网素材上时间线：' + (asset.name || r.title))
+        ? (asset.kind === 'audio'
+          ? addAudioTrack(asset, 0, 'music')
+          : insertAssets([asset], undefined, '联网素材上时间线：' + (asset.name || r.title)))
         : addAssets([asset], '下载素材：' + (asset.name || r.title));
       setDl(key, { progress: null, assetId: asset.id, message: '' });
-      if (ok) useStore.getState().toast(mode === 'insert' ? `已下载并放上时间线：${asset.name || r.title}` : `已下载到项目素材：${asset.name || r.title}`, 'ok');
+      if (ok) useStore.getState().toast(mode === 'insert' ? (asset.kind === 'audio' ? `已下载并添加到音频轨：${asset.name || r.title}` : `已下载并放上时间线：${asset.name || r.title}`) : `已下载到项目素材：${asset.name || r.title}`, 'ok');
     } catch (e) {
       if (isConsentDeclined(e)) { setDl(key, null); return; }
       if (e && e.cancelled) { setDl(key, null); useStore.getState().toast('已取消下载'); return; }
@@ -246,7 +255,7 @@ export default function MediaWebTab({ query, searchNonce, active, initialKind, f
               <div className="row">
                 <Icon name="settings" size={12} />
                 <span className="grow">Pexels / Pixabay 要填 API Key 才能搜；不填也可以，其余来源不用 Key</span>
-                <button type="button" className="mp-link" onClick={() => useStore.getState().openDialog('settings')}>去设置</button>
+                <button type="button" className="mp-link" onClick={() => useStore.getState().openDialog('settings', 'media')}>去设置</button>
               </div>
             )}
             {(needYtdlp || biliNeedsYtdlp) && (

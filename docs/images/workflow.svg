@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="Frameflow Studio 4-Stage Video Production Workflow: Create, Refine, Breakdown Library, and Export">
+  <defs>
+    <linearGradient id="wfBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d0f12"/>
+      <stop offset="100%" stop-color="#141820"/>
+    </linearGradient>
+    <linearGradient id="wfCard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#181c24"/>
+      <stop offset="100%" stop-color="#12151c"/>
+    </linearGradient>
+    <linearGradient id="arrow1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c8e250"/>
+      <stop offset="100%" stop-color="#6cb2ff"/>
+    </linearGradient>
+    <linearGradient id="arrow2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6cb2ff"/>
+      <stop offset="100%" stop-color="#9d8cff"/>
+    </linearGradient>
+    <linearGradient id="arrow3" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9d8cff"/>
+      <stop offset="100%" stop-color="#4cc38a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Card -->
+  <rect x="4" y="4" width="1192" height="312" rx="18" fill="url(#wfBg)" stroke="#2c3340" stroke-width="1.5"/>
+
+  <!-- Header Strip -->
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <text x="30" y="34" font-size="11.5" font-weight="700" letter-spacing="1.6" fill="#c8e250" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">END-TO-END PRODUCTION WORKFLOW</text>
+    <text x="1170" y="34" text-anchor="end" font-size="12" font-weight="500" fill="#8e95a3">Create · Refine · Breakdown Library · Hardware-Accelerated Export</text>
+  </g>
+
+  <!-- STAGE 1: CREATE -->
+  <g transform="translate(28, 52)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <rect x="0" y="0" width="262" height="222" rx="14" fill="url(#wfCard)" stroke="#c8e250" stroke-opacity="0.38" stroke-width="1.2"/>
+    <rect x="0" y="0" width="262" height="4" rx="2" fill="#c8e250"/>
+    <rect x="16" y="18" width="54" height="20" rx="10" fill="#c8e250" fill-opacity="0.16"/>
+    <text x="43" y="31.5" text-anchor="middle" font-size="10.5" font-weight="700" fill="#d4ff3f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">01</text>
+    <text x="80" y="33" font-size="16" font-weight="700" fill="#f3f5f8">Create</text>
+    <text x="16" y="57" font-size="11.5" fill="#9ea5b4">Brief → Storyboard → First Cut</text>
+
+    <rect x="14" y="72" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="87" r="3" fill="#d4ff3f"/>
+    <text x="39" y="91" font-size="12" font-weight="500" fill="#e2e6ef">AI Director &amp; Creative Brief</text>
+
+    <rect x="14" y="108" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="123" r="3" fill="#d4ff3f"/>
+    <text x="39" y="127" font-size="12" font-weight="500" fill="#e2e6ef">Structured Shot Storyboard</text>
+
+    <rect x="14" y="144" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="159" r="3" fill="#d4ff3f"/>
+    <text x="39" y="163" font-size="12" font-weight="500" fill="#e2e6ef">Stock, AI Media &amp; Previz</text>
+
+    <rect x="14" y="180" width="234" height="30" rx="7" fill="#1c2214" stroke="#c8e250" stroke-opacity="0.32"/>
+    <circle cx="28" cy="195" r="3" fill="#d4ff3f"/>
+    <text x="39" y="199" font-size="12" font-weight="600" fill="#e8ff85">One-Click Timeline First Cut</text>
+  </g>
+
+  <!-- Arrow 1 -> 2 -->
+  <g>
+    <line x1="294" y1="163" x2="313" y2="163" stroke="url(#arrow1)" stroke-width="2.2" stroke-linecap="round"/>
+    <polygon points="311,157 320,163 311,169" fill="#6cb2ff"/>
+  </g>
+
+  <!-- STAGE 2: REFINE -->
+  <g transform="translate(322, 52)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <rect x="0" y="0" width="262" height="222" rx="14" fill="url(#wfCard)" stroke="#6cb2ff" stroke-opacity="0.38" stroke-width="1.2"/>
+    <rect x="0" y="0" width="262" height="4" rx="2" fill="#6cb2ff"/>
+    <rect x="16" y="18" width="54" height="20" rx="10" fill="#6cb2ff" fill-opacity="0.16"/>
+    <text x="43" y="31.5" text-anchor="middle" font-size="10.5" font-weight="700" fill="#6cb2ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">02</text>
+    <text x="80" y="33" font-size="16" font-weight="700" fill="#f3f5f8">Refine</text>
+    <text x="16" y="57" font-size="11.5" fill="#9ea5b4">Multi-Track NLE &amp; AI Editing</text>
+
+    <rect x="14" y="72" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="87" r="3" fill="#6cb2ff"/>
+    <text x="39" y="91" font-size="12" font-weight="500" fill="#e2e6ef">Video, PiP, Captions &amp; Audio</text>
+
+    <rect x="14" y="108" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="123" r="3" fill="#6cb2ff"/>
+    <text x="39" y="127" font-size="12" font-weight="500" fill="#e2e6ef">14 Color Looks, Masks &amp; FX</text>
+
+    <rect x="14" y="144" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="159" r="3" fill="#6cb2ff"/>
+    <text x="39" y="163" font-size="12" font-weight="500" fill="#e2e6ef">Keyframes &amp; Speed Curves</text>
+
+    <rect x="14" y="180" width="234" height="30" rx="7" fill="#131c29" stroke="#6cb2ff" stroke-opacity="0.32"/>
+    <circle cx="28" cy="195" r="3" fill="#6cb2ff"/>
+    <text x="39" y="199" font-size="12" font-weight="600" fill="#a8d1ff">AI &amp; Local NLP Editing</text>
+  </g>
+
+  <!-- Arrow 2 -> 3 -->
+  <g>
+    <line x1="588" y1="163" x2="607" y2="163" stroke="url(#arrow2)" stroke-width="2.2" stroke-linecap="round"/>
+    <polygon points="605,157 614,163 605,169" fill="#9d8cff"/>
+  </g>
+
+  <!-- STAGE 3: BREAKDOWN LIBRARY -->
+  <g transform="translate(616, 52)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <rect x="0" y="0" width="262" height="222" rx="14" fill="url(#wfCard)" stroke="#9d8cff" stroke-opacity="0.4" stroke-width="1.2"/>
+    <rect x="0" y="0" width="262" height="4" rx="2" fill="#9d8cff"/>
+    <rect x="16" y="18" width="54" height="20" rx="10" fill="#9d8cff" fill-opacity="0.18"/>
+    <text x="43" y="31.5" text-anchor="middle" font-size="10.5" font-weight="700" fill="#b3a6ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">03</text>
+    <text x="80" y="33" font-size="16" font-weight="700" fill="#f3f5f8">Breakdown</text>
+    <text x="16" y="57" font-size="11.5" fill="#9ea5b4">Shot Analysis &amp; Technique Library</text>
+
+    <rect x="14" y="72" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="87" r="3" fill="#9d8cff"/>
+    <text x="39" y="91" font-size="12" font-weight="500" fill="#e2e6ef">Scene &amp; Dissolve Detection</text>
+
+    <rect x="14" y="108" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="123" r="3" fill="#9d8cff"/>
+    <text x="39" y="127" font-size="12" font-weight="500" fill="#e2e6ef">Dominant Color (MMCQ)</text>
+
+    <rect x="14" y="144" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="159" r="3" fill="#9d8cff"/>
+    <text x="39" y="163" font-size="12" font-weight="500" fill="#e2e6ef">Beat &amp; Loudness Analysis</text>
+
+    <rect x="14" y="180" width="234" height="30" rx="7" fill="#1d1830" stroke="#9d8cff" stroke-opacity="0.34"/>
+    <circle cx="28" cy="195" r="3" fill="#b3a6ff"/>
+    <text x="39" y="199" font-size="12" font-weight="600" fill="#d0c7ff">Reusable Technique Cards</text>
+  </g>
+
+  <!-- Arrow 3 -> 4 -->
+  <g>
+    <line x1="882" y1="163" x2="901" y2="163" stroke="url(#arrow3)" stroke-width="2.2" stroke-linecap="round"/>
+    <polygon points="899,157 908,163 899,169" fill="#4cc38a"/>
+  </g>
+
+  <!-- STAGE 4: EXPORT -->
+  <g transform="translate(910, 52)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <rect x="0" y="0" width="262" height="222" rx="14" fill="url(#wfCard)" stroke="#4cc38a" stroke-opacity="0.4" stroke-width="1.2"/>
+    <rect x="0" y="0" width="262" height="4" rx="2" fill="#4cc38a"/>
+    <rect x="16" y="18" width="54" height="20" rx="10" fill="#4cc38a" fill-opacity="0.16"/>
+    <text x="43" y="31.5" text-anchor="middle" font-size="10.5" font-weight="700" fill="#4cc38a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">04</text>
+    <text x="80" y="33" font-size="16" font-weight="700" fill="#f3f5f8">Export</text>
+    <text x="16" y="57" font-size="11.5" fill="#9ea5b4">Worker Pipeline &amp; LGPL FFmpeg</text>
+
+    <rect x="14" y="72" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="87" r="3" fill="#4cc38a"/>
+    <text x="39" y="91" font-size="12" font-weight="500" fill="#e2e6ef">Web Worker JPEG Pipeline</text>
+
+    <rect x="14" y="108" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="123" r="3" fill="#4cc38a"/>
+    <text x="39" y="127" font-size="12" font-weight="500" fill="#e2e6ef">HW H.264 (NVENC / QSV / AMF)</text>
+
+    <rect x="14" y="144" width="234" height="30" rx="7" fill="#0f1218" stroke="#ffffff" stroke-opacity="0.06"/>
+    <circle cx="28" cy="159" r="3" fill="#4cc38a"/>
+    <text x="39" y="163" font-size="12" font-weight="500" fill="#e2e6ef">MP4, MOV, GIF, MP3 &amp; WAV</text>
+
+    <rect x="14" y="180" width="234" height="30" rx="7" fill="#12261e" stroke="#4cc38a" stroke-opacity="0.34"/>
+    <circle cx="28" cy="195" r="3" fill="#4cc38a"/>
+    <text x="39" y="199" font-size="12" font-weight="600" fill="#8ce8bc">SRT &amp; AIGC Compliance Tags</text>
+  </g>
+
+  <!-- Closed-Loop Feedback Path from Breakdown back to Create & Refine -->
+  <g>
+    <path d="M 747 274 L 747 294 L 159 294 L 159 280" fill="none" stroke="#9d8cff" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="5 4"/>
+    <polygon points="154,283 159,274 164,283" fill="#9d8cff"/>
+    <line x1="453" y1="294" x2="453" y2="280" stroke="#9d8cff" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <polygon points="448,283 453,274 458,283" fill="#9d8cff"/>
+    <rect x="330" y="283" width="320" height="22" rx="11" fill="#151822" stroke="#9d8cff" stroke-opacity="0.35"/>
+    <text x="490" y="297.5" text-anchor="middle" font-size="11" font-weight="600" fill="#b8adff" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">Technique Cards feed back into Create &amp; Refine AI</text>
+  </g>
+</svg>

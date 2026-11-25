@@ -8,6 +8,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const ROOT = __dirname;
 const OUT = process.env.PH_OUT ? path.resolve(process.env.PH_OUT) : path.join(ROOT, 'out');
@@ -38,10 +39,15 @@ app.whenReady().then(() => {
     height: 900,
     webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false },
   });
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 3) failed = true;
+  win.webContents.on('console-message', (details, legacyLevel, legacyMessage) => {
+    const isObj = details && typeof details === 'object' && typeof details.message === 'string';
+    const message = isObj ? details.message : legacyMessage;
+    const isErr = isObj
+      ? (details.level === 'error' || (typeof details.level === 'number' && details.level >= 3))
+      : (typeof legacyLevel === 'number' && legacyLevel >= 3);
+    if (isErr) failed = true;
     console.log(`[console] ${message}`);
   });
-  win.loadFile(path.join(ROOT, 'index.html'));
+  win.loadURL(pathToFileURL(path.join(ROOT, 'index.html')).href);
   setTimeout(() => { console.error('timeout'); app.exit(3); }, 240000).unref();
 });

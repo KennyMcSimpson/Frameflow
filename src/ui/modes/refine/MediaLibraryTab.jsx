@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import useStore from '../../store.js';
 import { Button, Empty, Icon, Spinner } from '../../components/ui.jsx';
 import { AssetThumb } from '../../components/media.jsx';
-import { addAssets, insertAssets, setDragAssets } from '../../assetActions.js';
+import { addAssets, insertAssets, addAudioTrack, setDragAssets } from '../../assetActions.js';
 import { queryLibraryAssets, fmtDur } from './SideData.js';
 
 export default function MediaLibraryTab({ query, active }) {
@@ -34,7 +34,9 @@ export default function MediaLibraryTab({ query, active }) {
   const addToProject = (a) => {
     if (addAssets([a], '从素材库加入：' + a.name)) useStore.getState().toast(`已加入项目素材：${a.name}`, 'ok');
   };
-  const addToTimeline = (a) => insertAssets([a], undefined, '从素材库添加：' + a.name);
+  const addToTimeline = (a) => (a && a.kind === 'audio'
+    ? addAudioTrack(a, 0, 'music')
+    : insertAssets([a], undefined, '从素材库添加：' + a.name));
 
   if (!project) return <Empty icon="folder" title="没有打开的项目" />;
 
@@ -51,7 +53,7 @@ export default function MediaLibraryTab({ query, active }) {
         <div className="mp-loading"><Spinner /> 正在读取素材库…</div>
       ) : !state.items.length ? (
         <Empty icon="book" title={query ? '素材库里没有匹配的素材' : '素材库还是空的'}>
-          {query ? '试试「联网素材」页签，从免版权图库找。' : '在「拆片库」分析视频，或在联网素材里选择「下载到素材库」，素材会出现在这里。'}
+          {query ? '试试「实拍」标签，从免版权图库找。' : '在「拆片库」分析视频，或在「实拍」里下载素材后，素材会出现在这里。'}
         </Empty>
       ) : (
         <div className="mp-grid">

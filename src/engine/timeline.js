@@ -4,6 +4,8 @@
 // 其中非 cut 转场 overlap_i = min(转场时长, dur_i/2, dur_{i-1}/2)，cut 为 0；第 0 个镜头 overlap 恒为 0。
 // 因为 overlap 不超过相邻两镜时长的一半，同一时刻最多只会有两个镜头同时活动。
 
+import { shiftKeys } from './keyframes.js';
+
 const FIRST_CLIP_FADES = new Set(['dip-black', 'dip-white', 'crossfade']);
 const FRAME = 1 / 60;
 
@@ -321,7 +323,9 @@ export function overlaysAt(project, t) {
     if (d > 0 && time >= start && time < start + d) {
       const speed = finite(o.speed, 1) > 0 ? finite(o.speed, 1) : 1;
       const local = time - start;
-      out.push({ overlay: o, local, progress: local / d, srcTime: Math.min(finite(o.out) - FRAME, finite(o.in) + local * speed) });
+      const oIn = finite(o.in);
+      const oOut = finite(o.out);
+      out.push({ overlay: o, local, progress: local / d, srcTime: Math.max(oIn, Math.min(oOut - FRAME, oIn + local * speed)) });
     }
   }
   return out.sort((a, b) => (a.overlay.track || 1) - (b.overlay.track || 1));
@@ -412,31 +416,24 @@ function headRoom(clip, asset) {
   const e = effSpeed(clip) || 1;
   return clip.reverse ? (srcMax(asset) - finite(clip.out)) / e : finite(clip.in) / e;
 }
-/** 尾部改变 dt 时间线秒（正=延长） */
+/** 尾部改变 dt 时间线秒（正=延长）；缩短时烘焙右侧边界关键帧 */
 function changeTail(clip, asset, dt) {
-  if (clip.still) return { ...clip, duration: r4(clipDuration(clip) + dt) };
+  const nextDur = Math.max(0, clipDuration(clip) + dt);
+  const keys = dt < -EPS && clip.keys && Object.keys(clip.keys).length ? shiftKeys(clip.keys, 0, nextDur) : clip.keys;
+  if (clip.still) return { ...clip, keys, duration: r4(nextDur) };
   const ds = dt * (effSpeed(clip) || 1);
-  if (clip.reverse && isVideoAsset(asset)) return { ...clip, in: r4(Math.max(0, finite(clip.in) - ds)) };
-  return { ...clip, out: r4(finite(clip.out) + ds) };
+  if (clip.reverse && isVideoAsset(asset)) return { ...clip, keys, in: r4(Math.max(0, finite(clip.in) - ds)) };
+  return { ...clip, keys, out: r4(finite(clip.out) + ds) };
 }
-/** 头部改变 dt 时间线秒（正=向前延长）；关键帧随之平移 */
+/** 头部改变 dt 时间线秒（正=向前延长）；关键帧随之平移并在边界烘焙 */
 function changeHead(clip, asset, dt) {
-  const keys = shiftKeyTimes(clip.keys, dt);
-  if (clip.still) return { ...clip, keys, duration: r4(clipDuration(clip) + dt) };
+  const nextDur = Math.max(0, clipDuration(clip) + dt);
+  const keys = clip.keys && Object.keys(clip.keys).length ? shiftKeys(clip.keys, dt, nextDur) : (clip.keys || {});
+  if (clip.still) return { ...clip, keys, duration: r4(nextDur) };
   const ds = dt * (effSpeed(clip) || 1);
   if (!isVideoAsset(asset)) return { ...clip, keys, out: r4(finite(clip.out) + ds) };
   if (clip.reverse) return { ...clip, keys, out: r4(Math.min(srcMax(asset), finite(clip.out) + ds)) };
   return { ...clip, keys, in: r4(Math.max(0, finite(clip.in) - ds)) };
-}
-function shiftKeyTimes(keys, dt) {
-  if (!keys || typeof keys !== 'object' || !Object.keys(keys).length) return keys || {};
-  const out = {};
-  for (const [p, list] of Object.entries(keys)) {
-    if (!Array.isArray(list)) continue;
-    const l = list.map((k) => ({ ...k, t: r4(k.t + dt) })).filter((k) => k.t >= -EPS).map((k) => ({ ...k, t: Math.max(0, k.t) }));
-    if (l.length) out[p] = l;
-  }
-  return out;
 }
 function withVideo(project, video) { return { ...project, tracks: { ...project.tracks, video } }; }
 function checkUnlocked(clip, n) { if (clip && clip.locked) throw new Error(`第 ${n} 镜已锁定`); }
@@ -539,10 +536,7 @@ export function syncLinked(before, after) {
   return { ...after, tracks: { ...after.tracks, text, audio } };
 }
 
-/** 时间线上 from 之后（含）的文字、音频、画中画、标记整体平移 delta 秒；锁定的片段和锁定的轨道不动 */
-export function shiftAfter(project, from, delta) {
-  if (!delta) return project;
-  const mv = (s) => (finite(s) >= from - EPS ? r4(Math.max(0, finite(s) + delta)) : s);
+function shiftWith(project, mapTime) {
   const tracks = project.tracks || {};
   const textLocked = trackFlags(project, 'text').locked;
   const audioLocked = trackFlags(project, 'audio').locked;
@@ -551,12 +545,19 @@ export function shiftAfter(project, from, delta) {
     ...project,
     tracks: {
       ...tracks,
-      text: textLocked ? textTrack(project) : textTrack(project).map((t) => (t.locked ? t : { ...t, start: mv(t.start) })),
-      audio: audioLocked ? audioTrack(project) : audioTrack(project).map((a) => (a.locked ? a : { ...a, start: mv(a.start) })),
+      text: textLocked ? textTrack(project) : textTrack(project).map((t) => (t.locked ? t : { ...t, start: mapTime(t.start) })),
+      audio: audioLocked ? audioTrack(project) : audioTrack(project).map((a) => (a.locked ? a : { ...a, start: mapTime(a.start) })),
     },
-    overlays: overlayList(project).map((o) => (o.locked || overlayLocked(o) ? o : { ...o, start: mv(o.start) })),
-    markers: (Array.isArray(project.markers) ? project.markers : []).map((m) => ({ ...m, t: mv(m.t) })),
+    overlays: overlayList(project).map((o) => (o.locked || overlayLocked(o) ? o : { ...o, start: mapTime(o.start) })),
+    markers: (Array.isArray(project.markers) ? project.markers : []).map((m) => ({ ...m, t: mapTime(m.t) })),
   };
+}
+
+/** 时间线上 from 之后（含）的文字、音频、画中画、标记整体平移 delta 秒；锁定的片段和锁定的轨道不动 */
+export function shiftAfter(project, from, delta) {
+  if (!delta) return project;
+  const mv = (s) => (finite(s) >= from - EPS ? r4(Math.max(0, finite(s) + delta)) : s);
+  return shiftWith(project, mv);
 }
 
 /** 找到离 at 最近的剪辑点：返回后一镜索引 i（1..n-1），没有剪辑点返回 -1 */
@@ -656,22 +657,46 @@ export function rippleDelete(project, ids) {
     if (trackFlags(project, 'overlay', o.track || 1).locked) throw new Error(trackLockMessage('overlay', o.track || 1));
     if (o.locked) throw new Error('这个画中画已锁定');
   }
-  let next = project;
-  // 从后往前平移，避免前面的平移影响后面的判断
-  for (const it of [...spans].sort((a, b) => b.start - a.start)) {
-    const removed = it.end - it.start - (layout[it.index + 1] ? layout[it.index + 1].overlap : 0);
-    next = shiftAfter(next, it.end - EPS, -Math.max(0, removed));
-  }
   const found = spans.length
     + textTrack(project).filter((t) => set.has(t.id)).length
     + audioTrack(project).filter((a) => set.has(a.id)).length
     + overlayList(project).filter((o) => set.has(o.id)).length;
   if (!found) throw new Error('找不到要删除的内容，它可能已被删除');
+  const keptVideo = videoTrack(project).filter((c) => !set.has(c.id));
+  let next = project;
+  if (spans.length) {
+    // 对比删除前后真实 layoutVideo 起点，把转场重叠变化一并算准
+    const afterLayout = layoutVideo(withVideo(project, keptVideo));
+    const afterById = new Map(afterLayout.map((it) => [it.clip.id, it]));
+    const deletedIdx = [...new Set(spans.map((it) => it.index))].sort((a, b) => a - b);
+    const runs = [];
+    for (const idx of deletedIdx) {
+      const last = runs[runs.length - 1];
+      if (last && idx === last[1] + 1) last[1] = idx;
+      else runs.push([idx, idx]);
+    }
+    for (let r = runs.length - 1; r >= 0; r -= 1) {
+      const [loIdx, hiIdx] = runs[r];
+      const prevCum = loIdx > 0 ? afterById.get(layout[loIdx - 1].clip.id).start - layout[loIdx - 1].start : 0;
+      let origin;
+      let nextCum;
+      if (hiIdx + 1 < layout.length) {
+        const follower = layout[hiIdx + 1];
+        origin = follower.start;
+        nextCum = afterById.get(follower.clip.id).start - follower.start;
+      } else {
+        origin = layout[hiIdx].end;
+        nextCum = afterLayout[afterLayout.length - 1].end - layout[hiIdx].end;
+      }
+      const delta = nextCum - prevCum;
+      if (Math.abs(delta) > EPS) next = shiftAfter(next, origin - EPS, delta);
+    }
+  }
   return {
     ...next,
     tracks: {
       ...next.tracks,
-      video: videoTrack(next).filter((c) => !set.has(c.id)),
+      video: keptVideo,
       text: textTrack(next).filter((t) => !set.has(t.id)),
       audio: audioTrack(next).filter((a) => !set.has(a.id)),
     },
@@ -689,14 +714,12 @@ function itemAtForTrim(project, t) {
   return null;
 }
 
-/** 把片段切成本地 [a,b] 段（正确处理 still / reverse / speedCurve / 关键帧） */
+/** 把片段切成本地 [a,b] 段（正确处理 still / reverse / speedCurve / 关键帧边界烘焙） */
 export function subClip(clip, a, b) {
   const dur = clipDuration(clip);
   const lo = Math.max(0, Math.min(a, b));
   const hi = Math.min(dur, Math.max(a, b));
-  const keys = shiftKeyTimes(clip.keys, -lo);
-  const keysTrim = {};
-  for (const [p, l] of Object.entries(keys || {})) { const f = l.filter((k) => k.t <= hi - lo + EPS); if (f.length) keysTrim[p] = f; }
+  const keysTrim = shiftKeys(clip.keys, -lo, hi - lo);
   if (clip.still) return { ...clip, duration: r4(hi - lo), keys: keysTrim };
   const s0 = sourceTimeAt({ ...clip, reverse: false }, lo);
   const s1 = hi >= dur - EPS ? finite(clip.out) : sourceTimeAt({ ...clip, reverse: false }, hi);
@@ -714,31 +737,57 @@ export function subClip(clip, a, b) {
   return next;
 }
 
-/** Q：删除播放头左侧（片段开头到 t）部分，后续内容前移。 */
+/** Q：删除播放头左侧（片段开头到 t）部分，后续内容按实际布局前移。 */
 export function trimLeftAt(project, t) {
   videoLocked(project);
+  const beforeLayout = layoutVideo(project);
   const it = itemAtForTrim(project, t);
   if (!it) throw new Error('播放头不在任何镜头内部');
   checkUnlocked(it.clip, it.index + 1);
-  const cut = finite(t) - it.start;
+  const time = finite(t);
+  const cut = time - it.start;
   if (it.duration - cut < MIN_CLIP - EPS) throw new Error(`剩余部分不足 ${MIN_CLIP} 秒`);
   const video = [...videoTrack(project)];
   video[it.index] = subClip(it.clip, cut, it.duration);
-  return shiftAfter(withVideo(project, video), finite(t) - EPS, -cut);
+  const next = withVideo(project, video);
+  const afterLayout = layoutVideo(next);
+  const selfDelta = afterLayout[it.index].start - time;
+  if (it.index + 1 < beforeLayout.length) {
+    const nextStart = beforeLayout[it.index + 1].start;
+    const followDelta = afterLayout[it.index + 1].start - nextStart;
+    if (Math.abs(selfDelta - followDelta) <= EPS) {
+      return Math.abs(followDelta) > EPS ? shiftAfter(next, time - EPS, followDelta) : next;
+    }
+    return shiftWith(next, (s) => {
+      const v = finite(s);
+      if (v >= nextStart - EPS) return r4(Math.max(0, v + followDelta));
+      if (v >= time - EPS) return r4(Math.max(0, v + selfDelta));
+      return s;
+    });
+  }
+  return Math.abs(selfDelta) > EPS ? shiftAfter(next, time - EPS, selfDelta) : next;
 }
 
-/** W：删除播放头右侧（t 到片段结尾）部分，后续内容前移。 */
+/** W：删除播放头右侧（t 到片段结尾）部分，后续内容按实际布局前移。 */
 export function trimRightAt(project, t) {
   videoLocked(project);
+  const beforeLayout = layoutVideo(project);
   const it = itemAtForTrim(project, t);
   if (!it) throw new Error('播放头不在任何镜头内部');
   checkUnlocked(it.clip, it.index + 1);
   const keep = finite(t) - it.start;
   if (keep < MIN_CLIP - EPS) throw new Error(`保留部分不足 ${MIN_CLIP} 秒`);
-  const removed = it.duration - keep;
   const video = [...videoTrack(project)];
   video[it.index] = subClip(it.clip, 0, keep);
-  return shiftAfter(withVideo(project, video), it.end - EPS, -removed);
+  const next = withVideo(project, video);
+  const afterLayout = layoutVideo(next);
+  if (it.index + 1 < beforeLayout.length) {
+    const nextStart = beforeLayout[it.index + 1].start;
+    const followDelta = afterLayout[it.index + 1].start - nextStart;
+    return Math.abs(followDelta) > EPS ? shiftAfter(next, nextStart - EPS, followDelta) : next;
+  }
+  const endDelta = afterLayout[it.index].end - beforeLayout[it.index].end;
+  return Math.abs(endDelta) > EPS ? shiftAfter(next, it.end - EPS, endDelta) : next;
 }
 
 // ---------------------------------------------------------------------------

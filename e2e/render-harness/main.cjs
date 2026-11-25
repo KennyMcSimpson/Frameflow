@@ -8,6 +8,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const ROOT = __dirname;
 const OUT = path.join(ROOT, 'out');
@@ -25,6 +26,7 @@ ipcMain.handle('harness:config', () => ({
   assets: {
     test: path.join(ASSETS, 'test.png'),
     clock: path.join(ASSETS, 'clock.mp4'),
+    clockUrl: pathToFileURL(path.join(ASSETS, 'clock.mp4')).href,
   },
 }));
 
@@ -71,15 +73,20 @@ app.whenReady().then(() => {
       webSecurity: false,
     },
   });
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 3) failed = true;
+  win.webContents.on('console-message', (details, legacyLevel, legacyMessage) => {
+    const isObj = details && typeof details === 'object' && typeof details.message === 'string';
+    const message = isObj ? details.message : legacyMessage;
+    const isErr = isObj
+      ? (details.level === 'error' || (typeof details.level === 'number' && details.level >= 3))
+      : (typeof legacyLevel === 'number' && legacyLevel >= 3);
+    if (isErr) failed = true;
     console.log(`[console] ${message}`);
   });
   win.webContents.on('render-process-gone', (_e, details) => {
     console.error(`[harness] 渲染进程退出：${details.reason}`);
     app.exit(2);
   });
-  win.loadFile(path.join(ROOT, 'index.html'));
+  win.loadURL(pathToFileURL(path.join(ROOT, 'index.html')).href);
   setTimeout(() => {
     console.error('[harness] 超时退出');
     app.exit(3);

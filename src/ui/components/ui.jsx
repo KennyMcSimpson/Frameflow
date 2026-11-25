@@ -776,7 +776,7 @@ export function Modal({ title, onClose, children, footer, wide, className = '' }
       }
     };
   }, [isTop, closeRef, opener]);
-  return (
+  const content = (
     <div
       className="modal-backdrop"
       onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); if (onClose) onClose(); } }}
@@ -792,6 +792,7 @@ export function Modal({ title, onClose, children, footer, wide, className = '' }
       </div>
     </div>
   );
+  return typeof document !== 'undefined' && document.body ? createPortal(content, document.body) : content;
 }
 
 /** 空状态：图标 + 标题 + 一句说明 + 一个动作 */

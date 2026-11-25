@@ -9,8 +9,10 @@ import { motionTransform, composeTransform, coverSize, clamp01, easeOutCubic, an
 
 const { layoutVideo, activeAt, textAt } = TL;
 import { transitionState, introOverlay } from './transitions.js';
-import { effectiveColor, primaryFilter, applyTone } from './looks.js';
+import { effectiveColor, primaryFilter, applyTone, needsToneOverlay } from './looks.js';
 import { drawPreviz, drawPrevizHud } from './previz.js';
+import { releaseScratchPool } from './previz/util.js';
+import { releasePostCache } from './previz/post.js';
 import { drawCaption, drawTextClip, FONT_SANS } from './text.js';
 
 const DEG = Math.PI / 180;
@@ -38,7 +40,8 @@ class SurfaceSet {
 
   /** 取一块工作画布；div 为相对输出的缩小倍数 */
   get(name, div = 1) {
-    let s = this.slots.get(name);
+    const key = div === 1 ? name : `${name}@${div}`;
+    let s = this.slots.get(key);
     const width = Math.max(1, Math.round(this.w / div));
     const height = Math.max(1, Math.round(this.h / div));
     if (!s) {
@@ -46,7 +49,7 @@ class SurfaceSet {
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('无法创建渲染画布（显卡资源可能不足）');
       s = { canvas, ctx, width, height };
-      this.slots.set(name, s);
+      this.slots.set(key, s);
     }
     resetCtx(s.ctx);
     return s;
@@ -73,6 +76,8 @@ function surfacesFor(w, h) {
 /** 释放全部缓存的工作画布（例如关闭导出后释放显存） */
 export function releaseRenderCache() {
   surfaceSets.clear();
+  releaseScratchPool();
+  releasePostCache();
 }
 
 function resetCtx(g) {
@@ -267,7 +272,7 @@ function drawSource(g, src, sw, sh, tf, filter, blur, w, h, place = {}) {
   const [cx, cy, cw, ch] = cropRect(sw, sh, place.crop);
   const box = fitSize(cw, ch, w, h, place.fit || 'cover');
   const scale = Math.max(0.01, tf.scale);
-  const mirrorH = !!tf.flipH !== !!(place.mirror && place.mirror.h);
+  const mirrorH = (place.mirror && place.mirror.h !== undefined) ? !!place.mirror.h : !!tf.flipH;
   const mirrorV = !!(place.mirror && place.mirror.v);
   g.save();
   g.translate(w / 2 + tf.x * w, h / 2 + tf.y * h);
@@ -723,7 +728,20 @@ function renderClip(entry, rc, slot) {
   if (slot !== 'ovl') drawCanvasBg(g, clip.canvas, src, sw, sh, rc);
   else g.clearRect(0, 0, w, h);
   drawSource(g, src, sw, sh, tf, primaryFilter(grade), fx.blur, w, h, { crop: clip.crop, fit: clip.fit || (slot === 'ovl' ? 'contain' : 'cover'), mirror: clip.mirror });
-  applyTone(g, grade, w, h, rc.surfaces.get('mask', 2));
+  if (slot === 'ovl' && needsToneOverlay(grade)) {
+    // 透明画中画做全画幅色调叠加后，用原图层 alpha 做 destination-in，避免染色溢出到透明背景区域
+    const alphaKeep = rc.surfaces.get('ovlAlpha');
+    copyInto(alphaKeep, S);
+    applyTone(g, grade, w, h, rc.surfaces.get('mask', 2));
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(alphaKeep.canvas, 0, 0, w, h);
+    g.restore();
+  } else {
+    applyTone(g, grade, w, h, rc.surfaces.get('mask', 2));
+  }
   if (fx.sharpen > 0.004) fxSharpen(S, fx.sharpen, rc);
   if (fx.glow > 0.004) fxGlow(S, fx.glow, rc);
   if (fx.chromatic > 0.004) fxChromatic(S, fx.chromatic, rc);
@@ -753,7 +771,14 @@ function overlayDuration(o) {
 /** 时刻 t 可见的画中画，按 track 升序（越大越靠上） */
 export function visibleOverlays(project, t) {
   if (!project) return [];
-  const tracks = (project.tracks && project.tracks.overlay) || {};
+  const stateTracks = (project.trackState && project.trackState.overlay) || {};
+  const legacyTracks = (project.tracks && project.tracks.overlay) || {};
+  const isTrackHidden = (track) => {
+    const n = track || 1;
+    if (typeof TL.trackFlags === 'function' && TL.trackFlags(project, 'overlay', n).hidden) return true;
+    if (stateTracks[n] && stateTracks[n].hidden) return true;
+    return !!(legacyTracks[n] && legacyTracks[n].hidden);
+  };
   let list;
   if (typeof TL.overlaysAt === 'function') {
     try { list = TL.overlaysAt(project, t); } catch { list = null; }
@@ -766,7 +791,7 @@ export function visibleOverlays(project, t) {
   }
   return list
     .map((x) => (x && x.overlay ? x.overlay : x))
-    .filter((o) => o && !(tracks[o.track] && tracks[o.track].hidden))
+    .filter((o) => o && !isTrackHidden(o.track))
     .sort((a, b) => num(a.track, 1) - num(b.track, 1));
 }
 
@@ -1011,6 +1036,7 @@ function fillOverlay(ctx, overlay, rc) {
 }
 
 function drawMain(ctx, active, rc) {
+  if (typeof TL.trackFlags === 'function' && TL.trackFlags(rc.project, 'video').hidden) return;
   const tr = active.transition;
   if (active.out && active.in && tr) {
     const st = transitionState(tr.type, tr.p);
@@ -1018,14 +1044,18 @@ function drawMain(ctx, active, rc) {
     const inVisible = st.incoming.alpha > 0.001;
     const A = outVisible ? renderClip(active.out, rc, 'clipA') : null;
     const B = inVisible ? renderClip(active.in, rc, 'clipB') : null;
+    const outOp = active.out.anim ? active.out.anim.opacity : 1;
+    const inOp = active.in.anim ? active.in.anim.opacity : 1;
+    const outLayer = outOp < 1 ? { ...st.outgoing, alpha: st.outgoing.alpha * outOp } : st.outgoing;
+    const inLayer = inOp < 1 ? { ...st.incoming, alpha: st.incoming.alpha * inOp } : st.incoming;
     if (st.mix === 'add') {
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, rc.w, rc.h);
-      if (A) drawLayer(ctx, A, st.outgoing, rc, 'lighter', 'A');
-      if (B) drawLayer(ctx, B, st.incoming, rc, 'lighter', 'B');
+      if (A) drawLayer(ctx, A, outLayer, rc, 'lighter', 'A');
+      if (B) drawLayer(ctx, B, inLayer, rc, 'lighter', 'B');
     } else {
-      if (A) drawLayer(ctx, A, st.outgoing, rc, 'source-over', 'A');
-      if (B) drawLayer(ctx, B, st.incoming, rc, 'source-over', 'B');
+      if (A) drawLayer(ctx, A, outLayer, rc, 'source-over', 'A');
+      if (B) drawLayer(ctx, B, inLayer, rc, 'source-over', 'B');
     }
     fillOverlay(ctx, st.overlay, rc);
     return;
@@ -1107,17 +1137,21 @@ export function renderFrame(ctx, project, t, pool, opts = {}) {
       if (time > end && time - end < 0.5 / fps + 1e-6) active = activeAt(layout, end);
     }
     const rc = { w, h, mode, frameIndex, fps, pool, project, bg, surfaces: surfacesFor(w, h) };
-    if (active.in) {
+    const videoHidden = typeof TL.trackFlags === 'function' && TL.trackFlags(project, 'video').hidden;
+    if (active.in && !videoHidden) {
       drawMain(ctx, active, rc);
       resetCtx(ctx);
     }
     drawOverlays(ctx, rc, time);
     resetCtx(ctx);
     // R2：镜头文案字幕已由初剪生成为文字轨 TextClip，这里只渲染文字轨，避免双份字幕
-    if (active.in && opts.legacyCaptions) drawCaptions(ctx, active, rc);
+    if (active.in && opts.legacyCaptions && !videoHidden) drawCaptions(ctx, active, rc);
     resetCtx(ctx);
-    for (const item of textAt(project, time)) {
-      drawTextClip(ctx, item.text, w, h, item.progress, item.local);
+    const textHidden = typeof TL.trackFlags === 'function' && TL.trackFlags(project, 'text').hidden;
+    if (!textHidden) {
+      for (const item of textAt(project, time)) {
+        drawTextClip(ctx, item.text, w, h, item.progress, item.local);
+      }
     }
   } finally {
     ctx.restore();

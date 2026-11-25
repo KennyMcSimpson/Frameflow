@@ -19,7 +19,7 @@ import {
   beatTimes, nearestBeat, rollEdit, slipEdit, slideEdit, rippleDelete, trimLeftAt, trimRightAt, autoDuck, isLinked, syncLinked,
   volumeKeyAt, trackLockMessage,
 } from './timeline.js';
-import { isKeyPath, setKey, removeKey, hasKeyAt, EASES, KEY_EPS, KEY_PATH_LABELS } from './keyframes.js';
+import { isKeyPath, setKey, removeKey, hasKeyAt, shiftKeys, EASES, KEY_EPS, KEY_PATH_LABELS } from './keyframes.js';
 import { colorParamsFromStats } from './colormatch.js';
 import { harmonizeOps } from './consistency.js';
 import { pacingDurations, PACING_NAMES } from './pacing.js';
@@ -347,14 +347,20 @@ const clipHandlers = {
   setTransform(draft, op, indices) {
     const patch = requirePatch(op.transform, '画面变换');
     for (const [key, v] of Object.entries(patch)) {
-      if (key === 'scale') requireNumber(v, '缩放', 0.5, 3);
-      else if (key === 'x') requireNumber(v, '水平位置', -1, 1);
-      else if (key === 'y') requireNumber(v, '垂直位置', -1, 1);
+      if (key === 'scale') requireNumber(v, '缩放', 0.05, 5);
+      else if (key === 'x') requireNumber(v, '水平位置', -2, 2);
+      else if (key === 'y') requireNumber(v, '垂直位置', -2, 2);
       else if (key === 'rotation') requireNumber(v, '旋转角度', -180, 180);
       else if (key === 'flipH') requireBool(v, '水平翻转');
       else fail(`不支持的画面变换参数「${key}」`);
     }
-    return { project: mapClips(draft, indices, (clip) => ({ ...clip, transform: { ...clip.transform, ...patch } })) };
+    return {
+      project: mapClips(draft, indices, (clip) => {
+        const next = { ...clip, transform: { ...clip.transform, ...patch } };
+        if ('flipH' in patch) next.mirror = { ...(clip.mirror || { h: false, v: false }), h: !!patch.flipH };
+        return next;
+      }),
+    };
   },
 
   setFx(draft, op, indices) {
@@ -407,12 +413,17 @@ const clipHandlers = {
 
   setSpeed(draft, op, indices) {
     const speed = requireNumber(op.speed, '播放速度', LIMITS.minSpeed, LIMITS.maxSpeed);
-    return {
-      project: mapClips(draft, indices, (clip, i) => {
-        ensureMinDuration(clip.out - clip.in, speed, i + 1);
-        return { ...clip, speed, speedCurve: null };
-      }),
-    };
+    const notes = [];
+    const project = mapClips(draft, indices, (clip, i) => {
+      if (clip.still) {
+        if (indices.length === 1) fail(`第${i + 1}镜是定格画面，不能变速`);
+        notes.push(`第${i + 1}镜是定格画面，已跳过变速`);
+        return clip;
+      }
+      ensureMinDuration(clip.out - clip.in, speed, i + 1);
+      return { ...clip, speed, speedCurve: null };
+    });
+    return { project, note: notes.join('；') || null };
   },
 
   setVolume(draft, op, indices) {
@@ -447,6 +458,19 @@ const clipHandlers = {
     return {
       project: mapClips(draft, indices, (clip, i) => {
         const n = i + 1;
+        if (clip.still) {
+          if (relative) {
+            const dIn = given(op.in) ? op.in : 0;
+            const dOut = given(op.out) ? op.out : 0;
+            const nextDur = clipDuration(clip) - dIn + dOut;
+            if (nextDur < LIMITS.minClip - EPS) fail(`第${n}镜时长不能少于 ${LIMITS.minClip} 秒`);
+            if (nextDur > LIMITS.maxDuration + EPS) fail(`第${n}镜时长不能超过 ${LIMITS.maxDuration} 秒`);
+            const hasKeys = clip.keys && Object.keys(clip.keys).length > 0;
+            const nextKeys = hasKeys && (Math.abs(dIn) > EPS || dOut < -EPS) ? shiftKeys(clip.keys, -dIn, nextDur) : clip.keys;
+            return { ...clip, duration: round(nextDur, 4), keys: nextKeys };
+          }
+          fail(`第${n}镜是定格画面，请直接调整时长而不是裁剪入出点`);
+        }
         const max = maxSourceTime(draft.assets[clip.assetId]);
         let nextIn = clip.in;
         let nextOut = clip.out;
@@ -461,8 +485,19 @@ const clipHandlers = {
           if (nextOut > max + EPS) fail(`第${n}镜出点超过了素材长度（${round(max, 2)} 秒）`);
         }
         if (nextOut <= nextIn) fail(`第${n}镜出点必须晚于入点`);
-        ensureMinDuration(nextOut - nextIn, clip.speed, n);
-        return { ...clip, in: round(nextIn, 4), out: round(nextOut, 4) };
+        const next = { ...clip, in: round(nextIn, 4), out: round(nextOut, 4) };
+        const nextDur = clipDuration(next);
+        if (nextDur < LIMITS.minClip - EPS) fail(`第${n}镜时长不能少于 ${LIMITS.minClip} 秒`);
+        if (clip.keys && Object.keys(clip.keys).length) {
+          const oldDur = clipDuration(clip);
+          const effSpeed = oldDur > 0 ? (clip.out - clip.in) / oldDur : (clip.speed || 1);
+          const headDeltaSrc = clip.reverse ? (clip.out - next.out) : (next.in - clip.in);
+          const headDeltaTime = headDeltaSrc / (effSpeed || 1);
+          if (Math.abs(headDeltaTime) > EPS || nextDur < oldDur - EPS) {
+            next.keys = shiftKeys(clip.keys, -headDeltaTime, nextDur);
+          }
+        }
+        return next;
       }),
     };
   },
@@ -510,6 +545,10 @@ const clipHandlers = {
     const max = maxSourceTime(asset);
     const notes = [];
     const project = mapClips(draft, indices, (clip, i) => {
+      if (clip.still) {
+        const frame = max === Infinity ? 0 : Math.min(Math.max(0, Number(clip.in) || 0), Math.max(0, max - 1 / 60));
+        return { ...clip, assetId: asset.id, in: round(frame, 4), out: round(frame, 4) };
+      }
       const length = clip.out - clip.in;
       let nextIn = clip.in;
       let nextOut = clip.out;
@@ -518,8 +557,9 @@ const clipHandlers = {
         nextOut = Math.min(length, max);
         if (nextOut < length - EPS) notes.push(`第${i + 1}镜新素材较短，时长缩到 ${round(nextOut / (clip.speed || 1), 2)} 秒`);
       }
-      ensureMinDuration(nextOut - nextIn, clip.speed, i + 1);
-      return { ...clip, assetId: asset.id, in: round(nextIn, 4), out: round(nextOut, 4) };
+      const next = { ...clip, assetId: asset.id, in: round(nextIn, 4), out: round(nextOut, 4) };
+      if (clipDuration(next) < LIMITS.minClip - EPS) fail(`第${i + 1}镜时长不能少于 ${LIMITS.minClip} 秒`);
+      return next;
     });
     return { project, note: notes.join('；') || null };
   },
@@ -617,8 +657,12 @@ function applySplit(draft, op, run) {
     video.splice(i, 1, left, right);
     let project = withVideo(draft, video);
     // 联动：跟随这个镜头的文字和音频按分割点分给左右两半。
-    // 跨分割点的拆成两段，整段落在右半的改为跟随右半镜头；否则删掉/移动左半时右半的字幕和声音会跟错镜头。
-    if (isLinked(draft)) project = splitLinkedItems(project, clip.id, right.id, at);
+    // 先算分割后的真实 layout（左半变短可能缩短其入场转场重叠），把右半真实起点传给联动拆分，避免错位。
+    if (isLinked(draft)) {
+      const afterLayout = layoutVideo(project);
+      const rightStart = afterLayout[i + 1] ? afterLayout[i + 1].start : at;
+      project = splitLinkedItems(project, clip.id, right.id, at, rightStart);
+    }
     return { project, index: i };
   }
   return fail(`分割点 ${round(at, 2)} 秒不在目标镜头内部，或离镜头边缘不足 ${LIMITS.minClip} 秒`);
@@ -626,9 +670,10 @@ function applySplit(draft, op, run) {
 
 const SPLIT_EPS = 0.05;
 
-/** 把跟随 clipId 的文字/音频按时间线时刻 at 分给左半（clipId）与右半（rightId）。锁定的片段和锁定的轨道不动 */
-function splitLinkedItems(project, clipId, rightId, at) {
+/** 把跟随 clipId 的文字/音频按时间线时刻 at 分给左半（clipId）与右半（rightId），右半按 rightStart 对齐。锁定的片段和锁定的轨道不动 */
+function splitLinkedItems(project, clipId, rightId, at, rightStart = at) {
   let next = project;
+  const rightShift = rightStart - at;
   const texts = Array.isArray(project.tracks.text) ? project.tracks.text : [];
   if (!trackFlags(project, 'text').locked && texts.some((t) => t && t.linkShotId === clipId)) {
     const out = [];
@@ -636,10 +681,10 @@ function splitLinkedItems(project, clipId, rightId, at) {
       if (!t || t.linkShotId !== clipId || t.locked) { out.push(t); continue; }
       const ts = Number(t.start) || 0;
       const te = ts + (Number(t.duration) || 0);
-      if (ts >= at - SPLIT_EPS) out.push({ ...t, linkShotId: rightId });
+      if (ts >= at - SPLIT_EPS) out.push({ ...t, start: round(Math.max(0, ts + rightShift), 4), linkShotId: rightId });
       else if (te > at + SPLIT_EPS) {
         out.push({ ...t, duration: round(at - ts, 4) });
-        out.push({ ...deepClone(t), id: uid('txt'), start: round(at, 4), duration: round(te - at, 4), linkShotId: rightId });
+        out.push({ ...deepClone(t), id: uid('txt'), start: round(rightStart, 4), duration: round(te - at, 4), linkShotId: rightId });
       } else out.push(t);
     }
     next = { ...next, tracks: { ...next.tracks, text: out } };
@@ -653,7 +698,7 @@ function splitLinkedItems(project, clipId, rightId, at) {
       if (!key || a.locked) { out.push(a); continue; }
       const as = Number(a.start) || 0;
       const ae = as + Math.max(0, (Number(a.out) || 0) - (Number(a.in) || 0));
-      if (as >= at - SPLIT_EPS) out.push({ ...a, [key]: rightId });
+      if (as >= at - SPLIT_EPS) out.push({ ...a, start: round(Math.max(0, as + rightShift), 4), [key]: rightId });
       else if (ae > at + SPLIT_EPS) {
         const cut = at - as; // 片段本地秒
         const mid = round((Number(a.in) || 0) + cut, 4);
@@ -664,7 +709,7 @@ function splitLinkedItems(project, clipId, rightId, at) {
           ? [{ t: 0, v: edge }, ...keys.filter((k) => k.t > cut + KEY_EPS).map((k) => ({ ...k, t: round(k.t - cut, 3) }))]
           : [];
         out.push({ ...a, out: mid, fadeOut: 0, volumeKeys: leftKeys });
-        out.push({ ...deepClone(a), id: uid('aud'), start: round(at, 4), in: mid, fadeIn: 0, volumeKeys: rightKeys, [key]: rightId });
+        out.push({ ...deepClone(a), id: uid('aud'), start: round(rightStart, 4), in: mid, fadeIn: 0, volumeKeys: rightKeys, [key]: rightId });
       } else out.push(a);
     }
     next = { ...next, tracks: { ...next.tracks, audio: out } };
@@ -674,8 +719,25 @@ function splitLinkedItems(project, clipId, rightId, at) {
 
 // ---------- 全局操作（素材、文字、音频、项目设置） ----------
 
+const CLEARABLE_TEXT_KEYS = new Set(['stroke', 'shadow', 'bg', 'animIn', 'animOut', 'animLoop', 'group']);
+
 function validateTextPatch(raw) {
-  const patch = typeof raw === 'string' ? { text: raw } : requirePatch(raw, '文字');
+  let patch;
+  if (typeof raw === 'string') {
+    patch = { text: raw };
+  } else {
+    if (!isRecord(raw)) fail('缺少文字参数');
+    patch = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (v === undefined) continue;
+      if (v === null) {
+        if (CLEARABLE_TEXT_KEYS.has(k)) patch[k] = null;
+        continue;
+      }
+      patch[k] = v;
+    }
+    if (!Object.keys(patch).length) fail('文字没有要修改的内容');
+  }
   for (const [key, v] of Object.entries(patch)) {
     switch (key) {
       case 'id': break;
@@ -694,7 +756,7 @@ function validateTextPatch(raw) {
       case 'locked': requireBool(v, '锁定状态'); break;
       case 'group': if (v !== 'caption' && v !== null) fail('文字分组只能是 caption'); break;
       case 'stroke': case 'shadow': case 'bg': case 'animIn': case 'animOut': case 'animLoop':
-        if (v !== false && !isRecord(v)) fail(`文字参数「${key}」格式不正确`);
+        if (v !== null && v !== false && !isRecord(v)) fail(`文字参数「${key}」格式不正确`);
         break;
       case 'font': requireString(v, '字体', 80); break;
       case 'align': requireEnum(v, ['left', 'center', 'right'], '对齐方式'); break;
@@ -729,7 +791,10 @@ function validateAudioPatch(raw) {
       case 'muted': requireBool(v, '静音'); break;
       case 'volumeKeys':
         if (!Array.isArray(v)) fail('音量关键帧格式不正确');
-        v.forEach((k) => { if (!isRecord(k)) fail('音量关键帧格式不正确'); requireNumber(k.t, '关键帧时间', 0); requireNumber(k.v, '关键帧音量', 0, 2); });
+        patch.volumeKeys = v.map((k) => {
+          if (!isRecord(k)) fail('音量关键帧格式不正确');
+          return { t: round(requireNumber(k.t, '关键帧时间', 0), 3), v: requireNumber(k.v, '关键帧音量', 0, 2) };
+        }).sort((a, b) => a.t - b.t);
         break;
       case 'linkedClipId': break;
       default: fail(`不支持的音频参数「${key}」`);
@@ -887,9 +952,9 @@ const globalHandlers = {
 
 // ---------- v3 扩展操作（PLAN-v3 §3）：均不走 target 语义，按 id/ids 指定对象 ----------
 
-const CLIP_PROP_KEYS = ['reverse', 'mirror', 'crop', 'fit', 'canvas', 'opacity', 'blend', 'mask', 'muted'];
-const CLIP_PROP_LABELS = { reverse: '倒放', mirror: '镜像', crop: '裁切', fit: '画面适配', canvas: '背景画布', opacity: '不透明度', blend: '混合模式', mask: '蒙版', muted: '原声静音' };
-const OVERLAY_PATCH_KEYS = ['start', 'in', 'out', 'speed', 'track', 'transform', 'opacity', 'blend', 'mask', 'crop', 'volume', 'muted', 'locked', 'kind', 'keys'];
+const CLIP_PROP_KEYS = ['reverse', 'mirror', 'crop', 'fit', 'canvas', 'opacity', 'blend', 'mask', 'muted', 'denoise'];
+const CLIP_PROP_LABELS = { reverse: '倒放', mirror: '镜像', crop: '裁切', fit: '画面适配', canvas: '背景画布', opacity: '不透明度', blend: '混合模式', mask: '蒙版', muted: '原声静音', audioFadeIn: '声音淡入', audioFadeOut: '声音淡出', denoise: '降噪' };
+const OVERLAY_PATCH_KEYS = ['start', 'in', 'out', 'speed', 'track', 'transform', 'opacity', 'blend', 'mask', 'crop', 'mirror', 'fit', 'volume', 'muted', 'audioFadeIn', 'audioFadeOut', 'denoise', 'locked', 'kind', 'keys'];
 export const PASTE_KEYS = ['color', 'fx', 'transform', 'motion', 'transitionIn', 'speed', 'speedCurve', 'volume', 'caption', 'crop', 'mirror', 'opacity', 'blend', 'mask', 'keys', 'canvas', 'fit', 'reverse'];
 const PASTE_LABELS = { color: '调色', fx: '特效', transform: '变换', motion: '运镜', transitionIn: '转场', speed: '速度', speedCurve: '曲线变速', volume: '音量', caption: '字幕', crop: '裁切', mirror: '镜像', opacity: '不透明度', blend: '混合模式', mask: '蒙版', keys: '关键帧', canvas: '背景画布', fit: '画面适配', reverse: '倒放' };
 const TRACK_LABELS = { video: '主轨', text: '文字轨', audio: '音频轨' };
@@ -930,7 +995,7 @@ function validateVisualProps(raw, allowed) {
     if (!allowed.includes(key)) fail(`不支持的属性「${key}」`);
     if (v === null && key !== 'mask') continue;
     switch (key) {
-      case 'reverse': case 'muted': case 'locked': out[key] = requireBool(v, CLIP_PROP_LABELS[key] || key); break;
+      case 'reverse': case 'muted': case 'locked': case 'denoise': out[key] = requireBool(v, CLIP_PROP_LABELS[key] || key); break;
       case 'mirror':
         if (!isRecord(v)) fail('镜像参数格式不正确');
         out.mirror = { h: given(v.h) ? requireBool(v.h, '水平镜像') : false, v: given(v.v) ? requireBool(v.v, '垂直镜像') : false };
@@ -946,6 +1011,8 @@ function validateVisualProps(raw, allowed) {
       case 'blend': out.blend = requireEnum(v, BLEND_MODES, '混合模式'); break;
       case 'mask': out.mask = validateMask(v); break;
       case 'volume': out.volume = requireNumber(v, '音量', 0, 2); break;
+      case 'audioFadeIn': out.audioFadeIn = requireNumber(v, '声音淡入时长', 0, 30); break;
+      case 'audioFadeOut': out.audioFadeOut = requireNumber(v, '声音淡出时长', 0, 30); break;
       case 'speed': out.speed = requireNumber(v, '播放速度', LIMITS.minSpeed, LIMITS.maxSpeed); break;
       case 'start': out.start = requireNumber(v, '开始时间', 0, LIMITS.maxDuration); break;
       case 'in': out.in = requireNumber(v, '入点', 0); break;
@@ -964,7 +1031,26 @@ function validateVisualProps(raw, allowed) {
         if (given(v.flipH)) t.flipH = requireBool(v.flipH, '水平翻转');
         out.transform = t; break;
       }
-      case 'keys': if (!isRecord(v)) fail('关键帧格式不正确'); out.keys = v; break;
+      case 'keys': {
+        if (!isRecord(v)) fail('关键帧格式不正确');
+        const norm = {};
+        for (const [path, list] of Object.entries(v)) {
+          if (!isKeyPath(path)) fail(`「${path}」不能设置关键帧`);
+          if (!Array.isArray(list)) fail('关键帧格式不正确');
+          const [lo, hi] = keyRange(path);
+          const cleaned = list.map((k) => {
+            if (!isRecord(k)) fail('关键帧格式不正确');
+            return {
+              t: round(requireNumber(k.t, '关键帧时间', 0), 3),
+              v: requireNumber(k.v, KEY_PATH_LABELS[path] || '关键帧值', lo, hi),
+              ease: given(k.ease) ? requireEnum(k.ease, EASES, '缓动方式') : 'linear',
+            };
+          }).sort((a, b) => a.t - b.t);
+          if (cleaned.length) norm[path] = cleaned;
+        }
+        out.keys = norm;
+        break;
+      }
       default: fail(`不支持的属性「${key}」`);
     }
   }
@@ -1053,16 +1139,50 @@ function freezeImpl(draft, op, run) {
     keys: {}, motion: { preset: 'none', intensity: 0.5 }, transitionIn: { type: 'cut', duration: 0.5 }, mute: true, muted: true, audioFadeIn: 0, audioFadeOut: 0, label: '定格',
   };
   const video = [...draft.tracks.video];
+  let project;
   if (local < LIMITS.minClip - EPS) {
     video.splice(it.index, 0, still);
+    const base = withVideo(draft, video);
+    const afterLayout = layoutVideo(base);
+    const delta = afterLayout[it.index + 1] ? afterLayout[it.index + 1].start - it.start : duration;
+    project = shiftAfter(base, it.start - EPS, delta);
   } else if (it.duration - local < LIMITS.minClip - EPS) {
     video.splice(it.index + 1, 0, still);
+    const base = withVideo(draft, video);
+    const afterLayout = layoutVideo(base);
+    const delta = it.index + 1 < layout.length && afterLayout[it.index + 2]
+      ? afterLayout[it.index + 2].start - layout[it.index + 1].start
+      : duration;
+    project = shiftAfter(base, it.end - EPS, delta);
   } else {
     const left = { ...subClip(it.clip, 0, local), audioFadeOut: 0 };
     const right = { ...deepClone(subClip(it.clip, local, it.duration)), id: uid('clp'), audioFadeIn: 0, transitionIn: { ...it.clip.transitionIn, type: 'cut' } };
     video.splice(it.index, 1, left, still, right);
+    const base = withVideo(draft, video);
+    const afterLayout = layoutVideo(base);
+    const splitAt = it.start + local;
+    const rightStart = afterLayout[it.index + 2] ? afterLayout[it.index + 2].start : splitAt + duration;
+    const shiftDelta = rightStart - splitAt;
+    if (isLinked(draft)) {
+      // 非当前镜头的关联/独立项与画中画、标记随定格后移；当前镜头的关联文字和音频按定格点拆成左右两段，避开静帧
+      const shifted = shiftAfter(base, splitAt - EPS, shiftDelta);
+      const isOwnText = (t) => t && t.linkShotId === it.clip.id;
+      const isOwnAudio = (a) => a && (a.linkClipId === it.clip.id || a.linkedClipId === it.clip.id);
+      const preTexts = base.tracks.text || [];
+      const preAudios = base.tracks.audio || [];
+      const merged = {
+        ...shifted,
+        tracks: {
+          ...shifted.tracks,
+          text: shifted.tracks.text.map((t, idx) => (isOwnText(preTexts[idx]) ? preTexts[idx] : t)),
+          audio: shifted.tracks.audio.map((a, idx) => (isOwnAudio(preAudios[idx]) ? preAudios[idx] : a)),
+        },
+      };
+      project = splitLinkedItems(merged, it.clip.id, right.id, splitAt, rightStart);
+    } else {
+      project = shiftAfter(base, splitAt - EPS, shiftDelta);
+    }
   }
-  const project = shiftAfter(withVideo(draft, video), it.start + local - EPS, duration);
   return { project, note: null, at: round(it.start + local, 2), duration };
 }
 
@@ -1108,7 +1228,7 @@ const extHandlers = {
       project: mapClips(draft, indices, (clip) => {
         const next = { ...clip, ...patch };
         if ('muted' in patch) next.mute = patch.muted;
-        if (patch.mirror) next.transform = { ...clip.transform, flipH: patch.mirror.h };
+        if (patch.mirror) next.transform = { ...(clip.transform || {}), flipH: !!patch.mirror.h };
         return next;
       }),
     };
@@ -1214,7 +1334,7 @@ const extHandlers = {
     const asset = requireVisualAsset(draft, op.assetId);
     const track = given(op.track) ? op.track : 1;
     if (!Number.isInteger(track) || track < 1 || track > LIMITS.maxOverlayTrack) fail(`画中画轨只能是 1–${LIMITS.maxOverlayTrack}`);
-    if (trackFlags(draft, 'overlay', track).locked) fail(`画中画 ${track} 轨已锁定`);
+    if (trackFlags(draft, 'overlay', track).locked) fail(trackLockMessage('overlay', track));
     const start = given(op.start) ? requireNumber(op.start, '开始时间', 0, LIMITS.maxDuration) : run.ctx.playhead;
     const o = createOverlay(asset, { start: round(start, 4), track });
     if (typeof op.overlayId === 'string' && op.overlayId && !(draft.overlays || []).some((x) => x.id === op.overlayId)) o.id = op.overlayId;
@@ -1226,12 +1346,23 @@ const extHandlers = {
     const i = findOrFail(list, op.id, '画中画');
     const cur = list[i];
     const patch = validateVisualProps(op.patch, OVERLAY_PATCH_KEYS);
-    if (cur.locked && !(patch.locked === false && Object.keys(patch).length === 1)) fail('这个画中画已锁定');
-    if (trackFlags(draft, 'overlay', cur.track || 1).locked) fail(`画中画 ${cur.track || 1} 轨已锁定`);
+    const srcTrack = cur.track || 1;
+    if (trackFlags(draft, 'overlay', srcTrack).locked) fail(trackLockMessage('overlay', srcTrack));
+    if (given(patch.track) && patch.track !== srcTrack && trackFlags(draft, 'overlay', patch.track).locked) {
+      fail(trackLockMessage('overlay', patch.track));
+    }
+    if (cur.locked && !isOnlyUnlock(patch)) fail('这个画中画已锁定');
     const next = { ...cur, ...patch, transform: patch.transform ? { ...cur.transform, ...patch.transform } : cur.transform };
+    if (patch.transform && 'flipH' in patch.transform && !patch.mirror) {
+      next.mirror = { ...(cur.mirror || { h: false, v: false }), h: !!patch.transform.flipH };
+    }
+    if (patch.mirror) {
+      next.transform = { ...(next.transform || {}), flipH: !!patch.mirror.h };
+    }
     if (next.out <= next.in) fail('画中画出点必须晚于入点');
     const asset = draft.assets[next.assetId];
-    if (asset && asset.kind === 'video' && next.out > asset.duration + EPS) fail(`出点超过了素材长度（${round(asset.duration, 2)} 秒）`);
+    const max = maxSourceTime(asset);
+    if (next.out > max + EPS) fail(`出点超过了素材长度（${round(max, 2)} 秒）`);
     if (overlayDuration(next) < LIMITS.minClip - EPS) fail(`画中画时长不能少于 ${LIMITS.minClip} 秒`);
     const l = [...list];
     l[i] = next;
@@ -1241,7 +1372,9 @@ const extHandlers = {
   removeOverlay(draft, op) {
     const list = draft.overlays || [];
     const i = findOrFail(list, op.id, '画中画');
-    if (list[i].locked) fail('这个画中画已锁定');
+    const cur = list[i];
+    if (trackFlags(draft, 'overlay', cur.track || 1).locked) fail(trackLockMessage('overlay', cur.track || 1));
+    if (cur.locked) fail('这个画中画已锁定');
     return { project: { ...draft, overlays: list.filter((_, k) => k !== i) } };
   },
 
@@ -1266,7 +1399,7 @@ const extHandlers = {
     const label = given(op.label) ? requireString(op.label, '标记名称', 60) : '';
     const color = given(op.color) ? requireHexColor(op.color, '标记颜色') : MARKER_COLORS[0];
     const m = createMarker({ t: round(t, 3), label, color });
-    if (typeof op.markerId === 'string' && op.markerId) m.id = op.markerId;
+    if (typeof op.markerId === 'string' && op.markerId && !(draft.markers || []).some((x) => x.id === op.markerId)) m.id = op.markerId;
     return { project: { ...draft, markers: [...(draft.markers || []), m].sort((a, b) => a.t - b.t) } };
   },
 
@@ -1347,7 +1480,17 @@ const extHandlers = {
       if (!asset || asset.kind !== 'video' || asset.hasAudio === false) fail(`第${i + 1}镜没有原声可分离`);
       if (clip.still || clip.reverse || clip.speedCurve || Math.abs((clip.speed || 1) - 1) > 1e-6) fail(`第${i + 1}镜有变速/倒放/定格，暂不支持分离音频`);
       const it = layout[i];
-      added.push(createAudioClip(asset, { start: round(it.start, 4), in: clip.in, out: clip.out, volume: clip.volume ?? 1, fadeIn: clip.audioFadeIn || 0, fadeOut: clip.audioFadeOut || 0, role: 'voice', linkedClipId: clip.id }));
+      const volKeys = clip.keys && Array.isArray(clip.keys.volume)
+        ? clip.keys.volume
+          .filter((k) => k && Number.isFinite(Number(k.t)) && Number.isFinite(Number(k.v)))
+          .map((k) => ({ t: round(Math.max(0, Number(k.t)), 3), v: Number(k.v) }))
+          .sort((a, b) => a.t - b.t)
+        : [];
+      added.push(createAudioClip(asset, {
+        start: round(it.start, 4), in: clip.in, out: clip.out, volume: clip.volume ?? 1,
+        fadeIn: clip.audioFadeIn || 0, fadeOut: clip.audioFadeOut || 0, role: 'voice', linkedClipId: clip.id,
+        ...(volKeys.length ? { volumeKeys: volKeys } : null),
+      }));
       return { ...clip, mute: true, muted: true };
     });
     return { project: { ...project, tracks: { ...project.tracks, audio: [...project.tracks.audio, ...added] } }, note: `已生成 ${added.length} 段音频` };
@@ -1385,11 +1528,20 @@ const extHandlers = {
     return {
       project: mapClips(draft, indices, (clip, i) => {
         const next = { ...clip };
+        const pastingCurve = keys.includes('speedCurve') && !!src.speedCurve;
         for (const k of keys) {
           if (k === 'transitionIn' && i === 0 && src.transitionIn && !FIRST_CLIP_TRANSITIONS.has(src.transitionIn.type)) continue;
+          if (k === 'speedCurve' && src.speedCurve && clip.still) fail(`第${i + 1}镜是定格画面，不能粘贴变速曲线`);
           next[k] = deepClone(src[k] === undefined ? null : src[k]);
+          if (k === 'speed' && !pastingCurve) next.speedCurve = null;
+          if (k === 'transform') next.mirror = { ...(next.mirror || { h: false, v: false }), h: !!(next.transform && next.transform.flipH) };
+          if (k === 'mirror') next.transform = { ...(next.transform || {}), flipH: !!(next.mirror && next.mirror.h) };
         }
-        if (clipDuration(next) < LIMITS.minClip - EPS) fail(`第${i + 1}镜粘贴速度后不足 ${LIMITS.minClip} 秒`);
+        const dur = clipDuration(next);
+        if (dur < LIMITS.minClip - EPS) fail(`第${i + 1}镜粘贴速度后不足 ${LIMITS.minClip} 秒`);
+        if (keys.includes('keys') && next.keys && Object.keys(next.keys).length) {
+          next.keys = shiftKeys(next.keys, 0, dur);
+        }
         return next;
       }),
     };
@@ -1422,6 +1574,7 @@ function describeClipProps(patch) {
     switch (k) {
       case 'reverse': parts.push(v ? '倒放' : '取消倒放'); break;
       case 'muted': parts.push(v ? '原声静音' : '恢复原声'); break;
+      case 'denoise': parts.push(v ? '开启降噪' : '关闭降噪'); break;
       case 'mirror': parts.push(v && (v.h || v.v) ? `镜像（${[v.h && '水平', v.v && '垂直'].filter(Boolean).join('+')}）` : '取消镜像'); break;
       case 'fit': parts.push(`画面${FIT_LABELS[v] || v}`); break;
       case 'blend': parts.push(`混合模式 ${BLEND_LABELS[v] || v}`); break;

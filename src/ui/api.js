@@ -14,7 +14,8 @@ function makeError(d) {
 
 function stash(type, d) {
   early.set(d.jobId, { type, d });
-  setTimeout(() => early.delete(d.jobId), 60000);
+  const t = setTimeout(() => early.delete(d.jobId), 60000);
+  if (t && typeof t.unref === 'function') t.unref();
 }
 
 if (ff) {
@@ -154,7 +155,7 @@ api.asr = {
   installModel: (onProgress, onStart) => api.job('asr:installModel', {}, onProgress, onStart),
 };
 
-/** {projectId, t} -> png 路径 */
+/** { projectId, t, data, outPath? } -> png 路径 */
 api.exportFrame = (payload) => api.call('export:frame', payload);
 
 export const videogen = api.videogen;

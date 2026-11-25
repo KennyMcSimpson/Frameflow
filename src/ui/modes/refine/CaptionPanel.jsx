@@ -21,20 +21,38 @@ export function localSrt(texts) {
 
 /** 选一个有声音的素材做识别：优先音频轨的人声，其次第一个带声音的视频片段 */
 function pickSource(project) {
-  const voice = (project.tracks.audio || []).find((a) => a.role === 'voice');
-  if (voice) return { assetId: voice.assetId, offset: voice.start - voice.in, name: project.assets[voice.assetId]?.name };
+  const pathOf = (a) => (a && (a.originalPath || a.path)) || '';
+  const voice = (project.tracks.audio || []).find((a) => a.role === 'voice' && pathOf(project.assets[a.assetId]));
+  if (voice) {
+    const a = project.assets[voice.assetId];
+    return { assetId: voice.assetId, audioPath: pathOf(a), offset: voice.start - voice.in, name: a?.name };
+  }
   for (const it of getLayout(project)) {
     const a = project.assets[it.clip.assetId];
-    if (a && a.kind === 'video' && a.hasAudio !== false && a.path) return { assetId: a.id, offset: it.start - it.clip.in, name: a.name };
+    if (a && a.kind === 'video' && a.hasAudio !== false && pathOf(a)) {
+      return { assetId: a.id, audioPath: pathOf(a), offset: it.start - it.clip.in, name: a.name };
+    }
   }
-  const any = (project.tracks.audio || [])[0];
-  if (any) return { assetId: any.assetId, offset: any.start - any.in, name: project.assets[any.assetId]?.name };
+  const any = (project.tracks.audio || []).find((a) => pathOf(project.assets[a.assetId]));
+  if (any) {
+    const a = project.assets[any.assetId];
+    return { assetId: any.assetId, audioPath: pathOf(a), offset: any.start - any.in, name: a?.name };
+  }
   return null;
 }
 
-export default function CaptionPanel({ focusId }) {
+export default function CaptionPanel({ focusId, active = true }) {
   const project = useStore((s) => s.project);
-  const playhead = useStore((s) => s.playhead);
+  const activeCapId = useStore((s) => {
+    if (!active || !s.project) return null;
+    const t = s.playhead;
+    const list = s.project.tracks.text || [];
+    for (let i = 0; i < list.length; i += 1) {
+      const c = list[i];
+      if (isCaption(c) && t >= c.start && t < c.start + c.duration) return c.id;
+    }
+    return null;
+  });
   const [busy, setBusy] = useState(null); // {stage, progress, message}
   const [needModel, setNeedModel] = useState(null);
   const caps = useMemo(() => (project.tracks.text || []).filter(isCaption).sort((a, b) => a.start - b.start), [project.tracks.text]);
@@ -46,12 +64,22 @@ export default function CaptionPanel({ focusId }) {
     const src = pickSource(st().project);
     if (!src) { st().toast('时间线上没有带声音的素材，无法识别字幕', 'warn'); return; }
     if (!api.available) { st().toast('识别字幕需要在桌面版中运行', 'warn'); return; }
+    const projectId = st().project.id;
     try {
       let s = null;
       try { s = asr && asr.status ? await asr.status() : await api.call('asr:status'); } catch { s = { ready: false, downloadable: false, reason: '当前版本未包含语音识别组件' }; }
       if (s && !s.ready) { setNeedModel(s); return; }
       setBusy({ progress: 0, message: '正在准备音频…' });
-      const res = await api.job('asr:transcribe', { projectId: st().project.id, assetId: src.assetId, lang: 'zh' }, (p) => setBusy({ progress: p.progress || 0, message: p.message || '识别中…' }));
+      if (st().saveState === 'dirty' && typeof st().saveNow === 'function') {
+        await st().saveNow();
+      }
+      const curProj = st().project;
+      if (!curProj || curProj.id !== projectId) return;
+      const asset = curProj.assets && curProj.assets[src.assetId];
+      const audioPath = (asset && (asset.originalPath || asset.path)) || src.audioPath || undefined;
+      const payload = { projectId: curProj.id, assetId: src.assetId, lang: 'zh', ...(audioPath ? { audioPath } : {}) };
+      const res = await api.job('asr:transcribe', payload, (p) => setBusy({ progress: p.progress || 0, message: p.message || '识别中…' }));
+      if (!st().project || st().project.id !== projectId) return;
       const segs = ((res && res.segments) || []).map((g) => ({ ...g, start: g.start + src.offset, end: g.end + src.offset })).filter((g) => g.end > 0 && String(g.text || '').trim());
       if (!segs.length) { st().toast('没有识别到说话内容', 'warn'); return; }
       const r = runOp({ type: 'addCaptions', segments: segs, preset: 'subtitle' }, `识别字幕 ${segs.length} 句`, {
@@ -93,7 +121,8 @@ export default function CaptionPanel({ focusId }) {
   const split = (c) => {
     const s = String(c.text || '');
     const at = Math.max(1, Math.round(s.length / 2));
-    const local = playhead > c.start + 0.2 && playhead < c.start + c.duration - 0.2 ? playhead - c.start : c.duration / 2;
+    const ph = st().playhead;
+    const local = ph > c.start + 0.2 && ph < c.start + c.duration - 0.2 ? ph - c.start : c.duration / 2;
     const id2 = `${c.id}_b${Date.now().toString(36).slice(-4)}`;
     st().commit((p) => {
       const out = [];
@@ -144,7 +173,7 @@ export default function CaptionPanel({ focusId }) {
           <Icon name="download" size={20} />
           <div className="grow">
             <b>需要安装语音识别模型</b>
-            <p>首次使用需下载约 75MB 的本地识别模型，识别全程离线进行，不会上传你的音频。</p>
+            <p>首次使用需下载本地识别模型（small 约 466 MB），识别全程离线进行，不会上传你的音频。</p>
             {needModel.reason && <p className="muted">{needModel.reason}</p>}
             <div className="insp-btnrow">
               <Button size="sm" variant="secondary" icon="download" disabled={needModel.downloadable === false} onClick={installModel}>下载并安装</Button>
@@ -164,7 +193,7 @@ export default function CaptionPanel({ focusId }) {
           actions={<Button size="sm" variant="ghost" onClick={clearAll}>清空</Button>}>
           <ol className="cap-list">
             {caps.map((c, i) => {
-              const on = playhead >= c.start && playhead < c.start + c.duration;
+              const on = activeCapId === c.id;
               return (
                 <li key={c.id} className={'cap-item' + (on ? ' on' : '')}>
                   <button type="button" className="cap-time mono" title="跳到这句" onClick={() => { st().setPlayhead(c.start); st().selectText && st().selectText(c.id); }}>

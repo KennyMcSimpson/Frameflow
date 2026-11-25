@@ -127,6 +127,11 @@ async function runSample(prefix) {
   const a = frame(SAMPLE_SHOTS[1].spec, 0.37).toDataURL();
   const b = frame(SAMPLE_SHOTS[1].spec, 0.37).toDataURL();
   PH.log('info', `deterministic: ${a === b}`);
+  if (a !== b) {
+    PH.log('error', 'previz 渲染不具备确定性（sample 模式下同参数两帧像素不一致）');
+    PH.done(false);
+    return;
+  }
   // 1080p 单帧耗时（目标 <50ms）
   const c = canvas(1920, 1080);
   const g = c.getContext('2d');
@@ -182,6 +187,11 @@ async function run() {
   const a = frame(specFor('cafe'), 0.37).toDataURL();
   const b = frame(specFor('cafe'), 0.37).toDataURL();
   PH.log('info', `deterministic: ${a === b}`);
+  if (a !== b) {
+    PH.log('error', 'previz 渲染不具备确定性（full 模式下同参数两帧像素不一致）');
+    PH.done(false);
+    return;
+  }
 
   // 性能：每个场景 20 帧（不同 progress）
   const c = canvas(W, H);

@@ -58,6 +58,10 @@ export function createExportProgress({ total, duration = 0, audioOnly = false, n
       etaSec = Math.max(1, Math.round(remaining / st.rate));
     }
     let p = (d / T) * 0.98;
+    if (!audioOnly && st.encoded === 0 && st.sent > 0 && !st.ending) {
+      // 如 GIF 两阶段 palettegen 在收尾前编码帧始终为 0：按已送帧平滑推进到 75%，避免进度条卡在 0%
+      p = (st.sent / T) * 0.75;
+    }
     if (finished) p = 0.99;
     p = Math.max(st.best, Math.min(0.99, p));
     st.best = p;

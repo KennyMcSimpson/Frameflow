@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import useStore from '../store.js';
 import api from '../api.js';
 import { Modal, Button, Tabs, Icon } from '../components/ui.jsx';
+import { ShortcutsPanel } from './ShortcutsDialog.jsx';
 
 const TABS = [
   { value: 'start', label: '快速上手', icon: 'bolt' },
@@ -44,45 +45,6 @@ const MODE_GUIDE = [
   },
 ];
 
-const KEY_GROUPS = [
-  {
-    title: '全局',
-    keys: [
-      [['Ctrl', 'S'], '立即保存'],
-      [['Ctrl', 'Z'], '撤销'],
-      [['Ctrl', 'Shift', 'Z'], '重做（也可用 Ctrl+Y）'],
-      [['Ctrl', 'E'], '导出视频'],
-      [['Ctrl', '1 / 2 / 3'], '切换到创作 / 精修 / 拆片库'],
-      [['Ctrl', ','], '打开设置'],
-      [['F1'], '打开帮助'],
-    ],
-  },
-  {
-    title: '精修模式',
-    keys: [
-      [['Space'], '播放 / 暂停'],
-      [['S'], '在播放头分割镜头'],
-      [['Q', 'W'], '修剪片段头 / 尾到播放头'],
-      [['Delete'], '删除所选'],
-      [['Shift', 'Delete'], '波纹删除（后面的片段自动补上）'],
-      [['M'], '添加标记'],
-      [['N'], '开关吸附'],
-      [['Ctrl', '+ / -'], '放大 / 缩小时间线'],
-      [['←', '→'], '逐帧后退 / 前进'],
-      [['J', 'K', 'L'], '穿梭播放（J 倒放 / K 停止 / L 连按 1×→2×→4×）'],
-      [['Home', 'End'], '跳到开头 / 结尾'],
-    ],
-  },
-];
-
-function Keys({ list }) {
-  return (
-    <span className="hp-keys">
-      {list.map((k, i) => <kbd key={i}>{k}</kbd>)}
-    </span>
-  );
-}
-
 function About() {
   const appInfo = useStore((s) => s.appInfo);
   const toast = useStore((s) => s.toast);
@@ -115,12 +77,16 @@ function About() {
       <div className="divider" />
       <h3 className="hp-sub">开源许可</h3>
       <ul className="hp-licenses hint">
-        <li><b>FFmpeg</b>：以 LGPL v2.1+ 授权，通过 ffmpeg-static 以独立可执行文件形式随附、动态调用，未修改其源码；源码可在 ffmpeg.org 获取，你可以自行替换为其他版本。</li>
+        <li><b>FFmpeg</b>：随附 LGPL v3 共享库构建（位于安装目录 <code className="mono">resources/ffmpeg</code>），以独立程序和动态库形式动态调用，未修改其源代码；许可全文与源代码获取方式见 <code className="mono">resources/licenses/ffmpeg</code>，你也可以自行替换为兼容版本。</li>
         <li><b>Electron / Chromium</b>：MIT 及 BSD 等许可。</li>
         <li><b>React、zustand、Vite</b>：MIT 许可。</li>
         <li><b>图标</b>：参照 Lucide（ISC 许可）风格绘制。</li>
-        <li><b>实拍素材</b>：来自 Pexels / Pixabay 等平台的素材遵循其各自许可，作者署名记录在素材信息中。</li>
+        <li><b>实拍素材</b>：来自 Wikimedia Commons / Openverse / Internet Archive / NASA / Pexels / Pixabay 等平台的素材遵循其各自许可，作者署名记录在素材信息中。</li>
       </ul>
+      <div className="row wrap" style={{ marginTop: 10 }}>
+        <Button size="sm" variant="ghost" icon="external" onClick={() => openPath(appInfo && appInfo.licensesPath)} disabled={!appInfo || !appInfo.licensesPath}>查看第三方开源许可</Button>
+        <Button size="sm" variant="ghost" icon="external" onClick={() => openPath(appInfo && appInfo.privacyPath)} disabled={!appInfo || !appInfo.privacyPath}>查看隐私说明</Button>
+      </div>
       <div className="divider" />
       <p className="hint">你的项目和素材都保存在本机。导入视频时不会复制原文件，请不要移动或删除它们。从网络下载的视频版权归原作者所有，仅供学习和参考，公开发布前请确认授权。</p>
     </div>
@@ -160,20 +126,8 @@ export default function HelpDialog({ onClose }) {
       )}
 
       {tab === 'keys' && (
-        <div className="hp-pane hp-keygrid">
-          {KEY_GROUPS.map((g) => (
-            <section key={g.title}>
-              <h3>{g.title}</h3>
-              <table className="hp-table">
-                <tbody>
-                  {g.keys.map(([keys, desc]) => (
-                    <tr key={desc}><td><Keys list={keys} /></td><td>{desc}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          ))}
-          <p className="hint hp-span">光标在输入框里时，这些快捷键不会触发，避免打字时误操作（Ctrl+S 除外）。</p>
+        <div className="hp-pane">
+          <ShortcutsPanel />
         </div>
       )}
 

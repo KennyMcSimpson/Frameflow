@@ -19,6 +19,7 @@ const TextBlock = memo(function TextBlock({ text, start, duration, pps, top, hei
     <div
       className={cls}
       style={{ left, width, top, height }}
+      data-text-id={text.id}
       title={`${text.group === 'caption' ? '字幕' : (PRESET_LABELS[text.preset] || '文字')}：${content}\n${start.toFixed(2)}s 起 · ${duration.toFixed(2)} 秒${text.locked ? '\n已锁定' : '\n拖动改位置，拖边缘改时长，双击跳到这里'}`}
       onPointerDown={(e) => onDown(e, text.id, 'body')}
       onDoubleClick={() => { pause(); seek(start); }}

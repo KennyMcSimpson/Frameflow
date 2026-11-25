@@ -82,9 +82,9 @@ export const AI_OP_SCHEMA = obj({
   lookStrength: nnum('setLook 强度 0..1'),
   preset: nenm(MOTIONS, 'setMotion 的运镜预设'),
   intensity: nnum('setMotion 强度 0..1'),
-  scale: nnum('setTransform 缩放 1..3'),
-  offsetX: nnum('setTransform 水平偏移 -1..1'),
-  offsetY: nnum('setTransform 垂直偏移 -1..1'),
+  scale: nnum('setTransform 缩放 0.05..5'),
+  offsetX: nnum('setTransform 水平偏移 -2..2'),
+  offsetY: nnum('setTransform 垂直偏移 -2..2'),
   rotation: nnum('setTransform 旋转角度'),
   fxBlur: nnum('setFx 模糊 0..1'),
   fxGrain: nnum('setFx 胶片颗粒 0..1'),
@@ -375,9 +375,9 @@ export function normalizeAiOp(raw) {
     case 'setTransform': {
       const src = raw.transform && typeof raw.transform === 'object' ? raw.transform : {};
       const transform = compact({
-        scale: pickNum(raw.scale ?? src.scale, 1, 3),
-        x: pickNum(raw.offsetX ?? src.x, -1, 1),
-        y: pickNum(raw.offsetY ?? src.y, -1, 1),
+        scale: pickNum(raw.scale ?? src.scale, 0.05, 5),
+        x: pickNum(raw.offsetX ?? src.x, -2, 2),
+        y: pickNum(raw.offsetY ?? src.y, -2, 2),
         rotation: pickNum(raw.rotation ?? src.rotation, -180, 180),
       });
       if (pickBool(src.flipH) != null) transform.flipH = src.flipH;
@@ -666,12 +666,30 @@ export function flattenOp(op) {
   if (op.caption) { f.captionText = op.caption.text ?? null; f.captionStyle = op.caption.style ?? null; f.captionPosition = op.caption.position ?? null; }
   if (op.speed != null) f.speed = op.speed;
   if (op.type === 'setVolume') { f.volume = op.volume ?? null; f.mute = op.mute ?? null; f.fadeIn = op.audioFadeIn ?? null; f.fadeOut = op.audioFadeOut ?? null; }
-  if (op.type === 'trim') { f.trimIn = op.in ?? null; f.trimOut = op.out ?? null; }
+  if (op.type === 'trim' || op.type === 'insertAsset') { f.trimIn = op.in ?? null; f.trimOut = op.out ?? null; }
   if (op.duration != null && op.type !== 'freezeFrame' && op.type !== 'setTransitionAll') f.duration = op.duration;
   if (op.at != null) f.at = op.at;
   if (op.toIndex != null) f.toIndex = op.toIndex;
   if (op.assetId) f.assetId = op.assetId;
   if (op.atIndex != null) f.atIndex = op.atIndex;
+  if (op.textId) f.textId = op.textId;
+  if (op.text && typeof op.text === 'object') {
+    f.textContent = op.text.text ?? null;
+    f.textPreset = op.text.preset ?? null;
+    f.textStart = op.text.start ?? null;
+    f.textDuration = op.text.duration ?? null;
+    f.textY = op.text.y ?? null;
+    f.textAnimation = op.text.animation ?? null;
+  }
+  if (op.audioId) f.audioId = op.audioId;
+  if (op.audio && typeof op.audio === 'object') {
+    if (op.audio.assetId) f.assetId = op.audio.assetId;
+    f.audioStart = op.audio.start ?? null;
+    f.audioRole = op.audio.role ?? null;
+    f.volume = op.audio.volume ?? null;
+    f.fadeIn = op.audio.fadeIn ?? null;
+    f.fadeOut = op.audio.fadeOut ?? null;
+  }
   if (op.strength != null) f.strength = op.strength;
   if (op.pacing) f.pacing = op.pacing;
   if (op.settings && op.settings.aspect) f.aspect = op.settings.aspect;

@@ -53,7 +53,7 @@ if (isE2E) {
 }
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'ffmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true, bypassCSP: true } },
+  { scheme: 'ffmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 // 单实例：第二个进程只把命令行（例如双击的 .ffproj）转交给第一个，然后立刻退出——
@@ -164,20 +164,26 @@ function clearStartLock() {
   try { fs.unlinkSync(lockFile()); } catch {}
 }
 
-/** 从命令行参数里找工程文件：.ffproj（文件关联）或导出的 .json；只认存在的绝对路径 */
+/** 从命令行参数里找工程文件：.ffproj（文件关联）或导出的 .json；提供 workingDirectory 时支持相对路径 */
 const PROJECT_FILE_RE = /\.(ffproj|json)$/i;
-function projectFileFromArgv(argv) {
+function projectFileFromArgv(argv, workingDirectory) {
   const list = Array.isArray(argv) ? argv : [];
+  const cwd = typeof workingDirectory === 'string' && workingDirectory && path.isAbsolute(workingDirectory)
+    ? workingDirectory
+    : null;
   for (const a of list.slice(1)) {
-    if (typeof a !== 'string' || a.startsWith('-') || !PROJECT_FILE_RE.test(a) || !path.isAbsolute(a)) continue;
-    try { if (fs.statSync(a).isFile()) return path.resolve(a); } catch {}
+    if (typeof a !== 'string' || !a || a.startsWith('-') || !PROJECT_FILE_RE.test(a)) continue;
+    let candidate = null;
+    if (path.isAbsolute(a)) candidate = path.resolve(a);
+    else if (cwd) candidate = path.resolve(cwd, a);
+    else continue;
+    try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
   }
   return null;
 }
 let pendingOpenFile = null;
 function openProjectFile(file) {
   if (!file) return;
-  registerMediaPath(file);
   log.info('[main] 打开工程文件', file);
   // 页面还在加载时先记下，did-finish-load 时再发；preload 也会替还没订阅的界面暂存（契约 C13）
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) send('app:openFile', { path: file });
@@ -187,32 +193,228 @@ function openProjectFile(file) {
 let mainWindow = null;
 let settingsRef = null;
 let jobsRef = null;
+let pathsRef = null;
 const allowedMedia = new Set();
 const mediaRoots = new Set([sampleMediaDir()]);
 
+const UNC_RE = /^[\\/]{2}/;
+
+function isUncPath(p) {
+  return typeof p === 'string' && (UNC_RE.test(p) || UNC_RE.test(p.trim()));
+}
+
 const MIME = {
-  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
-  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
-  '.vtt': 'text/vtt', '.json': 'application/json',
+  // 视频
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo', '.ts': 'video/mp2t', '.mts': 'video/mp2t',
+  '.m2ts': 'video/mp2t', '.wmv': 'video/x-ms-wmv', '.flv': 'video/x-flv', '.3gp': 'video/3gpp',
+  // 音频
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac', '.wma': 'audio/x-ms-wma',
+  '.aiff': 'audio/aiff', '.aif': 'audio/aiff',
+  // 图片（不含 svg，避免脚本执行）
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.bmp': 'image/bmp', '.avif': 'image/avif',
+  // 字幕
+  '.vtt': 'text/vtt', '.srt': 'text/plain; charset=utf-8', '.ass': 'text/plain; charset=utf-8',
+  '.ssa': 'text/plain; charset=utf-8', '.lrc': 'text/plain; charset=utf-8',
 };
 
-function norm(p) { return path.resolve(p).toLowerCase(); }
+function norm(p) {
+  const abs = path.resolve(p);
+  return process.platform === 'win32' ? abs.toLowerCase() : abs;
+}
+
+function isInsideDir(dir, target) {
+  if (!dir || !target) return false;
+  const d = dir.endsWith(path.sep) ? dir : dir + path.sep;
+  return target === dir || target.startsWith(d);
+}
+
+function isAllowedMediaExt(file) {
+  if (typeof file !== 'string' || !file) return false;
+  const ext = path.extname(file).toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MIME, ext);
+}
+
+/** 解析真实路径：拒绝 UNC、符号链接取目标路径，悬空符号链接与非 ENOENT 错误返回 null，不存在的叶路径逐级解析父目录符号链接 */
+function resolveRealPath(p) {
+  if (typeof p !== 'string' || !p || isUncPath(p)) return null;
+  const abs = path.resolve(p);
+  if (isUncPath(abs)) return null;
+  try {
+    const real = fs.realpathSync(abs);
+    return isUncPath(real) ? null : real;
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return null;
+  }
+  try {
+    if (fs.lstatSync(abs).isSymbolicLink()) return null;
+  } catch {}
+  const parts = [];
+  let cur = abs;
+  while (true) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return isUncPath(abs) ? null : abs;
+    parts.unshift(path.basename(cur));
+    cur = parent;
+    if (isUncPath(cur)) return null;
+    try {
+      const realParent = fs.realpathSync(cur);
+      if (isUncPath(realParent)) return null;
+      const joined = path.join(realParent, ...parts);
+      return isUncPath(joined) ? null : joined;
+    } catch (e) {
+      if (!e || e.code !== 'ENOENT') return null;
+    }
+  }
+}
+
+/**
+ * 统一拦截 userData 与日志目录下的媒体访问（单一真源）：
+ * - 默认禁止整个 userData 目录下的一切文件（避免 Cookies.srt、Local State、Cache 等通过 ffmedia:// 泄露）；
+ * - 仅当 dataRoot 显式位于 userData 的子目录（且不等于 userData 本身）时，放行 dataRoot 内的非敏感媒体文件；
+ * - 日志目录（log.logDir() 及 userData/logs）与敏感配置文件一律禁止。
+ */
+function isBlockedUserDataMedia(file, paths = pathsRef) {
+  if (typeof file !== 'string' || !file || isUncPath(file)) return true;
+  const abs = path.resolve(file);
+  if (isUncPath(abs)) return true;
+  const real = resolveRealPath(abs);
+  if (!real || isUncPath(real)) return true;
+
+  const candidates = new Set([norm(abs), norm(real)]);
+
+  const blockedDirs = [];
+  try {
+    const ld = log.logDir && log.logDir();
+    if (ld && !isUncPath(ld)) {
+      blockedDirs.push(norm(ld));
+      const rld = resolveRealPath(ld);
+      if (rld) blockedDirs.push(norm(rld));
+    }
+  } catch {}
+
+  let ud = '';
+  try { ud = (paths && paths.userData) || app.getPath('userData') || ''; } catch {}
+  if (ud && !isUncPath(ud)) {
+    const logsSub = path.join(ud, 'logs');
+    blockedDirs.push(norm(logsSub));
+    const rLogs = resolveRealPath(logsSub);
+    if (rLogs) blockedDirs.push(norm(rLogs));
+  }
+
+  for (const d of blockedDirs) {
+    for (const c of candidates) {
+      if (isInsideDir(d, c)) return true;
+    }
+  }
+
+  if (!ud || isUncPath(ud)) return false;
+
+  const udDirs = new Set([norm(ud)]);
+  const rud = resolveRealPath(ud);
+  if (rud) udDirs.add(norm(rud));
+
+  let dr = '';
+  try {
+    if (paths) {
+      if (paths.dataRootRaw !== undefined) dr = paths.dataRootRaw || '';
+      else if (typeof paths.tryDataRoot === 'function') dr = paths.tryDataRoot() || '';
+      else if (typeof paths.dataRoot === 'string') dr = paths.dataRoot;
+    }
+  } catch {}
+  const drDirs = new Set();
+  if (dr && !isUncPath(dr)) {
+    drDirs.add(norm(dr));
+    const rdr = resolveRealPath(dr);
+    if (rdr) drDirs.add(norm(rdr));
+  }
+
+  for (const udDir of udDirs) {
+    for (const c of candidates) {
+      if (!isInsideDir(udDir, c)) continue;
+      let insideDataRoot = false;
+      for (const drDir of drDirs) {
+        if (drDir !== udDir && isInsideDir(drDir, c)) { insideDataRoot = true; break; }
+      }
+      if (!insideDataRoot) return true;
+      const rel = c.slice(udDir.length).replace(/^[\\/]+/, '');
+      const base = path.basename(c);
+      if (
+        /^(secrets|settings)(\.|$)/i.test(base)
+        || base === 'running.lock'
+        || base === 'encoders.json'
+        || /\.log$/i.test(base)
+        || /^logs([\\/]|$)/i.test(rel)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 function send(event, data) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try { mainWindow.webContents.send(event, data); } catch (e) { log.warn('[main] 发送到界面失败', event, e && e.message); }
 }
 
-function registerMediaPath(p) {
-  if (p) allowedMedia.add(norm(p));
+function isSafeMediaPath(file, paths = pathsRef) {
+  if (typeof file !== 'string' || !file) return false;
+  if (isUncPath(file)) return false;
+  if (!path.isAbsolute(file)) return false;
+  const abs = path.resolve(file);
+  if (isUncPath(abs)) return false;
+  if (!isAllowedMediaExt(file) || !isAllowedMediaExt(abs)) return false;
+  const real = resolveRealPath(abs);
+  if (!real || isUncPath(real) || !isAllowedMediaExt(real)) return false;
+  if (isBlockedUserDataMedia(abs, paths) || isBlockedUserDataMedia(real, paths)) return false;
+  try {
+    if (!fs.statSync(real).isFile()) return false;
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return false;
+    try { if (fs.lstatSync(abs).isSymbolicLink()) return false; } catch {}
+  }
+  return true;
 }
 
-function isAllowed(file, paths) {
-  const n = norm(file);
+function registerMediaPath(p, paths = pathsRef) {
+  if (!isSafeMediaPath(p, paths)) return false;
+  const real = resolveRealPath(p);
+  if (!real || isUncPath(real)) return false;
+  allowedMedia.add(norm(real));
+  return true;
+}
+
+function isAllowed(file, paths = pathsRef) {
+  if (!isSafeMediaPath(file, paths)) return false;
+  const real = resolveRealPath(file);
+  if (!real || isUncPath(real)) return false;
+  const n = norm(real);
   if (allowedMedia.has(n)) return true;
-  const roots = [paths.dataRoot, paths.tmp, ...mediaRoots].map(norm);
-  return roots.some((r) => n.startsWith(r + path.sep) || n === r);
+  const rawRoots = [];
+  try {
+    const dr = paths && (paths.dataRootRaw !== undefined
+      ? paths.dataRootRaw
+      : (typeof paths.tryDataRoot === 'function' ? paths.tryDataRoot() : paths.dataRoot));
+    if (dr) rawRoots.push(dr);
+  } catch {}
+  try {
+    const tr = paths && (paths.tmpRaw !== undefined ? paths.tmpRaw : paths.tmp);
+    if (tr) rawRoots.push(tr);
+  } catch {}
+  for (const r of mediaRoots) if (r) rawRoots.push(r);
+  const roots = [];
+  for (const r of rawRoots) {
+    try {
+      const rr = resolveRealPath(r);
+      if (rr) roots.push(norm(rr));
+    } catch {
+      try { if (!isUncPath(r)) roots.push(norm(r)); } catch {}
+    }
+  }
+  return roots.some((r) => isInsideDir(r, n));
 }
 
 function setupProtocol(paths) {
@@ -221,33 +423,49 @@ function setupProtocol(paths) {
       const url = new URL(request.url);
       const file = decodeURIComponent(url.pathname.replace(/^\//, ''));
       if (!file || !isAllowed(file, paths)) return new Response('forbidden', { status: 403 });
-      const stat = await fs.promises.stat(file);
+      const realFile = resolveRealPath(file);
+      if (!realFile || isUncPath(realFile) || !isAllowedMediaExt(realFile) || isBlockedUserDataMedia(realFile, paths)) {
+        return new Response('forbidden', { status: 403 });
+      }
+      const stat = await fs.promises.stat(realFile);
+      if (!stat.isFile()) return new Response('forbidden', { status: 403 });
       const size = stat.size;
-      const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      const type = MIME[path.extname(realFile).toLowerCase()];
+      if (!type) return new Response('forbidden', { status: 403 });
       const headers = {
         'Content-Type': type,
         'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache',
       };
       const range = request.headers.get('range');
       if (range) {
-        const m = /bytes=(\d*)-(\d*)/.exec(range);
-        let start = m && m[1] ? parseInt(m[1], 10) : 0;
-        let end = m && m[2] ? parseInt(m[2], 10) : size - 1;
-        if (!m || !m[1]) { // 后缀范围 bytes=-N
-          if (m && m[2]) { start = Math.max(0, size - parseInt(m[2], 10)); end = size - 1; }
+        const m = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
+        if (m && (m[1] || m[2])) {
+          let start;
+          let end;
+          if (!m[1]) { // 后缀范围 bytes=-N
+            const suffix = parseInt(m[2], 10);
+            if (suffix <= 0 || size === 0) {
+              return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } });
+            }
+            start = Math.max(0, size - suffix);
+            end = size - 1;
+          } else {
+            start = parseInt(m[1], 10);
+            end = m[2] ? parseInt(m[2], 10) : size - 1;
+            if (end >= size) end = Math.min(size - 1, end);
+          }
+          if (start < 0 || start >= size || start > end) {
+            return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } });
+          }
+          const stream = fs.createReadStream(realFile, { start, end });
+          return new Response(Readable.toWeb(stream), {
+            status: 206,
+            headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1) },
+          });
         }
-        if (start >= size || end >= size || start > end) {
-          return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } });
-        }
-        const stream = fs.createReadStream(file, { start, end });
-        return new Response(Readable.toWeb(stream), {
-          status: 206,
-          headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1) },
-        });
       }
-      return new Response(Readable.toWeb(fs.createReadStream(file)), { status: 200, headers: { ...headers, 'Content-Length': String(size) } });
+      return new Response(Readable.toWeb(fs.createReadStream(realFile)), { status: 200, headers: { ...headers, 'Content-Length': String(size) } });
     } catch (e) {
       return new Response('not found', { status: 404 });
     }
@@ -313,7 +531,8 @@ function createHandle() {
         const code = (err && err.code) || null;
         if (code && QUIET_CODES.has(code)) log.info(`[ipc ${channel}]`, code, (err && err.message) || '');
         else log.error(`[ipc ${channel}]`, err);
-        return { ok: false, error: (err && err.message) || String(err), code };
+        const rawErr = (err && err.message) ? String(err.message) : String(err);
+        return { ok: false, error: log.redact(rawErr), code };
       } finally {
         ipcInflight--;
         if (!ipcInflight) for (const w of [...idleWaiters]) w(true);
@@ -781,14 +1000,14 @@ function onChildProcessGone(_e, details) {
 }
 
 /** 再次双击图标或 .ffproj：激活已有窗口，并打开那个工程 */
-function onSecondInstance(_e, argv) {
+function onSecondInstance(_e, argv, workingDirectory) {
   const win = mainWindow;
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
     win.focus();
   }
-  const f = projectFileFromArgv(argv);
+  const f = projectFileFromArgv(argv, workingDirectory);
   if (f) openProjectFile(f);
 }
 
@@ -849,6 +1068,7 @@ function onReady() {
   if (!settingsRef) settingsRef = createSettings();
   const settings = settingsRef;
   const paths = createPaths(settings);
+  pathsRef = paths;
   const jobs = createJobs(send);
   jobsRef = jobs;
   const ctx = {
@@ -857,7 +1077,8 @@ function onReady() {
     settings,
     send,
     getWindow: () => mainWindow,
-    registerMediaPath,
+    registerMediaPath: (p) => registerMediaPath(p, paths),
+    isSafeMediaPath: (p) => isSafeMediaPath(p, paths),
     isAllowedMedia: (p) => isAllowed(p, paths),
     appVersion: app.getVersion(),
     addMediaRoot: (p) => { if (p) mediaRoots.add(p); },
@@ -868,7 +1089,6 @@ function onReady() {
     get lastCrash() { return lastCrash; },
   };
   logStartup(paths);
-  if (pendingOpenFile) registerMediaPath(pendingOpenFile);
   setupPermissions();
   setupProtocol(paths);
   ipcMain.on('app:flushed', onFlushed);
@@ -914,4 +1134,14 @@ function bootstrap() {
 if (gotLock) bootstrap();
 
 // 单测用：只导出纯函数，不影响运行
-module.exports = { safeDevUrl, projectFileFromArgv, isAppUrl, _state: () => ({ isDev, devUrl, isE2E, gotLock }) };
+module.exports = {
+  safeDevUrl,
+  projectFileFromArgv,
+  isAppUrl,
+  isUncPath,
+  isBlockedUserDataMedia,
+  isSafeMediaPath,
+  registerMediaPath,
+  isAllowed,
+  _state: () => ({ isDev, devUrl, isE2E, gotLock }),
+};

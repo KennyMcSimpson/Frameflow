@@ -11,7 +11,6 @@ import Timeline from './Timeline.jsx';
 import AIEditPanel from './AIEditPanel.jsx';
 import useShortcuts from './useShortcuts.js';
 import { startDrag } from './timelineUtils.js';
-import { importFilesDialog, readDroppedAssets, insertAssets, DND_ASSET } from '../../assetActions.js';
 
 const { Button, Icon } = UI;
 const Empty = UI.EmptyState || UI.Empty;
@@ -58,38 +57,11 @@ class PaneBoundary extends Component {
   }
 }
 
-/** 时间线为空时覆盖在播放器上的大号引导，可直接把素材拖进来 */
-function EmptyTimelineHint() {
-  const [over, setOver] = useState(false);
-  const onDrop = (e) => {
-    e.preventDefault(); setOver(false);
-    const assets = readDroppedAssets(e.dataTransfer);
-    if (assets.length) insertAssets(assets, undefined, '添加到时间线');
-  };
-  return (
-    <div
-      className={'rf-empty-hint' + (over ? ' over' : '')}
-      onDragOver={(e) => { if (Array.from(e.dataTransfer.types || []).includes(DND_ASSET)) { e.preventDefault(); setOver(true); } }}
-      onDragLeave={() => setOver(false)}
-      onDrop={onDrop}
-    >
-      <div className="rf-empty-icon"><Icon name="film" size={36} /></div>
-      <div className="rf-empty-title">拖入素材或从创作页生成初剪</div>
-      <div className="rf-empty-desc">把左侧素材拖到这里或下方时间线；也可以导入手机里拍的视频。</div>
-      <div className="rf-empty-actions">
-        <Button variant="secondary" icon="upload" onClick={() => importFilesDialog({ toTimeline: true }).catch(() => {})}>导入素材</Button>
-        <Button variant="ghost" icon="sparkles" onClick={() => useStore.getState().setMode('create')}>去创作页生成</Button>
-      </div>
-    </div>
-  );
-}
-
 export default function RefineMode() {
   const project = useStore((s) => s.project);
   const active = useStore((s) => s.mode === 'refine');
   const layout = useStore((s) => s.layout);
   const drawer = useStore((s) => s.drawer);
-  const emptyTimeline = useStore((s) => !!s.project && !s.project.tracks.video.length && !(s.project.overlays || []).length);
   const hasProject = !!project;
   useShortcuts(active && hasProject);
 
@@ -188,7 +160,6 @@ export default function RefineMode() {
       />
       <section className="rf-preview rf-cell" aria-label="播放器" style={{ gridArea: '1 / 3 / 2 / 4' }}>
         <PaneBoundary name="播放器"><Preview /></PaneBoundary>
-        {emptyTimeline && <EmptyTimelineHint />}
         <button
           type="button"
           className={'rf-ai-fab' + (aiOpen ? ' on' : '')}

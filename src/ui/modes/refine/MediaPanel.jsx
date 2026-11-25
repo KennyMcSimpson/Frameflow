@@ -105,11 +105,29 @@ function StickerPane() {
   );
 }
 
+function clampTransitionDur(raw, fallback = 0.5) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.round(Math.min(2, Math.max(0.1, n)) * 100) / 100;
+}
+
 // ---------------- 转场 ----------------
 function TransitionPane() {
   const selected = useStore((s) => s.selection.clipIds.length);
   const clipCount = useStore((s) => (s.project ? s.project.tracks.video.length : 0));
-  const [dur, setDur] = useState(() => readPref('side.trDur', 0.5));
+  const settingTrDur = useStore((s) => s.settings && s.settings.editing && s.settings.editing.transitionDuration);
+  const [dur, setDur] = useState(() => {
+    const fromSettings = Number(useStore.getState().settings?.editing?.transitionDuration);
+    if (Number.isFinite(fromSettings) && fromSettings > 0) return clampTransitionDur(fromSettings, 0.5);
+    return clampTransitionDur(readPref('side.trDur', 0.5), 0.5);
+  });
+  const prevSettingRef = useRef(settingTrDur);
+  useEffect(() => {
+    if (settingTrDur === prevSettingRef.current) return;
+    prevSettingRef.current = settingTrDur;
+    const n = Number(settingTrDur);
+    if (Number.isFinite(n) && n > 0) setDur(clampTransitionDur(n, 0.5));
+  }, [settingTrDur]);
   const [picked, setPicked] = useState('crossfade');
 
   const applySel = (type) => {
@@ -451,6 +469,30 @@ export default function MediaPanel() {
 
   const visit = (c) => setVisited((v) => (v[c] ? v : { ...v, [c]: true }));
   useEffect(() => { visit(cat); }, [cat]);
+  useEffect(() => {
+    const onOpenMedia = (e) => {
+      const detail = (e && e.detail) || {};
+      const targetTab = detail.tab || 'web';
+      const targetGroup = (GROUPS.find((g) => g.subs.includes(targetTab)) || GROUPS[0]).id;
+      const q = typeof detail.query === 'string' ? detail.query.trim() : '';
+      setGroup(targetGroup);
+      writePref('media.group', targetGroup);
+      setSubs((s) => {
+        const next = { ...s, [targetGroup]: targetTab };
+        writePref('media.subs', next);
+        return next;
+      });
+      setVisited((v) => (v[targetTab] ? v : { ...v, [targetTab]: true }));
+      if (q) {
+        setQueries((qs) => ({ ...qs, [targetTab]: q }));
+        if (targetTab === 'web' || targetTab === 'audio') {
+          setNonce((n) => ({ ...n, [targetTab]: (n[targetTab] || 0) + 1 }));
+        }
+      }
+    };
+    window.addEventListener('ff:open-media', onOpenMedia);
+    return () => window.removeEventListener('ff:open-media', onOpenMedia);
+  }, []);
   const switchGroup = (g) => { setGroup(g); writePref('media.group', g); visit(subs[g]); };
   const switchCat = (c) => {
     setSubs((s) => { const n = { ...s, [group]: c }; writePref('media.subs', n); return n; });
@@ -560,7 +602,7 @@ export default function MediaPanel() {
           ))}
           {hasBuiltin && pane('builtin', <BuiltinAudioPane items={builtin} query={queries.builtin} active={cat === 'builtin'} />)}
           {pane('text', <TextPane />)}
-          {pane('caption', hasProject ? <div className="mpx-scroll mpx-caption"><CaptionPanel /></div> : null)}
+          {pane('caption', hasProject ? <div className="mpx-scroll mpx-caption"><CaptionPanel active={cat === 'caption'} /></div> : null)}
           {pane('sticker', <StickerPane />)}
           {pane('transition', <TransitionPane />)}
           {pane('filter', <FilterPane />)}

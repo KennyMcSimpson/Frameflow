@@ -1,56 +1,57 @@
-﻿镜流 Frameflow 最终用户软件许可协议
+﻿﻿镜流 Frameflow（Frameflow Studio）软件许可与第三方声明
 
-更新日期：2026 年 11 月 11 日
+更新日期：2026 年 11 月 25 日
 
-请在安装或使用“镜流 Frameflow”（以下简称“本软件”）前仔细阅读本协议。点击“我接受”、安装、复制或以其他方式使用本软件，即表示您同意受本协议约束；如不同意，请勿安装或使用。
+请在安装或使用“镜流 Frameflow”（Frameflow Studio，以下简称“本软件”）前阅读本许可与说明。
 
-一、许可范围
-1. 在您遵守本协议的前提下，著作权人授予您一项个人的、非独占的、不可转让、不可再许可的使用许可，允许您在您拥有或合法控制的设备上安装和使用本软件，用于个人或商业视频创作。
-2. 您使用本软件制作的作品（包括导出的视频、字幕、工程文件），其权利归您或相应权利人所有。本软件不对您的作品主张任何权利。
-3. 本软件随附的示例素材（“晨光咖啡”示例项目视频）来自 Mixkit，按 Mixkit Free License 提供（可免费商用，无需署名），您可以在自己的作品中使用，但不得单独再分发或转售素材本身。
-4. 本软件随附的内置音乐来自 FreePD.com，按 CC0 1.0 公有领域贡献发布；内置音效由著作权人制作，按 CC0 1.0 提供。您可以在作品中自由使用，无需署名。曲目与作者清单见第三条所述的第三方许可声明文件。
-5. 通过本软件的素材搜索功能获得的素材，来自维基共享资源（Wikimedia Commons）、Openverse、互联网档案馆（Internet Archive）、NASA 图片与视频库，以及（仅在您自行填写了 API 密钥之后）Pexels、Pixabay 等第三方素材库。这些素材归各自的权利人所有，按素材页面标明的许可提供；能否商用、是否需要署名，以该素材的许可为准，相应义务由您自行履行。
+一、本软件开源许可（MIT License）
+1. 本软件的原创源代码及对应发行程序采用 MIT 许可证（MIT License）授权。您可以在遵守下列 MIT 许可条款的前提下，免费获取、使用、复制、修改、合并、发布、分发、再许可及/或销售本软件副本，用于个人或商业视频创作及其他用途。
+2. 您使用本软件制作的作品（包括导出的视频、字幕、工程文件等），其著作权及相关权利归您或相应权利人所有；本软件不对您的作品主张任何权利。
 
-二、使用限制
-除法律明确允许外，您不得：
-1. 对本软件进行反向工程、反编译、反汇编，或试图获取其源代码（但第三条所列开源组件按其各自许可证执行，本项限制不适用于这些组件；其中 FFmpeg 按 LGPL 的规定，允许您修改和替换，并为调试此类修改而进行必要的反向工程）；
-2. 出租、出借、出售、再分发本软件，或将本软件作为独立产品提供给第三方；
-3. 删除、修改本软件中的著作权声明、商标或第三方许可声明；
-4. 利用本软件制作、传播违反法律法规、侵犯他人合法权益（包括著作权、肖像权、名誉权、隐私权）或违背公序良俗的内容；
-5. 以任何方式规避本软件的技术保护措施。
+以下为本软件适用的 MIT License 正式文本（与项目根目录 LICENSE 文件一致）：
 
-三、第三方组件声明
-本软件包含或可下载以下第三方开源组件，这些组件依其各自许可证授权，本协议不改变其许可条款：
-1. FFmpeg（https://ffmpeg.org）：本软件随附的是 LGPL 第 3 版构建（不含 GPL 组件），以独立程序和动态库的形式位于安装目录 resources\ffmpeg，本软件没有修改其源代码，您可以用自己编译的兼容版本替换。许可全文见 resources\licenses\ffmpeg\LICENSE.txt，源代码获取方式见 resources\licenses\ffmpeg\SOURCE.txt。FFmpeg 是 FFmpeg 项目的商标。
-2. whisper.cpp（https://github.com/ggml-org/whisper.cpp）：MIT 许可证。语音识别模型（ggml 格式的 Whisper 模型，源自 OpenAI Whisper，MIT 许可证）在您启用本地语音字幕时从 Hugging Face 下载。
-3. yt-dlp（https://github.com/yt-dlp/yt-dlp）：Unlicense 公有领域许可，在您首次使用视频链接下载功能时从 GitHub 下载。
-4. Electron、Chromium、React 等开源组件：分别以 MIT 等许可证发布。
-全部第三方组件、内置音乐与示例素材的完整声明和许可全文，见安装目录中的 resources\licenses\THIRD_PARTY_LICENSES.txt。
+MIT License
 
-四、AI 生成内容
-1. 本软件提供的 AI 辅助功能（包括脚本/分镜生成、AI 出图、AI 视频生成、语音识别字幕、智能剪辑建议等）可能调用您自行配置的第三方服务，例如火山方舟（即梦 Seedream 出图、即梦 Seedance 出视频）、OpenAI 兼容接口，以及您在设置中选择的其他视频生成服务。使用这些服务须遵守相应服务商的条款，相关费用由您自行承担。
-2. AI 生成的内容可能存在错误、不准确、与他人作品相似或不适宜的情况。您应自行审核并对发布、使用 AI 生成内容的行为及后果负责，并依照《生成式人工智能服务管理暂行办法》《互联网信息服务深度合成管理规定》等法律法规，在需要时对生成内容进行显著标识。
-3. 您不得利用 AI 功能生成虚假信息，或冒用他人声音、肖像进行深度合成。
+Copyright (c) 2026 KennyMcSimpson / Frameflow Studio Contributors
 
-五、隐私
-1. 本软件为本地桌面应用，您的工程文件、素材和导出作品默认仅保存在您的设备上，著作权人不收集、不上传上述内容。
-2. 您填写的第三方服务 API 密钥仅保存在本机，仅用于向您指定的服务发送请求。
-3. 当您主动使用在线 AI 功能或云端语音识别时，相关文本、图片、音频将直接发送至您配置的服务商（例如火山方舟、OpenAI 兼容接口），其处理方式适用该服务商的隐私政策。
-4. 下载语音模型、搜索素材等联网操作仅在您主动使用相应功能时进行，且仅传输完成该操作所必需的信息。素材搜索会访问维基共享资源（Wikimedia Commons）、Openverse、互联网档案馆（Internet Archive）和 NASA 图片与视频库，这些来源不需要 API 密钥；Pexels 和 Pixabay 仅在您自行填写了 API 密钥之后才会访问。本软件不收集使用统计，不会自动上报错误，也不会在后台自动检查更新。
-5. 完整的隐私说明见安装目录中的 resources\licenses\privacy.txt。
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-六、免责声明
-1. 本软件按“现状”提供。在适用法律允许的最大范围内，著作权人不作任何明示或默示的保证，包括但不限于适销性、特定用途适用性及不侵权的保证，也不保证本软件不间断、无错误。
-2. 在适用法律允许的最大范围内，著作权人不对因使用或无法使用本软件引起的任何间接、附带、特殊或后果性损失（包括数据丢失、工程损坏、业务中断、利润损失）承担责任。请您定期备份重要工程与素材。
-3. 因您违反本协议或法律法规使用本软件而导致的任何第三方索赔，由您自行承担责任。
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-七、协议终止
-如您违反本协议任何条款，本许可自动终止，您应立即停止使用并删除本软件的全部副本。第三、六、八条在协议终止后继续有效。
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-八、法律适用与争议解决
-本协议的订立、效力、解释及争议解决均适用中华人民共和国法律（为本协议之目的，不包括香港、澳门特别行政区及台湾地区法律）。因本协议引起的争议，双方应友好协商；协商不成的，任何一方均可向著作权人所在地有管辖权的人民法院提起诉讼。
+二、第三方组件与随附素材许可声明
+上述 MIT 许可证仅适用于 Frameflow Studio 的原创代码。本软件随附或按需下载的第三方开源组件、内置音频与示例素材仍归各自权利人所有，并分别按其各自许可证授权：
+1. FFmpeg（https://ffmpeg.org）：本软件随附未修改的 Windows x64 LGPL 第 3 版（LGPL v3）共享库构建（不含 GPL 组件），以独立程序和动态库形式位于安装目录 resources\ffmpeg。本软件通过独立进程调用 FFmpeg，您可以按照 LGPL v3 许可条款自行编译并用兼容版本替换上述文件。许可全文见 resources\licenses\ffmpeg\LICENSE.txt 及随附的 GNU GPL v3 文本 resources\licenses\ffmpeg\COPYING.GPLv3，源代码获取方式见 resources\licenses\ffmpeg\SOURCE.txt。FFmpeg 是 FFmpeg 项目的商标。
+2. 示例素材（Mixkit Free License）：本软件随附的“晨光咖啡”示例项目视频片段来自 Mixkit，按 Mixkit Free License（https://mixkit.co/license/#videoFree）提供（可免费用于个人或商业作品，无需署名）。依据 Mixkit 原始素材许可，您可以在自己的视频作品中使用这些片段，但不得将素材文件本身单独再分发或转售。
+3. 内置音乐与音效（CC0 1.0）：随附的内置音乐来自 FreePD.com，按 CC0 1.0 公有领域贡献发布；内置音效由本软件使用 FFmpeg 合成，同样按 CC0 1.0 提供。您可在作品中自由使用、修改并用于商业用途，无需署名。曲目与作者清单见第三方许可声明文件。
+4. whisper.cpp 与语音识别模型（MIT）：whisper.cpp（https://github.com/ggml-org/whisper.cpp）及源自 OpenAI Whisper 的 ggml 语音识别模型均采用 MIT 许可证，仅在您启用本地语音字幕时按需从 GitHub 与 Hugging Face 下载，不随安装包分发。
+5. yt-dlp（Unlicense）：yt-dlp（https://github.com/yt-dlp/yt-dlp）采用 Unlicense（公有领域许可），仅在您主动使用视频链接下载或视频站搜索功能时按需从 GitHub 下载，不随安装包分发。
+6. 其他打包开源组件：Electron、Chromium、React、Zustand 以及部分移植/改写的开源工具代码（Lucide、Feather、Color Thief / quantize.js、PySceneDetect 算法改写等），分别按 MIT、ISC、BSD-3-Clause 等各自开源许可证发布。
+7. 在线素材搜索结果：通过本软件素材搜索功能获取的素材，来自维基共享资源（Wikimedia Commons）、Openverse、互联网档案馆（Internet Archive）、NASA 图片与视频库，以及（仅在您自行填写 API 密钥后）Pexels、Pixabay 等第三方素材库。这些素材归各自权利人所有并适用来源页面标明的许可条款，商用与署名义务请以该素材的许可为准。
+全部第三方组件、移植代码、内置音频与示例素材的完整声明及许可全文，见安装目录中的 resources\licenses\THIRD_PARTY_LICENSES.txt。
 
-九、其他
-本协议的任何条款被认定无效或不可执行的，不影响其余条款的效力。著作权人可能随软件更新修订本协议，修订后的协议将随新版本提供。
+三、AI 生成内容与合规提示
+1. 本软件提供的 AI 辅助功能（包括脚本/分镜生成、AI 出图、AI 视频生成、语音识别字幕、智能剪辑建议等）由您自行配置并调用第三方服务（如火山方舟 Seedream/Seedance、OpenAI 兼容接口、其他已选视频生成服务或您主动启用的本地 Codex CLI 等）。使用这些服务须遵守相应服务商的条款，相关费用由您自行承担。
+2. AI 生成的内容可能存在错误、不准确、与他人作品相似或不适宜的情况。您应自行审核并对使用、发布 AI 生成内容的行为及后果负责，并依照适用法律法规（包括《生成式人工智能服务管理暂行办法》《互联网信息服务深度合成管理规定》及 GB 45438-2025 标识要求等）在需要时对生成内容进行显著标识，不侵犯他人著作权、肖像权、声音权、名誉权等合法权益。
 
-© 2026 镜流 Frameflow。保留所有权利。
+四、隐私与本地优先说明
+1. 本软件为本地优先的桌面应用，您的工程文件、素材和导出作品默认仅保存在您的设备上。本软件无账号系统、无自有服务器，不收集使用统计，不做遥测，不会自动上报错误，也不会在后台自动检查更新。
+2. 您填写的第三方服务 API 密钥通过 Windows 系统加密机制（Electron safeStorage / DPAPI）仅保存在本机，仅用于向您指定的服务发送请求。
+3. 仅在您主动使用在线 AI、云端语音识别、下载语音模型或工具、搜索素材或点击外链等联网功能时，本软件才会发送完成该操作所必需的请求；第三方服务按其各自的隐私政策处理数据。
+4. 完整的隐私说明见安装目录中的 resources\licenses\privacy.txt。
+
+五、免责声明
+依照上述 MIT 许可证条款，本软件按“现状（AS IS）”提供，不附带任何明示或默示的保证（包括但不限于适销性、特定用途适用性及不侵权保证）。在任何情况下，作者或著作权人均不对因本软件或使用本软件引起的任何索赔、直接或间接损害（包括数据丢失、工程损坏、业务中断或利润损失）承担责任。请您定期备份重要工程与素材。

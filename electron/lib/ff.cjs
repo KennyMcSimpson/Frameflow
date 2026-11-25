@@ -11,6 +11,7 @@ const encoders = require('./encoders.cjs');
 // 常量
 // ---------------------------------------------------------------------------
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif', '.heic']);
+const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.ts', '.flv', '.wmv']);
 const BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1']);
 const BROWSER_VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.m4v']);
 const BROWSER_AUDIO_EXT = new Set(['.mp3', '.aac', '.m4a', '.wav', '.ogg', '.opus', '.flac']);
@@ -446,7 +447,8 @@ async function filmstrip(paths, file, { duration, count = 10, height = 60, start
   const n = Math.round(clamp(Number(count) || 10, 1, 60));
   const h = Math.round(clamp(Number(height) || 60, 16, 360));
   let dur = Number(duration);
-  let kind = isImageFile(file) ? 'image' : null;
+  const ext = path.extname(String(file || '')).toLowerCase();
+  let kind = isImageFile(file) ? 'image' : (dur > 0 && VIDEO_EXT.has(ext) ? 'video' : null);
   if (!(dur > 0) || !kind) {
     const info = await probe(paths, file, { signal });
     kind = info.kind;

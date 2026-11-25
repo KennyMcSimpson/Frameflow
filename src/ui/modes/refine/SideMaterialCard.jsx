@@ -10,14 +10,29 @@ import { applyOps } from '../../../engine/ops.js';
 import { queryLibraryAssets, fmtDur } from './SideData.js';
 import { stockSourcesFor, downloadWebResult, remoteThumb, WEB_SOURCE_MAP } from './MediaShared.jsx';
 
-const cache = new Map(); // `${msgId}:${index}` -> state，切换页签后不重复搜索
+const cache = new Map(); // `${msgId}:${index}` -> state，切换页签后不重复搜索（LRU 上限 100）
+const MAX_CACHE = 100;
+
+function setCache(key, value) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_CACHE) {
+    cache.delete(cache.keys().next().value);
+  }
+}
 
 function useCachedState(key, init) {
-  const [state, setState] = useState(() => cache.get(key) || init);
+  const [state, setState] = useState(() => {
+    if (!cache.has(key)) return init;
+    const hit = cache.get(key);
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+  });
   const set = useCallback((upd) => {
     setState((prev) => {
       const next = typeof upd === 'function' ? upd(prev) : upd;
-      cache.set(key, next);
+      setCache(key, next);
       return next;
     });
   }, [key]);
@@ -65,7 +80,10 @@ export default function SideMaterialCard({ msgId, index, request }) {
   const where = kind === 'audio' ? '作为背景音乐' : atIndex ? `插入到第${atIndex}镜` : '添加到末尾';
   const [state, setState] = useCachedState(key, { phase: 'idle', lib: [], web: [], webNote: '', error: null, done: {}, dl: {} });
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
 
   const runSearch = useCallback(async () => {
     const q = String(req.query || '').trim();
@@ -75,17 +93,20 @@ export default function SideMaterialCard({ msgId, index, request }) {
     try {
       lib = (await queryLibraryAssets(q)).filter((a) => kind === 'audio' ? a.kind === 'audio' : a.kind !== 'audio').slice(0, 4);
     } catch { lib = []; }
+    if (!alive.current) return;
     setState((s) => ({ ...s, lib, phase: 'web' }));
     const settings = useStore.getState().settings;
     const sources = stockSourcesFor(kind, settings);
     if (!sources.length) { setState((s) => ({ ...s, phase: 'done', webNote: '没有可用的免版权图库来源' })); return; }
     try {
       const r = await api.call('web:search', { query: q, sources, kind, limit: 4 });
+      if (!alive.current) return;
       const web = (Array.isArray(r && r.results) ? r.results : []).filter((x) => x && (x.downloadUrl || x.url)).slice(0, 6);
       const errs = Array.isArray(r && r.errors) ? r.errors : [];
       const note = !web.length && errs.length ? `联网搜索失败：${errs.map((e) => e.error).join('；')}` : (!web.length ? '网上也没有找到合适的候选' : '');
       setState((s) => ({ ...s, web, phase: 'done', webNote: note }));
     } catch (e) {
+      if (!alive.current) return;
       setState((s) => ({ ...s, phase: 'done', webNote: '联网搜索失败：' + (e.message || '网络错误') }));
     }
   }, [req.query, kind, setState]);
@@ -109,19 +130,26 @@ export default function SideMaterialCard({ msgId, index, request }) {
   const pickWeb = async (r) => {
     const k = `web:${r.source}:${r.id || r.url}`;
     if (state.dl[k] && state.dl[k].progress != null) return;
+    const projectId = useStore.getState().project?.id;
     setState((s) => ({ ...s, dl: { ...s.dl, [k]: { progress: 0, jobId: null, message: '准备下载…' } } }));
     try {
       const asset = await downloadWebResult(r, {
-        onStart: (jobId) => setState((s) => ({ ...s, dl: { ...s.dl, [k]: { ...(s.dl[k] || {}), jobId } } })),
-        onProgress: (p) => setState((s) => ({ ...s, dl: { ...s.dl, [k]: { ...(s.dl[k] || {}), progress: p.progress || 0, message: p.message || p.stage || '' } } })),
+        onStart: (jobId) => { if (alive.current) setState((s) => ({ ...s, dl: { ...s.dl, [k]: { ...(s.dl[k] || {}), jobId } } })); },
+        onProgress: (p) => { if (alive.current) setState((s) => ({ ...s, dl: { ...s.dl, [k]: { ...(s.dl[k] || {}), progress: p.progress || 0, message: p.message || p.stage || '' } } })); },
       });
+      if (!alive.current) return;
       const cur = cache.get(key);
       if (cur && cur.dl[k] && cur.dl[k].cancelled) return;
+      const curProj = useStore.getState().project;
+      if (!curProj || curProj.id !== projectId) {
+        setState((s) => ({ ...s, dl: { ...s.dl, [k]: undefined } }));
+        return;
+      }
       const ok = placeAsset(asset);
       setState((s) => ({ ...s, dl: { ...s.dl, [k]: undefined }, done: { ...s.done, [k]: ok } }));
       if (ok) useStore.getState().toast(`已下载并${where}：${asset.name || r.title}`, 'success');
     } catch (e) {
-      setState((s) => ({ ...s, dl: { ...s.dl, [k]: undefined } }));
+      if (alive.current) setState((s) => ({ ...s, dl: { ...s.dl, [k]: undefined } }));
       if (e && e.cancelled) useStore.getState().toast('已取消下载');
       else useStore.getState().toast('下载失败：' + (e.message || '未知原因'), 'error');
     }

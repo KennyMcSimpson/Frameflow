@@ -45,17 +45,22 @@ app.process().stdout.on('data', (d) => process.stdout.write('[main] ' + String(d
 app.process().stderr.on('data', (d) => process.stderr.write('[main:err] ' + String(d)));
 
 // 打桩系统文件对话框：导入时返回测试音乐，保存时落到临时目录
-await app.evaluate(({ dialog }, { music, out }) => {
+await app.evaluate(({ dialog }, { music, out, sep }) => {
+  const nodePath = typeof process.getBuiltinModule === 'function'
+    ? process.getBuiltinModule('node:path')
+    : (typeof require === 'function' ? require('node:path') : null);
   dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [music] });
   dialog.showSaveDialog = async (_w, o) => {
     const opts = o || _w || {};
     const base = String(opts.defaultPath || 'export.mp4').split(/[\\/]/).pop();
-    return { canceled: false, filePath: out.replace(/[\\/]+$/, '') + '\\' + base };
+    const filePath = nodePath ? nodePath.join(out, base) : out.replace(/[\\/]+$/, '') + sep + base;
+    return { canceled: false, filePath };
   };
-}, { music: musicPath, out: outDir });
+}, { music: musicPath, out: outDir, sep: path.sep });
 
 const win = await app.firstWindow();
 await win.setViewportSize({ width: 1600, height: 960 }).catch(() => {});
+win.on('console', (m) => { if (m.type() === 'error') errors.push('[renderer] ' + m.text().slice(0, 500)); });
 win.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));
 
 async function repaint() {
@@ -291,7 +296,6 @@ try {
     const probe = () => win.evaluate(() => [...document.querySelectorAll('audio, video')]
       .filter((el) => !el.paused)
       .map((el) => ({ tag: el.tagName, rate: Math.round(el.playbackRate * 100) / 100, muted: el.muted, vol: Math.round(el.volume * 100) / 100, pitch: el.preservesPitch !== false })));
-    const read = async () => { const r = await win.evaluate(() => document.querySelector('.pv-time, .mono')?.textContent || ''); return r; };
     const res = {};
     for (const [k, rate] of [['L', 1], ['L', 2], ['L', 4]]) {
       await win.keyboard.press('Key' + k);
@@ -392,7 +396,7 @@ try {
   for (const r of results) console.log(`  ${r.ok ? 'OK  ' : 'FAIL'} ${r.name} (${r.ms}ms)${r.detail ? ' · ' + r.detail : ''}${r.error ? ' — ' + r.error : ''}`);
   const failed = results.find((r) => !r.ok);
   if (errors.length) { console.log('\n[full] 错误：'); for (const x of errors) console.log('  - ' + x); }
-  if (failed || errors.length || results.length < 7) {
+  if (failed || errors.length || results.length < 8) {
     console.log(`\n[full] 失败${failed ? '于步骤：' + failed.name : ''}`);
     process.exitCode = 1;
   } else log('全部通过');

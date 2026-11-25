@@ -4,6 +4,9 @@ import { create } from 'zustand';
 import { useStore } from '../../store.js';
 import { layoutVideo, projectDuration, indexAtTime } from '../../../engine/timeline.js';
 import { readPref, writePref, clampNum } from './timelineUtils.js';
+import { SHUTTLE_STEPS, nextShuttleRate, shuttleBadge } from './shuttle.js';
+
+export { SHUTTLE_STEPS, nextShuttleRate, shuttleBadge };
 
 // ---------------- 布局 / 总长缓存（按 project 对象身份） ----------------
 const layoutCache = new WeakMap();
@@ -95,13 +98,19 @@ export function play() {
 }
 
 export function pause() {
+  stopShuttle();
   const st = useStore.getState();
   if (st.playing) st.setPlaying(false);
 }
 
 export function togglePlay() {
-  if (useStore.getState().playing) { pause(); return false; }
-  if (useShuttle.getState().rate) useShuttle.setState({ rate: 0 });
+  if (useStore.getState().playing || useShuttle.getState().rate < 0) {
+    stopShuttle();
+    const st = useStore.getState();
+    if (st.playing) st.setPlaying(false);
+    return false;
+  }
+  if (useShuttle.getState().rate) stopShuttle();
   return play();
 }
 
@@ -126,7 +135,6 @@ export function stepSeconds(s = 1) {
 // rate：正值（1/2/4）由 Preview 的 rAF 推进并带声音（媒体 playbackRate×倍速，音调不变）；
 // 负值（倒放）由这里的 rAF 逐帧回退 seek，浏览器无法倒序播放声音，倒放预览静音（导出时倒放片段有声）。
 // 当前倍速显示在预览左上角的角标上（shuttleBadge），不再弹提示条。
-export const SHUTTLE_STEPS = [1, 2, 4];
 export const useShuttle = create(() => ({ rate: 0 }));
 
 /** Preview 推进播放头用的倍速：正在播放且穿梭倍速 >1 时为该倍速，否则 1 */
@@ -135,40 +143,20 @@ export function playRate() {
   return r > 1 && useStore.getState().playing ? r : 1;
 }
 
-/** 纯状态机：给定当前 rate 与按键（'J'|'K'|'L'）返回新 rate */
-export function nextShuttleRate(rate, key) {
-  if (key === 'K') return 0;
-  const dir = key === 'L' ? 1 : -1;
-  const cur = Number(rate) || 0;
-  if (Math.sign(cur) !== dir) return dir;
-  const i = SHUTTLE_STEPS.indexOf(Math.abs(cur));
-  return dir * SHUTTLE_STEPS[Math.min(SHUTTLE_STEPS.length - 1, i + 1)];
-}
-
-/**
- * 预览左上角的倍速角标（纯函数）：倒放显示「◀ 1×」「◀◀ 4×」，快进显示「▶▶ 2×」；正常播放 / 停止时为 null。
- * @returns {{dir:'back'|'fwd', rate:number, arrows:string, text:string, title:string}|null}
- */
-export function shuttleBadge(rate, playing) {
-  const r = Number(rate) || 0;
-  if (r < 0) {
-    const n = Math.abs(r);
-    const arrows = n > 1 ? '◀◀' : '◀';
-    return { dir: 'back', rate: n, arrows, text: `${arrows} ${n}×`, title: `倒放 ${n}×（倒放预览没有声音；按 K 停止，再按 J 加速）` };
-  }
-  if (r > 1 && playing) {
-    return { dir: 'fwd', rate: r, arrows: '▶▶', text: `▶▶ ${r}×`, title: `快进 ${r}×（声音音调不变；按 K 停止，再按 L 加速）` };
-  }
-  return null;
-}
-
 let shuttleRaf = 0;
 let shuttleLast = 0;
 function stopShuttleLoop() { if (shuttleRaf) cancelAnimationFrame(shuttleRaf); shuttleRaf = 0; }
+
+/** 停止穿梭倍速（含倒放 rAF 循环），卸载或切换模式时调用 */
+export function stopShuttle() {
+  stopShuttleLoop();
+  if (useShuttle.getState().rate !== 0) useShuttle.setState({ rate: 0 });
+}
+
 function shuttleTick(now) {
   const rate = useShuttle.getState().rate;
   const st = useStore.getState();
-  if (!(rate < 0) || !st.project) { shuttleRaf = 0; return; }
+  if (!(rate < 0) || !st.project || st.mode !== 'refine') { stopShuttle(); return; }
   const dt = Math.min(0.1, (now - shuttleLast) / 1000);
   shuttleLast = now;
   const dur = getDuration(st.project);
@@ -188,9 +176,9 @@ export function setRate(rate) {
     if (!useStore.getState().playing && !play()) useShuttle.setState({ rate: 0 });
     return;
   }
-  pause();
-  if (!rate) return;
   const st = useStore.getState();
+  if (st.playing) st.setPlaying(false);
+  if (!rate) return;
   if (!st.project || !(getDuration(st.project) > 0)) { useShuttle.setState({ rate: 0 }); return; }
   shuttleLast = performance.now();
   shuttleRaf = requestAnimationFrame(shuttleTick);

@@ -9,6 +9,7 @@
 // - 导出：seekExact() 等待每个活动源真正停在目标帧（seeked + requestVideoFrameCallback，最长 1.5 秒）。
 
 import * as TL from '../engine/timeline.js';
+import * as KF from '../engine/keyframes.js';
 import { speedSegments } from '../export/audioPlan.js';
 
 const { layoutVideo, activeAt, audioAt } = TL;
@@ -166,10 +167,24 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
     }
   }
 
+  function disconnectAudioNodes(rec) {
+    if (!rec) return;
+    try { if (rec.source) rec.source.disconnect(); } catch { /* 忽略 */ }
+    try { if (rec.gain) rec.gain.disconnect(); } catch { /* 忽略 */ }
+    rec.source = null;
+    rec.gain = null;
+  }
+
   function releaseVideo(rec) {
     clearWatchdog(rec);
+    disconnectAudioNodes(rec);
     rec.hold = null;
     rec.holdCtx = null;
+    release(rec.el);
+  }
+
+  function releaseAudio(rec) {
+    disconnectAudioNodes(rec);
     release(rec.el);
   }
 
@@ -218,7 +233,7 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
 
   // ---------------- 视频 ----------------
 
-  function ensureVideo(asset, slot = 0) {
+  function ensureVideo(asset, slot = 0, keep = null) {
     if (disposed || !hasDom || !isVideoAsset(asset)) return null;
     const key = `${asset.id}#${slot}`;
     let rec = videos.get(key);
@@ -241,7 +256,7 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
         key, el, assetId: asset.id, path: pathOf(asset), name: assetName(asset), slot, lastUsed: ++clock, error: null,
         pending: null, commanded: null, watchdog: null,
         hold: null, holdCtx: null, holdTime: null, holdAt: 0, everFramed: false, createdAt: nowMs(),
-        rvfcSeen: false, gain: null, fps: num(asset.fps) > 0 ? num(asset.fps) : 30,
+        rvfcSeen: false, source: null, gain: null, fps: num(asset.fps) > 0 ? num(asset.fps) : 30,
       };
       const r = rec;
       el.addEventListener('error', () => { r.error = mediaErrorText(el); clearWatchdog(r); notifyReady(); });
@@ -267,7 +282,10 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
       const box = host();
       if (box) box.appendChild(el);
       videos.set(key, rec);
-      evictVideos();
+      const keepSet = keep ? new Set(keep) : new Set();
+      keepSet.add(rec);
+      keepSet.add(key);
+      evictVideos(keepSet);
     }
     rec.lastUsed = ++clock;
     return rec;
@@ -275,7 +293,7 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
 
   function evictVideos(keep) {
     if (videos.size <= MAX_VIDEOS) return;
-    const list = [...videos.values()].filter((r) => !keep || !keep.has(r)).sort((a, b) => a.lastUsed - b.lastUsed);
+    const list = [...videos.values()].filter((r) => !keep || (!keep.has(r) && !keep.has(r.key))).sort((a, b) => a.lastUsed - b.lastUsed);
     while (videos.size > MAX_VIDEOS && list.length) {
       const r = list.shift();
       releaseVideo(r);
@@ -383,11 +401,16 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
       let seeked = false;
       let painted = false;
       let grace = null;
+      let rvfcId = null;
       const finish = () => {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
         if (grace) clearTimeout(grace);
+        if (rvfcId != null && typeof el.cancelVideoFrameCallback === 'function') {
+          try { el.cancelVideoFrameCallback(rvfcId); } catch { /* 忽略 */ }
+        }
+        rvfcId = null;
         el.removeEventListener('seeked', onSeeked);
         el.removeEventListener('error', finish);
         resolve();
@@ -401,7 +424,8 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
       };
       if (typeof el.requestVideoFrameCallback === 'function') {
         try {
-          el.requestVideoFrameCallback(() => {
+          rvfcId = el.requestVideoFrameCallback(() => {
+            rvfcId = null;
             rec.rvfcSeen = true;
             painted = true;
             if (seeked) finish();
@@ -473,8 +497,10 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
         const source = audioCtx.createMediaElementSource(el);
         const node = audioCtx.createGain();
         source.connect(node).connect(audioCtx.destination);
+        rec.source = source;
         rec.gain = node;
       } catch {
+        rec.source = null;
         rec.gain = null;
       }
     }
@@ -502,13 +528,22 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
     } catch { /* 自动播放受限时保持静止画面 */ }
   }
 
-  function clipGain(entry, asset, active, master) {
+  function clipGain(project, entry, asset, active, master) {
     const clip = entry.clip;
-    if (!asset || asset.hasAudio === false || clip.mute) return 0;
-    let g = Math.max(0, num(clip.volume, 1)) * master;
+    if (!asset || asset.hasAudio === false || clip.mute || clip.muted) return 0;
+    if (typeof TL.trackFlags === 'function') {
+      if (entry.overlay) {
+        if (TL.trackFlags(project, 'overlay', entry.track || clip.track || 1).muted) return 0;
+      } else if (TL.trackFlags(project, 'video').muted) {
+        return 0;
+      }
+    }
     const local = entry.progress * entry.duration;
+    const hasVolKeys = !!(clip.keys && Array.isArray(clip.keys.volume) && clip.keys.volume.length);
+    const baseVol = hasVolKeys ? KF.valueAt(clip.keys, 'volume', local, num(clip.volume, 1)) : num(clip.volume, 1);
+    let g = Math.max(0, num(baseVol, 1)) * master;
     g *= envelope(local, entry.duration, num(clip.audioFadeIn), num(clip.audioFadeOut));
-    if (active.transition && active.out) {
+    if (active.transition && active.out && (entry === active.out || entry === active.in)) {
       const p = active.transition.p;
       g *= entry === active.out ? 1 - p : p;
     }
@@ -518,13 +553,15 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
   function syncAudioTrack(project, t, playing, master, pr = 1) {
     const assets = project.assets || {};
     const live = new Set();
-    if (playing) {
+    const trackMuted = typeof TL.trackFlags === 'function' && TL.trackFlags(project, 'audio').muted;
+    if (playing && !trackMuted) {
       for (const { audio, srcTime } of audioAt(project, t)) {
+        if (audio.muted || audio.mute) continue;
         const asset = assets[audio.assetId];
         if (!asset || !asset.path) continue;
         let rec = audios.get(audio.id);
         if (rec && rec.path !== pathOf(asset)) {
-          release(rec.el);
+          releaseAudio(rec);
           audios.delete(audio.id);
           rec = null;
         }
@@ -535,14 +572,16 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
           try { el.src = toUrl(pathOf(asset)); } catch { continue; }
           const box = host();
           if (box) box.appendChild(el);
-          rec = { el, path: pathOf(asset), gain: null, lastUsed: 0 };
+          rec = { el, path: pathOf(asset), source: null, gain: null, lastUsed: 0 };
           audios.set(audio.id, rec);
         }
         rec.lastUsed = ++clock;
         live.add(rec);
         const el = rec.el;
         const length = Math.max(0, num(audio.out) - num(audio.in));
-        const g = Math.max(0, num(audio.volume, 1)) * master * envelope(srcTime - num(audio.in), length, num(audio.fadeIn), num(audio.fadeOut));
+        const local = Math.max(0, srcTime - num(audio.in));
+        const keyMul = typeof TL.volumeKeyAt === 'function' ? Math.max(0, num(TL.volumeKeyAt(audio.volumeKeys, local), 1)) : 1;
+        const g = Math.max(0, num(audio.volume, 1)) * keyMul * master * envelope(local, length, num(audio.fadeIn), num(audio.fadeOut));
         if (Math.abs(el.playbackRate - pr) > 1e-3) el.playbackRate = pr;
         if (el.preservesPitch === false) el.preservesPitch = true;
         if (el.readyState >= 1 && (el.paused || Math.abs(el.currentTime - srcTime) > DRIFT * pr)) {
@@ -557,7 +596,7 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
       const old = [...audios.entries()].filter(([, r]) => !live.has(r)).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
       while (audios.size > MAX_AUDIOS && old.length) {
         const [id, r] = old.shift();
-        release(r.el);
+        releaseAudio(r);
         audios.delete(id);
       }
     }
@@ -582,33 +621,57 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
     const out = [];
     for (const o of list) {
       if (!o) continue;
+      const track = o.track || 1;
+      if (typeof TL.trackFlags === 'function' && TL.trackFlags(project, 'overlay', track).hidden) continue;
       const start = num(o.start);
       const len = Math.max(0.05, (num(o.out, num(o.in) + 3) - num(o.in)) / Math.max(0.1, num(o.speed, 1) || 1));
       if (!(t >= start && t < start + len)) continue;
       const local = t - start;
       const clip = { ...o };
-      out.push({ overlay: true, clip, progress: local / len, duration: len, srcTime: entrySourceTime(clip, local) });
+      out.push({ overlay: true, track, clip, progress: local / len, duration: len, srcTime: entrySourceTime(clip, local) });
     }
     return out;
   }
 
-  /** 给活动镜头分配视频元素：同一素材出现两次时第二个用 slot 1 */
+  /** 给活动镜头分配视频元素：同一素材同时出现多次时按序分配独立 slot，并预载图片画布背景 */
   function bindEntries(project, active) {
     const assets = project.assets || {};
     const slots = new Map();
-    const out = [];
+    const keep = new Set();
+    const plan = [];
+    const bgSeen = new Set();
     const ovs = overlayEntries(project, active.time);
     for (const entry of [active.out, active.in, ...ovs]) {
       if (!entry) continue;
       if (!entry.overlay) entry.srcTime = entrySourceTime(entry.clip, num(entry.progress) * num(entry.duration), entry.srcTime);
       const asset = assets[entry.clip.assetId];
-      if (!asset) continue;
-      if (STILL_KINDS.has(asset.kind)) {
-        out.push({ entry, asset, image: ensureImage(asset) });
-      } else if (isVideoAsset(asset)) {
-        const slot = slots.get(asset.id) || 0;
-        slots.set(asset.id, slot + 1);
-        out.push({ entry, asset, video: ensureVideo(asset, Math.min(1, slot)) });
+      if (asset) {
+        if (STILL_KINDS.has(asset.kind)) {
+          plan.push({ entry, asset, kind: 'image' });
+        } else if (isVideoAsset(asset)) {
+          const slot = slots.get(asset.id) || 0;
+          slots.set(asset.id, slot + 1);
+          keep.add(`${asset.id}#${slot}`);
+          plan.push({ entry, asset, kind: 'video', slot });
+        }
+      }
+      if (!entry.overlay && entry.clip && entry.clip.canvas && entry.clip.canvas.type === 'image' && entry.clip.canvas.value) {
+        const bgId = entry.clip.canvas.value;
+        if (!bgSeen.has(bgId)) {
+          bgSeen.add(bgId);
+          const bgAsset = assets[bgId];
+          if (bgAsset && bgAsset.path && (STILL_KINDS.has(bgAsset.kind) || !bgAsset.kind)) {
+            plan.push({ entry, asset: bgAsset, kind: 'image', bg: true });
+          }
+        }
+      }
+    }
+    const out = [];
+    for (const item of plan) {
+      if (item.kind === 'image') {
+        out.push({ entry: item.entry, asset: item.asset, image: ensureImage(item.asset) });
+      } else {
+        out.push({ entry: item.entry, asset: item.asset, video: ensureVideo(item.asset, item.slot, keep) });
       }
     }
     return out;
@@ -650,7 +713,7 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
           const drift = Math.abs(el.currentTime - b.entry.srcTime);
           if ((el.paused && drift > 0.08) || drift > DRIFT * pr) issueSeek(rec, b.entry.srcTime);
         }
-        setGain(rec, el, clip.muted ? 0 : clipGain(b.entry, b.asset, active, master));
+        setGain(rec, el, clipGain(project, b.entry, b.asset, active, master));
         if (el.paused) playSafe(el);
         // 主轨正放常速片段：记下「源时间 ↔ 时间线时间」的对应，供 clockTime() 读视频的实际时钟
         if (b.entry === active.in && !active.out && !curved && !b.entry.overlay) {
@@ -684,8 +747,10 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
         const asset = assets[target.item.clip.assetId];
         if (asset && STILL_KINDS.has(asset.kind)) ensureImage(asset);
         else if (isVideoAsset(asset)) {
-          const sameAsCurrent = bound.some((b) => b.video && b.asset.id === asset.id);
-          const rec = ensureVideo(asset, sameAsCurrent ? 1 : 0);
+          const usedSlots = new Set(bound.filter((b) => b.video && b.asset.id === asset.id).map((b) => b.video.slot));
+          let preheatSlot = 0;
+          while (usedSlots.has(preheatSlot)) preheatSlot += 1;
+          const rec = ensureVideo(asset, preheatSlot, used);
           if (rec && !used.has(rec)) {
             used.add(rec);
             if (!rec.el.paused) rec.el.pause();
@@ -749,9 +814,8 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
     let liveDiff = Infinity;
     let held = null;
     let heldDiff = Infinity;
-    for (let slot = 0; slot < 2; slot += 1) {
-      const rec = videos.get(`${asset.id}#${slot}`);
-      if (!rec || rec.path !== pathOf(asset) || rec.error) continue;
+    for (const rec of videos.values()) {
+      if (rec.assetId !== asset.id || rec.path !== pathOf(asset) || rec.error) continue;
       const el = rec.el;
       if (el.readyState >= 2 && (!el.seeking || !rec.hold)) {
         const diff = Math.abs(el.currentTime - t);
@@ -798,9 +862,8 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
       return info;
     }
     let since = Infinity;
-    for (let slot = 0; slot < 2; slot += 1) {
-      const rec = videos.get(`${asset.id}#${slot}`);
-      if (!rec || rec.path !== pathOf(asset)) continue;
+    for (const rec of videos.values()) {
+      if (rec.assetId !== asset.id || rec.path !== pathOf(asset)) continue;
       if (rec.everFramed) info.framed = true;
       if (rec.error && !info.error) info.error = rec.error;
       since = Math.min(since, num(rec.createdAt, now));
@@ -816,8 +879,10 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
       const rec = images.get(asset.id);
       return rec ? rec.error : null;
     }
-    const rec = videos.get(`${asset.id}#0`);
-    return rec ? rec.error : null;
+    for (const rec of videos.values()) {
+      if (rec.assetId === asset.id && rec.error) return rec.error;
+    }
+    return null;
   }
 
   function dispose() {
@@ -825,7 +890,7 @@ export function createMediaPool({ mediaUrl, useProxy = true } = {}) {
     disposed = true;
     mainClock = null;
     for (const rec of videos.values()) releaseVideo(rec);
-    for (const rec of audios.values()) release(rec.el);
+    for (const rec of audios.values()) releaseAudio(rec);
     videos.clear();
     audios.clear();
     for (const rec of images.values()) {

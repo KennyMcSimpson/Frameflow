@@ -1,5 +1,5 @@
 // 检查器共享小组件：可折叠分组、实时预览 + 一步历史提交、数字/文字/颜色输入、可直接输入数值的滑杆。
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import useStore from '../../store.js';
 import { applyOps } from '../../../engine/ops.js';
 import { Icon } from '../../components/ui.jsx';
@@ -74,13 +74,23 @@ export function InspSection({ id, title, icon, children, actions, defaultOpen = 
   const toggle = () => setOpen((o) => { writePref('insp.open.' + id, !o); return !o; });
   return (
     <section className={'insp-sec' + (open ? ' open' : '')}>
-      <header className="insp-sec-head" onClick={toggle} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }} aria-expanded={open}>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />
-        {icon && <Icon name={icon} size={13} />}
-        <span className="insp-sec-title">{title}</span>
-        {badge && <span className="insp-sec-badge">{badge}</span>}
-        <span className="grow" />
-        {actions && <span className="insp-sec-actions" onClick={(e) => e.stopPropagation()}>{actions}</span>}
+      <header className="insp-sec-head">
+        <button
+          type="button"
+          className="insp-sec-toggle"
+          onClick={toggle}
+          aria-expanded={open}
+          style={{
+            flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6,
+            padding: 0, border: 0, background: 'transparent', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer',
+          }}
+        >
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />
+          {icon && <Icon name={icon} size={13} />}
+          <span className="insp-sec-title">{title}</span>
+          {badge && <span className="insp-sec-badge">{badge}</span>}
+        </button>
+        {actions && <span className="insp-sec-actions">{actions}</span>}
       </header>
       {open && <div className="insp-sec-body">{children}</div>}
     </section>
@@ -97,8 +107,6 @@ export function InspRow({ label, children, hint }) {
   );
 }
 
-let numSeq = 0;
-
 /**
  * 数字输入：回车/失焦提交，Esc 复原；↑↓ 微调（Shift 十倍步长）并立即生效，按住连调只算一步撤销。
  * 能识别「1:05.5」「1分30秒」「１２」「120%」等写法；超出范围自动夹到范围内。
@@ -109,8 +117,8 @@ export function NumField({ value, min = -Infinity, max = Infinity, step = 0.1, o
   const [draft, setDraft] = useState(fmt(value));
   const focused = useRef(false);
   const cancelled = useRef(false);
-  const mergeKey = useRef('');
-  if (!mergeKey.current) { numSeq += 1; mergeKey.current = 'insp:num:' + numSeq; }
+  const numId = useId();
+  const mergeKey = 'insp:num:' + numId;
   useEffect(() => { if (!focused.current) setDraft(fmt(value)); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   const read = (text) => {
     const n = (parse || (suffix === '秒' ? parseSeconds : parseNum))(text);
@@ -156,7 +164,7 @@ export function NumField({ value, min = -Infinity, max = Infinity, step = 0.1, o
             const n = read(String(draft));
             const v = nudge(n == null ? Number(value) || 0 : n, e.key === 'ArrowUp' ? 1 : -1, step, e.shiftKey, min, max);
             setDraft(fmt(v));
-            if (!nearlyEqual(v, Number(value), 1e-6)) onCommit(v, mergeKey.current);
+            if (!nearlyEqual(v, Number(value), 1e-6)) onCommit(v, mergeKey);
           }
         }}
       />
@@ -269,21 +277,35 @@ export const KF = pick('keyframes.js');
 export const CAPTIONS = pick('captions.js');
 export const PRESETS = pick('presets.js');
 
+const UNSUPPORTED_OP_RE = /未知操作|不支持的操作/;
+function isUnsupportedOpResult(r) {
+  return !!(r && r.ok === false && Array.isArray(r.errors) && r.errors.length > 0
+    && r.errors.every((e) => UNSUPPORTED_OP_RE.test(String(e || ''))));
+}
+
 /**
  * 统一提交一个 op：优先 store.apply(op,{label,mergeKey})，其次 store.commit。
- * 若引擎尚未支持该 op（返回失败），用 fallback(project)=>project 直接改数据兜底。
+ * 仅当引擎明确报错「未知/不支持的操作」时才走 fallback 兜底；轨道锁、片段锁、定格变速限制或参数校验失败一律原样拒绝。
  */
 export function runOp(op, label, { mergeKey, fallback, silent } = {}) {
   const st = useStore.getState();
-  if (!st.project) return { ok: false };
+  if (!st.project) return { ok: false, applied: [], errors: ['没有打开的项目'] };
+  const quiet = !!fallback || !!silent;
   let r = null;
   try {
     r = typeof st.apply === 'function'
-      ? st.apply(op, { label, mergeKey, silent: !!fallback || silent })
-      : st.commit([op], label, { mergeKey, silent: !!fallback || silent });
-  } catch { r = { ok: false }; }
-  if ((!r || r.ok === false) && fallback) r = st.commit(fallback, label, { mergeKey });
-  return r || { ok: false };
+      ? st.apply(op, { label, mergeKey, silent: quiet })
+      : st.commit([op], label, { mergeKey, silent: quiet });
+  } catch (e) {
+    r = { ok: false, applied: [], errors: [(e && e.message) || '操作失败'] };
+  }
+  if (fallback && isUnsupportedOpResult(r)) {
+    return st.commit(fallback, label, { mergeKey, silent });
+  }
+  if (r && r.ok === false && fallback && !silent) {
+    st.toast(`未修改：${(r.errors || []).join('；') || '操作无效'}`, 'error');
+  }
+  return r || { ok: false, applied: [], errors: ['操作无效'] };
 }
 
 /** 兜底：给主轨/画中画/音频/文字的某一项打补丁 */
@@ -467,9 +489,13 @@ export function InspSlider({
   const gesture = useRef(null); // 一次连续调整：{ from: 调整前的值, cancelled: 已按 Esc 撤回 }
   const cur = useRef(Number(value) || 0); // 最新值（松手时读取）
   const pointer = useRef(false); // 鼠标按着滑杆
+  const pointerCleanup = useRef(null);
   const editing = useRef(null); // 输入中：{ from, previewed: 用 ↑↓ 预览过 }
   const valueBtn = useRef(null);
   const refocus = useRef(false);
+  useEffect(() => () => {
+    if (pointerCleanup.current) { pointerCleanup.current(); pointerCleanup.current = null; }
+  }, []);
   useEffect(() => {
     if (!gesture.current && !editing.current) { setLocal(value); cur.current = Number(value) || 0; }
   }, [value]);
@@ -528,14 +554,20 @@ export function InspSlider({
   };
   const onPointerDown = (e) => {
     if (disabled || (e.button != null && e.button !== 0)) return;
+    if (pointerCleanup.current) { pointerCleanup.current(); pointerCleanup.current = null; }
     pointer.current = true;
     begin();
-    const up = () => {
+    const cleanup = () => {
       window.removeEventListener('pointerup', up, true);
       window.removeEventListener('pointercancel', up, true);
       pointer.current = false;
+      pointerCleanup.current = null;
+    };
+    const up = () => {
+      cleanup();
       end();
     };
+    pointerCleanup.current = cleanup;
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
   };
@@ -731,14 +763,22 @@ export function ChoiceGrid({ options, value, onPick, disabled, cols = 3 }) {
   );
 }
 
-/** 提交一组 op（引擎不支持时 fallback 兜底），返回结果 */
-export function runOps(ops, label, { mergeKey, fallback } = {}) {
-  if (ops.length === 1) return runOp(ops[0], label, { mergeKey, fallback });
+/** 提交一组 op（仅当引擎明确报错未知/不支持的操作时走 fallback 兜底），返回结果 */
+export function runOps(ops, label, { mergeKey, fallback, silent } = {}) {
+  if (ops.length === 1) return runOp(ops[0], label, { mergeKey, fallback, silent });
   const st = useStore.getState();
+  if (!st.project) return { ok: false, applied: [], errors: ['没有打开的项目'] };
+  const quiet = !!fallback || !!silent;
   let r = null;
-  try { r = st.commit(ops, label, { mergeKey, silent: !!fallback }); } catch { r = { ok: false }; }
-  if ((!r || r.ok === false) && fallback) r = st.commit(fallback, label, { mergeKey });
-  return r || { ok: false };
+  try { r = st.commit(ops, label, { mergeKey, silent: quiet }); }
+  catch (e) { r = { ok: false, applied: [], errors: [(e && e.message) || '操作失败'] }; }
+  if (fallback && isUnsupportedOpResult(r)) {
+    return st.commit(fallback, label, { mergeKey, silent });
+  }
+  if (r && r.ok === false && fallback && !silent) {
+    st.toast(`未修改：${(r.errors || []).join('；') || '操作无效'}`, 'error');
+  }
+  return r || { ok: false, applied: [], errors: ['操作无效'] };
 }
 
 /**

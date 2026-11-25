@@ -7,6 +7,13 @@ import {
 
 const cache = new Map();
 const lookCache = new Map();
+let grainPatternCache = new WeakMap();
+
+export function releasePostCache() {
+  cache.clear();
+  lookCache.clear();
+  grainPatternCache = new WeakMap();
+}
 
 /** 胶片颗粒：256² 灰度噪声，均值为中灰（overlay 混合时不改变整体亮度） */
 function grainTile() {
@@ -319,7 +326,11 @@ export function grade(ctx, w, h, e, p, opts = {}) {
     ctx.save();
     ctx.globalCompositeOperation = 'overlay';
     ctx.globalAlpha = 0.055 + night * 0.035;
-    const pat = ctx.createPattern(t, 'repeat');
+    let pat = grainPatternCache.get(ctx);
+    if (pat === undefined) {
+      pat = ctx.createPattern(t, 'repeat');
+      grainPatternCache.set(ctx, pat);
+    }
     if (pat) {
       ctx.translate(-ox, -oy);
       ctx.scale(scale, scale);

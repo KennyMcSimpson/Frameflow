@@ -24,7 +24,7 @@ export function act(name, fallback, ...args) {
   return undefined;
 }
 
-export const fillShot = (id) => act('fillShotFootage', (sid) => actions.findShotFootage(sid, { replace: true }), id);
+export const fillShot = (id, opts = { replace: true }) => act('fillShotFootage', (sid, o) => actions.findShotFootage(sid, o), id, opts);
 export const genShotVideo = (id) => act('generateShotVideo', () => useStore.getState().toast?.('AI 视频生成需要在设置里配置视频模型', 'warn'), id);
 
 /** 视频画面：静止显示首帧，悬停静音循环播放 */

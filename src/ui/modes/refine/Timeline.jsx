@@ -15,7 +15,6 @@ import OverlayTrack from './OverlayTrack.jsx';
 import VideoTrack from './VideoTrack.jsx';
 import TextTrack from './TextTrack.jsx';
 import AudioTrack from './AudioTrack.jsx';
-import ShortcutsDialog from '../../dialogs/ShortcutsDialog.jsx';
 import {
   startDrag, snapTime, snapSpan, dropSlot, slotTime, packRows, zoomToFit,
   clampNum, shotRangeLabel, overlayTrackList, overlayDuration, MIN_CLIP, ZOOM_MIN, ZOOM_MAX,
@@ -24,9 +23,10 @@ import { getLayout, getDuration, seek, pause } from './usePlayback.js';
 import {
   splitAtPlayhead, deleteClips, duplicateClips, toggleLockClips, clearEffects, focusClip, jumpToClip,
   addTextAtPlayhead, effectiveClipIds, updateText, removeText, updateAudio, removeAudio,
-  removeOverlay, freezeAtPlayhead, toggleReverse, toggleMirror, openInspectorTab, useTimelineUI,
+  removeOverlay, updateOverlay, freezeAtPlayhead, openInspectorTab, useTimelineUI,
 } from './timelineActions.js';
 import { kbdOf } from '../../shortcuts/registry.js';
+import { useShortcutsVersion } from '../../shortcuts/customKeys.js';
 
 const HEAD_W = 120;
 const RULER_H = 26;
@@ -56,11 +56,10 @@ export default function Timeline() {
   const selection = useStore((s) => s.selection);
   const range = useStore((s) => s.range);
   const focus = useStore((s) => s.focus);
-  const shortcutsOpen = useStore((s) => !!(s.dialogs && s.dialogs.shortcuts));
   const setTimelineZoom = useStore((s) => s.setTimelineZoom);
   const snapOn = useTimelineUI((s) => s.snap);
   const fitTick = useTimelineUI((s) => s.fitTick);
-  const textRowHints = useTimelineUI((s) => s.textRows);
+  const shortcutsVer = useShortcutsVersion();
 
   const [view, setView] = useState({ left: 0, width: 0 });
   const [menu, setMenu] = useState(null); // { x, y, kind, id }
@@ -87,18 +86,17 @@ export default function Timeline() {
   const LANE_PAD_R = 48;
   const laneW = Math.ceil(Math.max((duration + TAIL_SECONDS) * pps + LANE_PAD_R, laneViewW));
 
-  // 行号稳定（契约 C18）：优先用工程里保存的 row / 用户刚拖到的行，其次保持上一次所在的行
+  // 行号稳定（契约 C18）：优先用工程里保存的 row，其次保持上一次所在的行
   const textPack = useMemo(() => {
     const prev = prevTextRows.current;
-    const hints = textRowHints || {};
     const pack = packRows(texts.map((t) => {
       const start = Number(t.start) || 0;
-      const saved = Number.isInteger(t.row) ? t.row : hints[t.id];
+      const saved = Number.isInteger(t.row) ? t.row : undefined;
       return { id: t.id, start, end: start + (Number(t.duration) || 0), row: saved, prefRow: prev[t.id] };
     }), { maxRows: 8 });
     prevTextRows.current = pack.logical;
     return pack;
-  }, [texts, textRowHints]);
+  }, [texts]);
   const audioPack = useMemo(() => {
     const prev = prevAudioRows.current;
     const pack = packRows(audios.map((a) => {
@@ -534,6 +532,7 @@ export default function Timeline() {
   const menuItems = useMemo(() => {
     if (!menu || !project) return [];
     const st = useStore.getState();
+    const delKbd = kbdOf('rippleDelete');
     if (menu.kind === 'clip') {
       const item = layout.find((it) => it.clip.id === menu.id);
       if (!item) return [];
@@ -543,14 +542,34 @@ export default function Timeline() {
       const canSplit = ph > item.start + MIN_CLIP && ph < item.end - MIN_CLIP && !item.clip.locked;
       const chosen = project.tracks.video.filter((c) => ids.includes(c.id));
       const allLocked = chosen.length > 0 && chosen.every((c) => c.locked);
+      const isMirrored = (c) => (c.mirror ? !!c.mirror.h : !!(c.transform && c.transform.flipH));
+      const allReversed = chosen.length > 0 && chosen.every((c) => !!c.reverse);
+      const allMirrored = chosen.length > 0 && chosen.every(isMirrored);
+      const applyReverse = () => {
+        if (!chosen.length) return;
+        if (chosen.some((c) => c.locked)) { st.toast('所选镜头中有已锁定的，先解锁再操作', 'error'); return; }
+        const next = !allReversed;
+        const ops = chosen.map((c) => ({ type: 'setClipProps', id: c.id, patch: { reverse: next } }));
+        st.commit(ops, next ? (many ? `倒放 ${chosen.length} 个片段` : '倒放') : (many ? `取消倒放 ${chosen.length} 个片段` : '取消倒放'));
+      };
+      const applyMirror = () => {
+        if (!chosen.length) return;
+        if (chosen.some((c) => c.locked)) { st.toast('所选镜头中有已锁定的，先解锁再操作', 'error'); return; }
+        const next = !allMirrored;
+        const ops = chosen.map((c) => {
+          const m = { h: false, v: false, ...(c.mirror || {}) };
+          return { type: 'setClipProps', id: c.id, patch: { mirror: { ...m, h: next } } };
+        });
+        st.commit(ops, next ? (many ? `水平镜像 ${chosen.length} 个片段` : '水平镜像') : (many ? `取消水平镜像 ${chosen.length} 个片段` : '取消水平镜像'));
+      };
       return [
         { label: '分割于播放头', icon: 'scissors', kbd: kbdOf('split'), disabled: !canSplit, hint: canSplit ? '' : '先把播放头移到这个片段中间', onClick: () => splitAtPlayhead(menu.id) },
         { label: '定格当前帧（2 秒）', icon: 'clock', disabled: !canSplit, onClick: () => freezeAtPlayhead(2) },
         { label: many ? `复制 ${ids.length} 个片段` : '创建副本', icon: 'copy', kbd: kbdOf('duplicate'), onClick: () => duplicateClips(ids) },
-        { label: many ? `删除 ${ids.length} 个片段` : '删除片段', icon: 'trash', kbd: 'Del', danger: true, onClick: () => deleteClips(ids) },
+        { label: many ? `删除 ${ids.length} 个片段` : '删除片段', icon: 'trash', kbd: delKbd, danger: true, onClick: () => deleteClips(ids) },
         'sep',
-        { label: item.clip.reverse ? '取消倒放' : '倒放', icon: 'refresh', onClick: () => toggleReverse() },
-        { label: '水平镜像', icon: 'layers', onClick: () => toggleMirror() },
+        { label: allReversed ? '取消倒放' : '倒放', icon: 'refresh', onClick: applyReverse },
+        { label: allMirrored ? '取消水平镜像' : '水平镜像', icon: 'layers', onClick: applyMirror },
         { label: '裁剪画面…', icon: 'grid', onClick: () => openInspectorTab('crop') },
         { label: '变速…', icon: 'bolt', onClick: () => openInspectorTab('speed') },
         'sep',
@@ -566,8 +585,9 @@ export default function Timeline() {
       return [
         { label: '跳到开头', icon: 'skipBack', onClick: () => { pause(); seek(Number(o.start) || 0); } },
         { label: '裁剪画面…', icon: 'grid', onClick: () => openInspectorTab('crop') },
+        { label: o.locked ? '解锁' : '锁定', icon: o.locked ? 'unlock' : 'lock', onClick: () => updateOverlay(o.id, { locked: !o.locked }, o.locked ? '解锁画中画' : '锁定画中画') },
         'sep',
-        { label: '删除画中画', icon: 'trash', kbd: 'Del', danger: true, onClick: () => removeOverlay(o.id) },
+        { label: '删除画中画', icon: 'trash', kbd: delKbd, danger: true, onClick: () => removeOverlay(o.id) },
       ];
     }
     if (menu.kind === 'text') {
@@ -577,7 +597,7 @@ export default function Timeline() {
         { label: '跳到文字开头', icon: 'skipBack', onClick: () => { pause(); seek(Number(t.start) || 0); } },
         { label: t.locked ? '解锁' : '锁定', icon: t.locked ? 'unlock' : 'lock', onClick: () => updateText(t.id, { locked: !t.locked }, t.locked ? '解锁文字' : '锁定文字') },
         'sep',
-        { label: '删除文字', icon: 'trash', kbd: 'Del', danger: true, onClick: () => removeText(t.id) },
+        { label: '删除文字', icon: 'trash', kbd: delKbd, danger: true, onClick: () => removeText(t.id) },
       ];
     }
     if (menu.kind === 'audio') {
@@ -588,11 +608,11 @@ export default function Timeline() {
         { label: a.locked ? '解锁' : '锁定', icon: a.locked ? 'unlock' : 'lock', onClick: () => updateAudio(a.id, { locked: !a.locked }, a.locked ? '解锁音频' : '锁定音频') },
         { label: '清除音量关键帧', icon: 'refresh', disabled: !(a.volumeKeys && a.volumeKeys.length), onClick: () => updateAudio(a.id, { volumeKeys: [] }, '清除音量关键帧') },
         'sep',
-        { label: '删除音频', icon: 'trash', kbd: 'Del', danger: true, onClick: () => removeAudio(a.id) },
+        { label: '删除音频', icon: 'trash', kbd: delKbd, danger: true, onClick: () => removeAudio(a.id) },
       ];
     }
     return [];
-  }, [menu, project, layout, texts, audios, overlays]);
+  }, [menu, project, layout, texts, audios, overlays, shortcutsVer]);
 
   // ---------- 派生显示 ----------
   const rangeSameAsFocus = range && focus && Math.abs(range.start - focus.start) < 1e-6 && Math.abs(range.end - focus.end) < 1e-6;
@@ -767,7 +787,6 @@ export default function Timeline() {
       </div>
 
       {menu && menuItems.length > 0 && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
-      {shortcutsOpen && <ShortcutsDialog onClose={() => useStore.getState().closeDialog('shortcuts')} />}
     </div>
   );
 }

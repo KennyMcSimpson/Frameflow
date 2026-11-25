@@ -135,12 +135,17 @@ export function trimVideoClip(clip, asset, edge, dt) {
   const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
   const cin = Number(clip.in) || 0;
   const cout = Number.isFinite(Number(clip.out)) ? Number(clip.out) : cin + 5;
-  const still = isStillAsset(asset);
+  const isFreeze = !!(clip && clip.still);
+  const still = isFreeze || isStillAsset(asset);
   const d = Number(dt) || 0;
   if (still) {
-    const dur = (cout - cin) / speed;
+    const dur = isFreeze
+      ? (Number.isFinite(Number(clip.duration)) ? Number(clip.duration) : 2)
+      : (cout - cin) / speed;
     const nd = clampNum(dur + (edge === 'left' ? -d : d), MIN_CLIP, MAX_TIMELINE);
-    return { in: cin, out: round3(cin + nd * speed), duration: round3(nd), still: true };
+    const nextDur = round3(nd);
+    if (isFreeze) return { in: cin, out: cout, duration: nextDur, still: true };
+    return { in: cin, out: round3(cin + nd * speed), duration: nextDur, still: true };
   }
   const maxOut = asset && Number(asset.duration) > 0 ? Number(asset.duration) : Infinity;
   if (edge === 'left') {
@@ -447,6 +452,7 @@ export function nextEditPoint(points, t, dir = 1) {
 }
 
 function clipLen(clip) {
+  if (clip && clip.still) return Math.max(0, Number.isFinite(Number(clip.duration)) ? Number(clip.duration) : 2);
   const sp = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
   return Math.max(0, ((Number(clip.out) || 0) - (Number(clip.in) || 0)) / sp);
 }
@@ -460,9 +466,9 @@ export function rollLimits(leftClip, leftAsset, rightClip, rightAsset) {
   const rs = Number(rightClip.speed) > 0 ? Number(rightClip.speed) : 1;
   const lMin = -(clipLen(leftClip) - MIN_CLIP);
   const rMax = clipLen(rightClip) - MIN_CLIP;
-  const lRoom = isStillAsset(leftAsset) ? Infinity
+  const lRoom = (leftClip && leftClip.still) || isStillAsset(leftAsset) ? Infinity
     : Math.max(0, ((Number(leftAsset && leftAsset.duration) || Infinity) - (Number(leftClip.out) || 0)) / ls);
-  const rRoom = isStillAsset(rightAsset) ? Infinity : Math.max(0, (Number(rightClip.in) || 0) / rs);
+  const rRoom = (rightClip && rightClip.still) || isStillAsset(rightAsset) ? Infinity : Math.max(0, (Number(rightClip.in) || 0) / rs);
   return { min: round3(Math.max(lMin, -rRoom)), max: round3(Math.min(rMax, lRoom)) };
 }
 

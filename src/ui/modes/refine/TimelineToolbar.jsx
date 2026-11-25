@@ -2,6 +2,7 @@
 import React, { memo } from 'react';
 import { useStore } from '../../store.js';
 import { kbdOf } from '../../shortcuts/registry.js';
+import { useShortcutsVersion } from '../../shortcuts/customKeys.js';
 import { zoomToSlider, sliderToZoom } from './timelineUtils.js';
 import {
   splitAtPlayhead, rippleDeleteSelection, trimLeftAtPlayhead, trimRightAtPlayhead, freezeAtPlayhead,
@@ -57,17 +58,30 @@ export function ToolBtn({ icon, label, kbd, disabled, active, onClick, why }) {
 }
 
 function TimelineToolbar({ layout, duration, pps, hasSelection, onFit }) {
+  useShortcutsVersion();
   const canUndo = useStore((s) => s.past.length > 0);
   const canRedo = useStore((s) => s.future.length > 0);
-  const playhead = useStore((s) => s.playhead);
+  const playheadKey = useStore((s) => {
+    const t = s.playhead;
+    let u = '';
+    let a = '';
+    for (let i = 0; i < layout.length; i += 1) {
+      const it = layout[i];
+      if (!u && t > it.start && t < it.end) u = it.clip.id;
+      if (!a && t >= it.start && t < it.end) a = it.clip.id;
+      if (u && a) break;
+    }
+    return u + '|' + a;
+  });
   const clipIds = useStore((s) => s.selection.clipIds);
   const snap = useTimelineUI((s) => s.snap);
   const link = useTimelineUI((s) => s.link);
   const ui = useTimelineUI.getState();
 
   const has = layout.length > 0;
-  const under = layout.find((it) => playhead > it.start && playhead < it.end) || null;
-  const sel = layout.find((it) => (clipIds || []).includes(it.clip.id)) || layout.find((it) => playhead >= it.start && playhead < it.end) || null;
+  const [underId, atId] = playheadKey.split('|');
+  const under = underId ? layout.find((it) => it.clip.id === underId) || null : null;
+  const sel = layout.find((it) => (clipIds || []).includes(it.clip.id)) || (atId ? layout.find((it) => it.clip.id === atId) || null : null);
   const noClip = '先选中镜头或把播放头放在镜头上';
 
   return (
@@ -109,7 +123,7 @@ function TimelineToolbar({ layout, duration, pps, hasSelection, onFit }) {
         />
         <ToolBtn icon="zoomIn" label="放大" kbd={kbdOf('zoomIn')} onClick={() => zoomBy(1.4)} />
         <ToolBtn icon="fit" label="适配全片" kbd={kbdOf('zoomFit')} disabled={!(duration > 0)} why="时间线为空" onClick={onFit} />
-        <ToolBtn icon="keyboard" label="快捷键" kbd="?" onClick={() => useStore.getState().openDialog('shortcuts')} />
+        <ToolBtn icon="keyboard" label="快捷键" kbd={kbdOf('help')} onClick={() => useStore.getState().openDialog('shortcuts')} />
       </div>
     </div>
   );

@@ -225,7 +225,7 @@ const EDIT_SYSTEM = `你是「镜流 Frameflow」里的 AI 剪辑师兼调色师
 
 【字段对照】
 - setColor：exposure / contrast / saturation / temperature / tint / highlights / shadows 取 -1..1，vignette 取 0..1；relative=true 表示在当前值上增减（「再暖一点」用 relative=true，temperature=0.15）。小幅调整用 0.05–0.2，明显调整用 0.2–0.4，避免超过 0.6。
-- setLook：look + lookStrength(0..1)。setMotion：preset + intensity(0..1)。setTransform：scale(1..3)、offsetX、offsetY(-1..1)、rotation。
+- setLook：look + lookStrength(0..1)。setMotion：preset + intensity(0..1)。setTransform：scale(0.05..5)、offsetX、offsetY(-2..2)、rotation。
 - setFx：fxBlur / fxGrain / fxGlow / fxSharpen / fxLetterbox / fxChromatic / fxVhs / fxFlash 取 0..1（relative 同上）。
 - setTransition：transitionType + transitionDuration(0.1..2 秒)，作用于目标镜头的「入场」转场；第 1 镜只能用 cut / dip-black / dip-white / crossfade。
 - setCaption：captionText / captionStyle / captionPosition。setSpeed：speed(0.1..10)。setVolume：volume(0..2) / mute / fadeIn / fadeOut。
@@ -404,7 +404,31 @@ export function parseEditResponse(data, project, opts = {}) {
   const reasons = [];
   let invalid = 0;
   let lockTouched = false;
-  const unlocked = new Set(); // 本批中先被 unlock 的片段编号
+  const locked = new Set(clips.filter((c) => c.locked).map((c) => c.id)); // 跟踪本批实时锁定状态（初始锁定 + lock/unlock），按稳定 clip.id 追踪
+  const clipIndexById = new Map(clips.map((c, i) => [c.id, i + 1]));
+  const removed = new Set(); // 跟踪本批已删片段的稳定 clip.id，避免后续集合目标引用已删片段
+  let cachedLayout = null;
+  const expandTargetIds = (target) => {
+    if (!target) return null;
+    if (target.mode === 'all') return clips.map((c) => c.id).filter((id) => !removed.has(id));
+    if (target.mode === 'selected') {
+      return Array.isArray(opts.selection)
+        ? clips.filter((c) => opts.selection.includes(c.id) && !removed.has(c.id)).map((c) => c.id)
+        : null;
+    }
+    if (target.mode === 'range') {
+      if (!opts.range || !(Number(opts.range.end) > Number(opts.range.start))) return null;
+      if (!cachedLayout) cachedLayout = simpleLayout(project);
+      return cachedLayout
+        .filter((it) => it.end > opts.range.start && it.start < opts.range.end)
+        .map((it) => it.clip.id)
+        .filter((id) => !removed.has(id));
+    }
+    if (target.mode === 'index') return target.indices.filter((n) => n >= 1 && n <= clips.length).map((n) => clips[n - 1].id);
+    if (target.mode === 'ids') return target.ids.filter((id) => clipIds.has(id));
+    return null;
+  };
+  const lockWarnNumbers = (ids) => ids.map((id) => clipIndexById.get(id)).filter(Boolean);
   for (const raw of (Array.isArray(d.ops) ? d.ops : [])) {
     if (ops.length >= 60) break;
     const op = normalizeAiOp(raw);
@@ -424,38 +448,41 @@ export function parseEditResponse(data, project, opts = {}) {
       if (!valid.length && !defer) { warnings.push('有操作指向了不存在的片段'); continue; }
       if (valid.length) t.ids = valid;
     }
-    // 锁定片段保护：把集合目标展开成编号，剔除锁定片段，避免整批失败
-    if (op.type !== 'unlock' && (t.mode === 'all' || t.mode === 'selected' || t.mode === 'range') && clips.some((c) => c.locked)) {
-      let idxs = null;
-      if (t.mode === 'all') idxs = clips.map((_, i) => i + 1);
-      else if (t.mode === 'selected' && Array.isArray(opts.selection)) idxs = clips.map((c, i) => (opts.selection.includes(c.id) ? i + 1 : 0)).filter(Boolean);
-      else if (t.mode === 'range' && opts.range && Number(opts.range.end) > Number(opts.range.start)) {
-        idxs = simpleLayout(project).filter((it) => it.end > opts.range.start && it.start < opts.range.end).map((it) => it.index + 1);
-      }
-      if (idxs) {
-        const free = idxs.filter((n) => !clips[n - 1].locked || unlocked.has(n));
-        if (free.length !== idxs.length) {
+    // 锁定片段保护：把集合目标展开成稳定 clip.id，剔除锁定片段，避免前序增删/分割移位后误伤锁定片段
+    if (op.type !== 'unlock' && (t.mode === 'all' || t.mode === 'selected' || t.mode === 'range') && locked.size > 0) {
+      const targetIds = expandTargetIds(t);
+      if (targetIds) {
+        const free = targetIds.filter((id) => !locked.has(id));
+        if (free.length !== targetIds.length) {
           lockTouched = true;
-          warnings.push(`第 ${idxs.filter((n) => !free.includes(n)).join('、')} 个片段已锁定，已跳过对它的修改`);
+          const skipped = lockWarnNumbers(targetIds.filter((id) => !free.includes(id)));
+          warnings.push(`第 ${skipped.join('、')} 个片段已锁定，已跳过对它的修改`);
           if (!free.length) continue;
-          op.target = { mode: 'index', indices: free, ids: [] };
+          op.target = { mode: 'ids', indices: [], ids: free };
         }
       }
     }
     if (op.type === 'unlock') {
-      const idxs = t.mode === 'index' ? t.indices : t.mode === 'ids' ? t.ids.map((id) => clips.findIndex((c) => c.id === id) + 1) : [];
-      idxs.forEach((n) => unlocked.add(n));
+      const targetIds = expandTargetIds(t) || [];
+      targetIds.forEach((id) => locked.delete(id));
     } else if (op.target.mode === 'index' || op.target.mode === 'ids') {
-      const tt = op.target;
-      const idxs = tt.mode === 'index' ? tt.indices : tt.ids.map((id) => clips.findIndex((c) => c.id === id) + 1);
-      const hit = idxs.filter((n) => clips[n - 1] && clips[n - 1].locked && !unlocked.has(n));
+      const targetIds = expandTargetIds(op.target) || [];
+      const hit = targetIds.filter((id) => locked.has(id));
       if (hit.length) {
         lockTouched = true;
-        warnings.push(`第 ${hit.join('、')} 个片段已锁定，已跳过对它的修改`);
-        const rest = idxs.filter((n) => n >= 1 && clips[n - 1] && !hit.includes(n));
+        warnings.push(`第 ${lockWarnNumbers(hit).join('、')} 个片段已锁定，已跳过对它的修改`);
+        const rest = targetIds.filter((id) => !hit.includes(id));
         if (!rest.length) continue;
-        op.target = { mode: 'index', indices: rest, ids: [] };
+        if (op.target.mode === 'ids') {
+          op.target = { mode: 'ids', indices: [], ids: rest };
+        } else {
+          op.target = { mode: 'index', indices: lockWarnNumbers(rest), ids: [] };
+        }
       }
+    }
+    if (op.type === 'lock') {
+      const targetIds = expandTargetIds(op.target) || [];
+      targetIds.forEach((id) => locked.add(id));
     }
     // 素材引用：库里的素材随这次修改一起加入项目
     if (op.type === 'insertAsset' || op.type === 'replaceAsset' || op.type === 'addAudio') {
@@ -471,6 +498,14 @@ export function parseEditResponse(data, project, opts = {}) {
       if (clips.length === 0 && !NO_CLIP_TYPES.has(op.type)) {
         warnings.push('时间线上还没有片段，已跳过针对片段的修改');
         continue;
+      }
+    }
+    if (op.type === 'delete' || op.type === 'rippleDelete') {
+      const delIds = (Array.isArray(op.ids) && op.ids.length ? op.ids.filter((id) => clipIds.has(id)) : (expandTargetIds(op.target) || []))
+        .filter((id) => !removed.has(id) && !locked.has(id));
+      const aliveCount = clips.length - removed.size;
+      if (delIds.length > 0 && delIds.length < aliveCount) {
+        delIds.forEach((id) => removed.add(id));
       }
     }
     ops.push(op);
@@ -634,13 +669,33 @@ export function mergeRepair(items, diagnostics, data, { project, libraryAssets }
   const allowed = new Set((Array.isArray(diagnostics) ? diagnostics : []).map((g) => g.opIndex));
   const libMap = new Map((Array.isArray(libraryAssets) ? libraryAssets : []).filter((a) => a && a.id).map((a) => [a.id, a]));
   const assetMap = (project && project.assets) || {};
+  const toInt = (v) => {
+    if (typeof v === 'number') return Number.isInteger(v) ? v : null;
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v);
+      return Number.isInteger(n) ? n : null;
+    }
+    return null;
+  };
+  const rawFixes = (Array.isArray(d.fixes) ? d.fixes : [])
+    .map((f) => (f && typeof f === 'object' ? { f, n: toInt(f.opIndex) } : null))
+    .filter((x) => x && x.n != null);
+  // 整批先判定 0-based 还是 1-based，避免第 0/1 步同时出错时逐条映射撞车
+  const rawIndices = rawFixes.map((x) => x.n);
+  const allZero = rawIndices.length > 0 && rawIndices.every((n) => allowed.has(n));
+  const allOne = rawIndices.length > 0 && rawIndices.every((n) => allowed.has(n - 1));
+  let zeroBased = false;
+  if (allZero && (rawIndices.includes(0) || !allOne)) {
+    zeroBased = true;
+  } else if (!allOne && rawIndices.length > 0) {
+    const zeroHits = rawIndices.filter((n) => allowed.has(n)).length;
+    const oneHits = rawIndices.filter((n) => allowed.has(n - 1)).length;
+    if (rawIndices.includes(0) ? zeroHits >= oneHits : zeroHits > oneHits) zeroBased = true;
+  }
   const fixes = new Map();
-  for (const f of (Array.isArray(d.fixes) ? d.fixes : [])) {
-    if (!f || typeof f !== 'object') continue;
-    // 编号容错：模型按「第 N 步」从 1 开始写
-    const n = Number(f.opIndex);
-    if (!Number.isInteger(n)) continue;
-    const idx = allowed.has(n - 1) ? n - 1 : (allowed.has(n) ? n : -1);
+  for (const { f, n } of rawFixes) {
+    const candidate = zeroBased ? n : n - 1;
+    const idx = allowed.has(candidate) ? candidate : -1;
     if (idx < 0 || fixes.has(idx)) continue;
     const ops = (Array.isArray(f.ops) ? f.ops : []).map((raw) => ({ op: normalizeAiOp(raw), reason: text(raw && raw.reason, 120) })).filter((x) => x.op).slice(0, 5);
     fixes.set(idx, { ops, why: text(f.why, 160) });

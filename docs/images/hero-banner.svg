@@ -1,0 +1,233 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="Frameflow Studio — AI-Native Desktop Video Creation, Multi-Track Refinement &amp; Shot Breakdown Workstation">
+  <defs>
+    <linearGradient id="heroBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d0f12"/>
+      <stop offset="55%" stop-color="#11151c"/>
+      <stop offset="100%" stop-color="#141820"/>
+    </linearGradient>
+    <linearGradient id="accentText" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#d4ff3f"/>
+      <stop offset="100%" stop-color="#a3e635"/>
+    </linearGradient>
+    <linearGradient id="iconBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1d2026"/>
+      <stop offset="100%" stop-color="#0b0c0e"/>
+    </linearGradient>
+    <linearGradient id="iconFlow1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9fe870"/>
+      <stop offset="55%" stop-color="#c8e250"/>
+      <stop offset="100%" stop-color="#f1f7b0"/>
+    </linearGradient>
+    <linearGradient id="iconFlow2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#b18cff" stop-opacity="0.92"/>
+      <stop offset="100%" stop-color="#5fb3ff" stop-opacity="0.92"/>
+    </linearGradient>
+    <radialGradient id="limeGlow" cx="0.14" cy="0.38" r="0.34">
+      <stop offset="0%" stop-color="#c8e250" stop-opacity="0.22"/>
+      <stop offset="60%" stop-color="#a3e635" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#0d0f12" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aiGlow" cx="0.86" cy="0.24" r="0.36">
+      <stop offset="0%" stop-color="#9d8cff" stop-opacity="0.16"/>
+      <stop offset="65%" stop-color="#5fb3ff" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#141820" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="pillBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b2029"/>
+      <stop offset="100%" stop-color="#141820"/>
+    </linearGradient>
+    <clipPath id="cardClip">
+      <rect x="4" y="4" width="1192" height="332" rx="22"/>
+    </clipPath>
+    <pattern id="timelineGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- Outer rounded obsidian card (renders cleanly on both GitHub Light and Dark themes) -->
+  <g clip-path="url(#cardClip)">
+    <rect x="4" y="4" width="1192" height="332" fill="url(#heroBg)"/>
+    <rect x="4" y="4" width="1192" height="332" fill="url(#timelineGrid)"/>
+    <rect x="4" y="4" width="1192" height="332" fill="url(#limeGlow)"/>
+    <rect x="4" y="4" width="1192" height="332" fill="url(#aiGlow)"/>
+
+    <!-- Subtle top filmstrip sprocket track motif -->
+    <g fill="#ffffff" fill-opacity="0.045">
+      <rect x="36" y="14" width="16" height="6" rx="2"/>
+      <rect x="76" y="14" width="16" height="6" rx="2"/>
+      <rect x="116" y="14" width="16" height="6" rx="2"/>
+      <rect x="156" y="14" width="16" height="6" rx="2"/>
+      <rect x="196" y="14" width="16" height="6" rx="2"/>
+      <rect x="236" y="14" width="16" height="6" rx="2"/>
+      <rect x="276" y="14" width="16" height="6" rx="2"/>
+      <rect x="316" y="14" width="16" height="6" rx="2"/>
+      <rect x="356" y="14" width="16" height="6" rx="2"/>
+      <rect x="396" y="14" width="16" height="6" rx="2"/>
+      <rect x="436" y="14" width="16" height="6" rx="2"/>
+      <rect x="476" y="14" width="16" height="6" rx="2"/>
+      <rect x="516" y="14" width="16" height="6" rx="2"/>
+      <rect x="556" y="14" width="16" height="6" rx="2"/>
+      <rect x="596" y="14" width="16" height="6" rx="2"/>
+      <rect x="636" y="14" width="16" height="6" rx="2"/>
+      <rect x="676" y="14" width="16" height="6" rx="2"/>
+      <rect x="716" y="14" width="16" height="6" rx="2"/>
+      <rect x="756" y="14" width="16" height="6" rx="2"/>
+      <rect x="796" y="14" width="16" height="6" rx="2"/>
+      <rect x="836" y="14" width="16" height="6" rx="2"/>
+      <rect x="876" y="14" width="16" height="6" rx="2"/>
+      <rect x="916" y="14" width="16" height="6" rx="2"/>
+      <rect x="956" y="14" width="16" height="6" rx="2"/>
+      <rect x="996" y="14" width="16" height="6" rx="2"/>
+      <rect x="1036" y="14" width="16" height="6" rx="2"/>
+      <rect x="1076" y="14" width="16" height="6" rx="2"/>
+      <rect x="1116" y="14" width="16" height="6" rx="2"/>
+      <rect x="1156" y="14" width="16" height="6" rx="2"/>
+    </g>
+
+    <!-- Subtle horizontal studio divider above pills -->
+    <line x1="44" y1="242" x2="1156" y2="242" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1"/>
+  </g>
+
+  <!-- Crisp border around card -->
+  <rect x="4" y="4" width="1192" height="332" rx="22" fill="none" stroke="#2c3340" stroke-width="1.5"/>
+  <rect x="5.5" y="5.5" width="1189" height="329" rx="20.5" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1"/>
+
+  <!-- Geometric Frameflow Icon Mark (matching build/icon.svg) -->
+  <g transform="translate(52, 66) scale(0.255)">
+    <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#iconBg)"/>
+    <rect x="16.5" y="16.5" width="479" height="479" rx="111.5" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="4"/>
+    <circle cx="256" cy="256" r="150" fill="none" stroke="#2c313b" stroke-width="22"/>
+    <g fill="none" stroke="#3b414d" stroke-width="10" stroke-linecap="round">
+      <path d="M256 128 L318 238"/>
+      <path d="M366 192 L294 290"/>
+      <path d="M370 320 L250 322"/>
+      <path d="M256 384 L194 274"/>
+      <path d="M146 320 L218 222"/>
+      <path d="M142 192 L262 190"/>
+    </g>
+    <path d="M70 300 C 150 220, 220 360, 300 270 S 420 190, 450 220" fill="none" stroke="url(#iconFlow2)" stroke-width="20" stroke-linecap="round" opacity="0.88"/>
+    <path d="M62 250 C 150 160, 214 330, 298 236 S 418 150, 452 176" fill="none" stroke="url(#iconFlow1)" stroke-width="40" stroke-linecap="round"/>
+    <g fill="#15170b" opacity="0.58">
+      <rect x="150" y="214" width="14" height="10" rx="3" transform="rotate(38 157 219)"/>
+      <rect x="232" y="262" width="14" height="10" rx="3" transform="rotate(-20 239 267)"/>
+      <rect x="322" y="214" width="14" height="10" rx="3" transform="rotate(-38 329 219)"/>
+      <rect x="398" y="176" width="14" height="10" rx="3" transform="rotate(-18 405 181)"/>
+    </g>
+  </g>
+
+  <!-- Title & Subtitle Copy -->
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <!-- Eyebrow label -->
+    <circle cx="216" cy="77" r="4" fill="#d4ff3f"/>
+    <text x="228" y="81" font-size="11.5" font-weight="600" letter-spacing="1.7" fill="#c8e250" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">LOCAL-FIRST DESKTOP WORKSTATION · WINDOWS x64</text>
+
+    <!-- Brand Wordmark -->
+    <text x="212" y="138" font-size="50" font-weight="800" letter-spacing="-1.2" fill="#f3f5f8">Frameflow <tspan fill="url(#accentText)">Studio</tspan></text>
+
+    <!-- Two-line Subtitle (generous clearance from right timeline widget) -->
+    <text x="214" y="176" font-size="17" font-weight="500" fill="#c4c9d4">AI-Native Desktop Video Creation, Multi-Track Refinement</text>
+    <text x="214" y="201" font-size="17" font-weight="500" fill="#9ea5b4">&amp; Shot Breakdown Workstation</text>
+  </g>
+
+  <!-- Decorative Studio Mini-Timeline Widget (Right) -->
+  <g transform="translate(838, 48)">
+    <rect x="0" y="0" width="318" height="166" rx="14" fill="#101319" stroke="#28303e" stroke-width="1.2"/>
+    <!-- Widget top bar -->
+    <line x1="1" y1="30" x2="317" y2="30" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+    <circle cx="16" cy="15" r="3.5" fill="#f2555a" opacity="0.75"/>
+    <circle cx="28" cy="15" r="3.5" fill="#f0b44c" opacity="0.75"/>
+    <circle cx="40" cy="15" r="3.5" fill="#4cc38a" opacity="0.75"/>
+    <text x="58" y="19" font-size="10.5" font-weight="600" fill="#8e95a3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">TIMELINE · 1080p 30fps</text>
+    <text x="252" y="19" font-size="10.5" font-weight="700" fill="#d4ff3f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">00:14:22</text>
+
+    <!-- Ruler ticks -->
+    <g stroke="#ffffff" stroke-opacity="0.16" stroke-width="1">
+      <line x1="46" y1="38" x2="46" y2="44"/>
+      <line x1="90" y1="38" x2="90" y2="46"/>
+      <line x1="134" y1="38" x2="134" y2="44"/>
+      <line x1="178" y1="38" x2="178" y2="46"/>
+      <line x1="222" y1="38" x2="222" y2="44"/>
+      <line x1="266" y1="38" x2="266" y2="46"/>
+      <line x1="304" y1="38" x2="304" y2="44"/>
+    </g>
+
+    <!-- Track Labels -->
+    <g font-size="9.5" font-weight="700" fill="#7c8494" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+      <text x="14" y="69">V1</text>
+      <text x="14" y="101">FX</text>
+      <text x="14" y="133">A1</text>
+    </g>
+
+    <!-- V1 Main Video Clips -->
+    <rect x="44" y="54" width="76" height="22" rx="5" fill="#2d485c" stroke="#5a7f99" stroke-width="1"/>
+    <rect x="124" y="54" width="92" height="22" rx="5" fill="#3b5d76" stroke="#d4ff3f" stroke-width="1.2"/>
+    <rect x="220" y="54" width="84" height="22" rx="5" fill="#2d485c" stroke="#5a7f99" stroke-width="1"/>
+
+    <!-- FX / Overlay & Captions -->
+    <rect x="64" y="86" width="88" height="22" rx="5" fill="#463b73" stroke="#9d8cff" stroke-width="1"/>
+    <rect x="176" y="86" width="106" height="22" rx="5" fill="#5e4730" stroke="#f0b44c" stroke-width="1"/>
+
+    <!-- A1 Audio Track + Waveform bars -->
+    <rect x="44" y="118" width="260" height="24" rx="5" fill="#1d4436" stroke="#4cc38a" stroke-width="1"/>
+    <g fill="#4cc38a" opacity="0.72">
+      <rect x="54" y="128" width="3" height="6" rx="1"/>
+      <rect x="62" y="124" width="3" height="12" rx="1"/>
+      <rect x="70" y="122" width="3" height="16" rx="1"/>
+      <rect x="78" y="126" width="3" height="8" rx="1"/>
+      <rect x="86" y="123" width="3" height="14" rx="1"/>
+      <rect x="94" y="127" width="3" height="7" rx="1"/>
+      <rect x="102" y="121" width="3" height="18" rx="1"/>
+      <rect x="110" y="125" width="3" height="10" rx="1"/>
+      <rect x="118" y="127" width="3" height="6" rx="1"/>
+      <rect x="126" y="122" width="3" height="16" rx="1"/>
+      <rect x="134" y="124" width="3" height="12" rx="1"/>
+      <rect x="142" y="120" width="3" height="19" rx="1"/>
+      <rect x="150" y="125" width="3" height="10" rx="1"/>
+      <rect x="158" y="123" width="3" height="14" rx="1"/>
+      <rect x="166" y="127" width="3" height="7" rx="1"/>
+      <rect x="174" y="121" width="3" height="17" rx="1"/>
+      <rect x="182" y="124" width="3" height="12" rx="1"/>
+      <rect x="190" y="126" width="3" height="8" rx="1"/>
+      <rect x="198" y="122" width="3" height="15" rx="1"/>
+      <rect x="206" y="125" width="3" height="10" rx="1"/>
+      <rect x="214" y="120" width="3" height="18" rx="1"/>
+      <rect x="222" y="124" width="3" height="12" rx="1"/>
+      <rect x="230" y="127" width="3" height="7" rx="1"/>
+      <rect x="238" y="123" width="3" height="14" rx="1"/>
+      <rect x="246" y="126" width="3" height="8" rx="1"/>
+      <rect x="254" y="122" width="3" height="16" rx="1"/>
+      <rect x="262" y="125" width="3" height="10" rx="1"/>
+      <rect x="270" y="127" width="3" height="6" rx="1"/>
+      <rect x="278" y="123" width="3" height="14" rx="1"/>
+      <rect x="286" y="126" width="3" height="8" rx="1"/>
+      <rect x="294" y="128" width="3" height="5" rx="1"/>
+    </g>
+
+    <!-- Playhead -->
+    <polygon points="164,34 172,34 168,42" fill="#d4ff3f"/>
+    <line x1="168" y1="42" x2="168" y2="154" stroke="#d4ff3f" stroke-width="1.6"/>
+  </g>
+
+  <!-- 4 Capability Pills (Mathematically spaced across x=44..1156) -->
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12.5" font-weight="600">
+    <!-- Pill 1: Storyboard & AI Director -->
+    <rect x="44" y="264" width="220" height="44" rx="22" fill="url(#pillBg)" stroke="#c8e250" stroke-opacity="0.38" stroke-width="1.2"/>
+    <circle cx="66" cy="286" r="4.5" fill="#d4ff3f"/>
+    <text x="80" y="290.5" fill="#edf0f5">Storyboard &amp; AI Director</text>
+
+    <!-- Pill 2: Multi-Track NLE Timeline -->
+    <rect x="278" y="264" width="220" height="44" rx="22" fill="url(#pillBg)" stroke="#6cb2ff" stroke-opacity="0.38" stroke-width="1.2"/>
+    <circle cx="300" cy="286" r="4.5" fill="#6cb2ff"/>
+    <text x="314" y="290.5" fill="#edf0f5">Multi-Track NLE Timeline</text>
+
+    <!-- Pill 3: Shot Breakdown & Technique Library -->
+    <rect x="512" y="264" width="296" height="44" rx="22" fill="url(#pillBg)" stroke="#9d8cff" stroke-opacity="0.42" stroke-width="1.2"/>
+    <circle cx="534" cy="286" r="4.5" fill="#9d8cff"/>
+    <text x="548" y="290.5" fill="#edf0f5">Shot Breakdown &amp; Technique Library</text>
+
+    <!-- Pill 4: Hardware-Accelerated LGPL FFmpeg Export -->
+    <rect x="822" y="264" width="334" height="44" rx="22" fill="url(#pillBg)" stroke="#4cc38a" stroke-opacity="0.42" stroke-width="1.2"/>
+    <circle cx="844" cy="286" r="4.5" fill="#4cc38a"/>
+    <text x="858" y="290.5" fill="#edf0f5">Hardware-Accelerated LGPL FFmpeg Export</text>
+  </g>
+</svg>

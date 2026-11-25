@@ -152,8 +152,14 @@ export function projectSummary(project, { range, focus, maxClips = 60 } = {}) {
   const layout = layoutVideo(project);
   const total = projectDuration(project, layout);
   const lines = [];
+  const overlays = Array.isArray(project.overlays) ? project.overlays : [];
+  const markers = Array.isArray(project.markers) ? project.markers : [];
+  const extraCounts = [
+    overlays.length ? `画中画 ${overlays.length} 个` : '',
+    markers.length ? `标记 ${markers.length} 个` : '',
+  ].filter(Boolean);
   const aspectLabel = ASPECTS[settings.aspect] ? ASPECTS[settings.aspect].label : settings.aspect || '未知画幅';
-  lines.push(`项目「${project.name || '未命名项目'}」：${aspectLabel} ${settings.width || '?'}×${settings.height || '?'} ${settings.fps || 30}fps，总时长 ${total.toFixed(1)}s，主轨 ${layout.length} 镜`);
+  lines.push(`项目「${project.name || '未命名项目'}」：${aspectLabel} ${settings.width || '?'}×${settings.height || '?'} ${settings.fps || 30}fps，总时长 ${total.toFixed(1)}s，主轨 ${layout.length} 镜${extraCounts.length ? `，${extraCounts.join('，')}` : ''}`);
   lines.push(...briefLines(project.brief));
 
   const memory = project.memory || {};
@@ -226,7 +232,12 @@ export function projectSummary(project, { range, focus, maxClips = 60 } = {}) {
   // ---- 素材库 ----
   const assets = Object.values(project.assets || {}).filter(Boolean);
   if (assets.length) {
-    const usedIds = new Set([...layout.map((it) => it.clip.assetId), ...audios.map((a) => a.assetId)]);
+    const usedIds = new Set([
+      ...layout.map((it) => it.clip.assetId),
+      ...layout.map((it) => (it.clip.canvas && it.clip.canvas.type === 'image' ? it.clip.canvas.value : null)),
+      ...audios.map((a) => a.assetId),
+      ...overlays.map((o) => o && o.assetId),
+    ].filter(Boolean));
     const unused = assets.filter((a) => !usedIds.has(a.id));
     const counts = {};
     for (const a of assets) counts[a.kind] = (counts[a.kind] || 0) + 1;

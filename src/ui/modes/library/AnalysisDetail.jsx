@@ -4,7 +4,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../api.js';
 import useStore from '../../store.js';
 import { Icon, Button, Chip, Empty, Spinner, Tabs } from '../../components/ui.jsx';
-import { ANALYSIS_CATEGORY_LABELS, TECHNIQUE_CATEGORY_LABELS } from '../../../engine/model.js';
+import {
+  ANALYSIS_CATEGORY_LABELS, TECHNIQUE_CATEGORY_LABELS, SHOT_SIZE_LABELS, SHOT_MOVEMENT_LABELS,
+} from '../../../engine/model.js';
 import { BUILTIN_TECHNIQUES } from '../../../engine/builtinTechniques.js';
 import useLibrary from './libraryActions.js';
 import { RhythmChart, CurvesChart, ColorTimeline, PaletteSwatches } from './Charts.jsx';
@@ -146,7 +148,12 @@ function usePlayback(videoEl, rangeEndRef) {
 /** 导出 Markdown 报告：优先走浏览器下载（Electron 会弹出保存对话框），失败则复制到剪贴板 */
 function exportReport(analysis, techniques) {
   const toast = useStore.getState().toast;
-  const md = buildAnalysisReport(analysis, techniques, { category: ANALYSIS_CATEGORY_LABELS, techCategory: TECHNIQUE_CATEGORY_LABELS });
+  const md = buildAnalysisReport(analysis, techniques, {
+    category: ANALYSIS_CATEGORY_LABELS,
+    techCategory: TECHNIQUE_CATEGORY_LABELS,
+    shotSize: SHOT_SIZE_LABELS,
+    movement: SHOT_MOVEMENT_LABELS,
+  });
   try {
     const blob = new Blob(['﻿' + md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -363,12 +370,20 @@ const ShotTable = React.memo(function ShotTable({ shots, selIdx, currentIdx, onP
   if (!shots.length) return <div className="lib-card lib-strip-empty">没有检测到镜头切换。</div>;
   return (
     <div className="lib-card lib-card-flush">
-      <div className="lib-shot-table" role="table">
+      <div className="lib-shot-table" role="table" aria-label="镜头表">
         <div className="lib-shot-row head" role="row">
-          <span>#</span><span>画面</span><span>入点</span><span>时长</span><span>景别</span><span>运镜</span><span>用途 / 说明</span>
+          <span role="columnheader">#</span>
+          <span role="columnheader">画面</span>
+          <span role="columnheader">入点</span>
+          <span role="columnheader">时长</span>
+          <span role="columnheader">景别</span>
+          <span role="columnheader">运镜</span>
+          <span role="columnheader">用途 / 说明</span>
         </div>
         {shots.map((s, i) => {
           const ai = s.ai || {};
+          const sizeLabel = (ai.shotSize && SHOT_SIZE_LABELS[ai.shotSize]) || ai.shotSize || '—';
+          const moveLabel = (ai.movement && SHOT_MOVEMENT_LABELS[ai.movement]) || ai.movement || '—';
           return (
             <button
               key={i}
@@ -377,13 +392,13 @@ const ShotTable = React.memo(function ShotTable({ shots, selIdx, currentIdx, onP
               className={'lib-shot-row' + (i === selIdx ? ' selected' : '') + (i === currentIdx ? ' current' : '')}
               onClick={() => onPick(i)}
             >
-              <span className="mono">{i + 1}</span>
-              <span className="lib-shot-thumb">{s.thumb ? <img src={api.mediaUrl(s.thumb)} alt="" loading="lazy" draggable={false} /> : null}</span>
-              <span className="mono">{fmtClock(s.start)}</span>
-              <span className="mono">{fmtSec(s.duration)}</span>
-              <span>{ai.shotSize || '—'}</span>
-              <span>{ai.movement || '—'}</span>
-              <span className="lib-shot-desc">{ai.purpose || ai.notes || ai.subject || '—'}</span>
+              <span role="cell" className="mono">{i + 1}</span>
+              <span role="cell" className="lib-shot-thumb">{s.thumb ? <img src={api.mediaUrl(s.thumb)} alt="" loading="lazy" draggable={false} /> : null}</span>
+              <span role="cell" className="mono">{fmtClock(s.start)}</span>
+              <span role="cell" className="mono">{fmtSec(s.duration)}</span>
+              <span role="cell">{sizeLabel}</span>
+              <span role="cell">{moveLabel}</span>
+              <span role="cell" className="lib-shot-desc">{ai.purpose || ai.notes || ai.subject || '—'}</span>
             </button>
           );
         })}

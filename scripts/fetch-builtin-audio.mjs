@@ -22,6 +22,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -205,7 +206,11 @@ async function download(url, dest) {
   let lastErr = null;
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
-      const res = await fetch(url, { headers: { 'User-Agent': 'Frameflow-build-script' }, redirect: 'follow' });
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Frameflow-build-script' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000),
+      });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(part));
       fs.renameSync(part, dest);
@@ -281,69 +286,96 @@ export function manifestItem(kind, src, duration) {
   return { ...base, author: '镜流 Frameflow' };
 }
 
+function resolveBinaries() {
+  const vendorFfmpeg = path.join(BIN_DIR, `ffmpeg${EXE}`);
+  const vendorFfprobe = path.join(BIN_DIR, `ffprobe${EXE}`);
+  if (fs.existsSync(vendorFfmpeg) && fs.existsSync(vendorFfprobe)) {
+    return { ffmpeg: vendorFfmpeg, ffprobe: vendorFfprobe };
+  }
+  const req = createRequire(import.meta.url);
+  let ffmpeg = fs.existsSync(vendorFfmpeg) ? vendorFfmpeg : null;
+  let ffprobe = fs.existsSync(vendorFfprobe) ? vendorFfprobe : null;
+  if (!ffmpeg) {
+    try {
+      const p = req('ffmpeg-static');
+      if (p && fs.existsSync(p)) ffmpeg = p;
+    } catch {}
+  }
+  if (!ffprobe) {
+    try {
+      const p = req('ffprobe-static')?.path;
+      if (p && fs.existsSync(p)) ffprobe = p;
+    } catch {}
+  }
+  if (!ffmpeg || !ffprobe) {
+    throw new Error('缺少 ffmpeg / ffprobe：未找到 vendor/ffmpeg/bin 下的二进制，且无法回退到 ffmpeg-static / ffprobe-static（请先运行 npm run fetch:ffmpeg 或 npm install）');
+  }
+  return { ffmpeg, ffprobe };
+}
+
 async function main() {
   const argOf = (n) => (process.argv.find((a) => a.startsWith(`--${n}=`)) || '').slice(n.length + 3);
   const flag = (n) => process.argv.includes(`--${n}`);
-  const ffmpeg = path.join(BIN_DIR, `ffmpeg${EXE}`);
-  const ffprobe = path.join(BIN_DIR, `ffprobe${EXE}`);
-  if (!fs.existsSync(ffmpeg) || !fs.existsSync(ffprobe)) throw new Error('缺少 vendor/ffmpeg/bin 下的 ffmpeg，请先运行 npm run fetch:ffmpeg');
+  const { ffmpeg, ffprobe } = resolveBinaries();
 
   const items = [];
   const sfxOnly = flag('sfx-only');
   let dl = null;
-  if (sfxOnly) {
-    // 只重做音效时保留已有的音乐条目
-    try {
-      const old = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'manifest.json'), 'utf8'));
-      for (const it of old.items || []) {
-        if (it.kind === 'music' && fs.existsSync(path.join(OUT_DIR, it.file))) items.push(it);
+  try {
+    if (sfxOnly) {
+      // 只重做音效时保留已有的音乐条目
+      try {
+        const old = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'manifest.json'), 'utf8'));
+        for (const it of old.items || []) {
+          if (it.kind === 'music' && fs.existsSync(path.join(OUT_DIR, it.file))) items.push(it);
+        }
+      } catch {}
+    } else {
+      dl = prepareDlDir(argOf('dl'));
+      console.log('下载目录：', dl.dir);
+      const fetched = [];
+      for (const t of TRACKS) {
+        const r = await fetchTrack(t, dl.dir);
+        console.log(`已核对 ${t.file}  sha256=${r.sha256}`);
+        fetched.push({ t, ...r });
       }
-    } catch {}
-  } else {
-    dl = prepareDlDir(argOf('dl'));
-    console.log('下载目录：', dl.dir);
-    const fetched = [];
-    for (const t of TRACKS) {
-      const r = await fetchTrack(t, dl.dir);
-      console.log(`已核对 ${t.file}  sha256=${r.sha256}`);
-      fetched.push({ t, ...r });
+      if (flag('print-hashes')) {
+        for (const f of fetched) console.log(`${f.t.id}\t${f.sha256}`);
+        return;
+      }
+      const unpinned = TRACKS.filter((t) => !t.sha256).map((t) => t.id);
+      if (unpinned.length) throw new Error(`以下曲目还没有固定 SHA-256：${unpinned.join(', ')}（先用 --print-hashes 取值写进 TRACKS）`);
+      fs.mkdirSync(OUT_DIR, { recursive: true });
+      for (const f of fetched) {
+        const dst = path.join(OUT_DIR, `${f.t.id}.m4a`);
+        encodeMusic(ffmpeg, f.t, f.dest, dst);
+        items.push(manifestItem('music', f.t, probeDuration(ffprobe, dst)));
+        console.log(`音乐  ${f.t.title}  →  ${path.basename(dst)}`);
+      }
     }
-    if (flag('print-hashes')) {
-      for (const f of fetched) console.log(`${f.t.id}\t${f.sha256}`);
-      return;
-    }
-    const unpinned = TRACKS.filter((t) => !t.sha256).map((t) => t.id);
-    if (unpinned.length) throw new Error(`以下曲目还没有固定 SHA-256：${unpinned.join(', ')}（先用 --print-hashes 取值写进 TRACKS）`);
+
     fs.mkdirSync(OUT_DIR, { recursive: true });
-    for (const f of fetched) {
-      const dst = path.join(OUT_DIR, `${f.t.id}.m4a`);
-      encodeMusic(ffmpeg, f.t, f.dest, dst);
-      items.push(manifestItem('music', f.t, probeDuration(ffprobe, dst)));
-      console.log(`音乐  ${f.t.title}  →  ${path.basename(dst)}`);
+    for (const s of SFX) {
+      const dst = path.join(OUT_DIR, `${s.id}.m4a`);
+      synthSfx(ffmpeg, s, dst);
+      items.push(manifestItem('sfx', s, probeDuration(ffprobe, dst)));
+      console.log(`音效  ${s.title}  →  ${path.basename(dst)}`);
     }
-  }
 
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-  for (const s of SFX) {
-    const dst = path.join(OUT_DIR, `${s.id}.m4a`);
-    synthSfx(ffmpeg, s, dst);
-    items.push(manifestItem('sfx', s, probeDuration(ffprobe, dst)));
-    console.log(`音效  ${s.title}  →  ${path.basename(dst)}`);
+    // 清掉清单之外的旧文件，再写清单（先写临时文件再改名）
+    const keep = new Set(items.map((it) => it.file));
+    for (const n of fs.readdirSync(OUT_DIR)) {
+      if (/\.m4a$/i.test(n) && !keep.has(n)) fs.rmSync(path.join(OUT_DIR, n), { force: true });
+    }
+    const manifest = { version: 1, items };
+    const tmp = path.join(OUT_DIR, 'manifest.json.tmp');
+    fs.writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, path.join(OUT_DIR, 'manifest.json'));
+    const bytes = items.reduce((n, it) => n + fs.statSync(path.join(OUT_DIR, it.file)).size, 0);
+    console.log(`完成：${items.filter((i) => i.kind === 'music').length} 首音乐，${items.filter((i) => i.kind === 'sfx').length} 个音效，共 ${(bytes / 1048576).toFixed(1)} MB`);
+  } finally {
+    if (dl && dl.temp && !flag('keep-dl')) fs.rmSync(dl.dir, { recursive: true, force: true });
   }
-
-  // 清掉清单之外的旧文件，再写清单（先写临时文件再改名）
-  const keep = new Set(items.map((it) => it.file));
-  for (const n of fs.readdirSync(OUT_DIR)) {
-    if (/\.m4a$/i.test(n) && !keep.has(n)) fs.rmSync(path.join(OUT_DIR, n), { force: true });
-  }
-  const manifest = { version: 1, items };
-  const tmp = path.join(OUT_DIR, 'manifest.json.tmp');
-  fs.writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  fs.renameSync(tmp, path.join(OUT_DIR, 'manifest.json'));
-  const bytes = items.reduce((n, it) => n + fs.statSync(path.join(OUT_DIR, it.file)).size, 0);
-  console.log(`完成：${items.filter((i) => i.kind === 'music').length} 首音乐，${items.filter((i) => i.kind === 'sfx').length} 个音效，共 ${(bytes / 1048576).toFixed(1)} MB`);
-
-  if (dl && dl.temp && !flag('keep-dl')) fs.rmSync(dl.dir, { recursive: true, force: true });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

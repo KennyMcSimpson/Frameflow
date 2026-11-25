@@ -218,7 +218,19 @@ export function normalizeOverlay(o, asset) {
   const maxSrc = asset && asset.kind === 'video' && Number(asset.duration) > 0 ? Number(asset.duration) : 3600;
   out.in = num(out.in, 0, Math.max(0, maxSrc - LIMITS.minClip), 0);
   out.out = num(out.out, out.in + LIMITS.minClip, maxSrc, Math.min(maxSrc, out.in + 4));
-  out.transform = { ...defaultTransform(), ...base.transform, ...(o && o.transform) };
+  const tr = o && isObj(o.transform) ? o.transform : {};
+  out.transform = {
+    scale: num(tr.scale, 0.05, 5, base.transform.scale),
+    x: num(tr.x, -2, 2, 0),
+    y: num(tr.y, -2, 2, 0),
+    rotation: num(tr.rotation, -360, 360, 0),
+    flipH: !!tr.flipH,
+  };
+  if (o && isObj(o.mirror)) out.mirror = { h: !!o.mirror.h, v: !!o.mirror.v };
+  if (o && 'fit' in o) out.fit = oneOf(o.fit, FIT_MODES, 'contain');
+  if (o && 'audioFadeIn' in o) out.audioFadeIn = num(o.audioFadeIn, 0, 30, 0);
+  if (o && 'audioFadeOut' in o) out.audioFadeOut = num(o.audioFadeOut, 0, 30, 0);
+  if (o && 'denoise' in o) out.denoise = !!o.denoise;
   out.opacity = num(out.opacity, 0, 1, 1);
   out.blend = oneOf(out.blend, BLEND_MODES, 'normal');
   out.mask = normMask(out.mask);
@@ -239,6 +251,15 @@ export function isCaptionText(t) {
 
 function normTextExtra(t) {
   const o = createTextClip(t);
+  o.start = num(o.start, 0, LIMITS.maxDuration, 0);
+  o.duration = num(o.duration, 0.1, LIMITS.maxDuration, 3);
+  o.x = num(o.x, 0, 1, 0.5);
+  o.y = num(o.y, 0, 1, 0.5);
+  o.size = num(o.size, 0.2, 5, 1);
+  o.text = typeof o.text === 'string' ? o.text.slice(0, 500) : (o.text == null ? '' : String(o.text).slice(0, 500));
+  o.preset = oneOf(o.preset, TEXT_PRESETS, 'title');
+  o.animation = oneOf(o.animation, TEXT_ANIMATIONS, 'fade');
+  o.locked = !!o.locked;
   o.group = o.group === 'caption' ? 'caption' : null;
   o.stroke = o.stroke && typeof o.stroke === 'object' ? { color: o.stroke.color || '#000000', width: num(o.stroke.width, 0, 20, 0) } : null;
   o.shadow = o.shadow && typeof o.shadow === 'object' ? o.shadow : (o.shadow === true ? { color: '#000000', blur: 6, x: 0, y: 2 } : null);
@@ -257,8 +278,17 @@ function normTextExtra(t) {
 }
 function normAudioExtra(a, asset) {
   const o = createAudioClip(asset, a);
+  const maxSrc = asset && Number.isFinite(Number(asset.duration)) && Number(asset.duration) > 0 ? Number(asset.duration) : 3600;
+  const minSpan = Math.min(0.05, maxSrc);
+  o.start = num(o.start, 0, LIMITS.maxDuration, 0);
+  o.in = num(o.in, 0, Math.max(0, maxSrc - minSpan), 0);
+  o.out = num(o.out, Math.min(maxSrc, o.in + minSpan), maxSrc, Math.min(maxSrc, o.in + 10));
+  o.volume = num(o.volume, 0, 2, 1);
+  o.fadeIn = num(o.fadeIn, 0, 30, 0.5);
+  o.fadeOut = num(o.fadeOut, 0, 30, 0.8);
+  o.locked = !!o.locked;
   o.volumeKeys = Array.isArray(o.volumeKeys)
-    ? o.volumeKeys.filter((k) => k && Number.isFinite(Number(k.t)) && Number.isFinite(Number(k.v))).map((k) => ({ t: Number(k.t), v: clamp(Number(k.v), 0, 2) })).sort((x, y) => x.t - y.t)
+    ? o.volumeKeys.filter((k) => k && Number.isFinite(Number(k.t)) && Number.isFinite(Number(k.v))).map((k) => ({ t: Math.max(0, Number(k.t)), v: clamp(Number(k.v), 0, 2) })).sort((x, y) => x.t - y.t)
     : [];
   o.denoise = !!o.denoise;
   o.muted = !!o.muted;
@@ -374,7 +404,11 @@ export function createPrevizSpec(partial = {}) {
 }
 
 function oneOf(v, list, dflt) { return list.includes(v) ? v : dflt; }
-function num(v, lo, hi, dflt) { const n = Number(v); return Number.isFinite(n) ? clamp(n, lo, hi) : dflt; }
+function num(v, lo, hi, dflt) {
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean') return dflt;
+  const n = Number(v);
+  return Number.isFinite(n) ? clamp(n, lo, hi) : dflt;
+}
 
 /** 规范化单个 Clip（缺字段补默认、越界夹紧） */
 export function normalizeClip(c, asset) {
@@ -388,9 +422,9 @@ export function normalizeClip(c, asset) {
   out.fx = { ...defaultFx(), ...(c && c.fx) };
   for (const k of FX_KEYS) out.fx[k] = num(out.fx[k], 0, 1, 0);
   out.transform = { ...defaultTransform(), ...(c && c.transform) };
-  out.transform.scale = num(out.transform.scale, 0.5, 3, 1);
-  out.transform.x = num(out.transform.x, -1, 1, 0);
-  out.transform.y = num(out.transform.y, -1, 1, 0);
+  out.transform.scale = num(out.transform.scale, 0.05, 5, 1);
+  out.transform.x = num(out.transform.x, -2, 2, 0);
+  out.transform.y = num(out.transform.y, -2, 2, 0);
   out.transform.rotation = num(out.transform.rotation, -180, 180, 0);
   out.transform.flipH = !!out.transform.flipH;
   out.motion = { preset: oneOf(c && c.motion && c.motion.preset, MOTIONS, 'none'), intensity: num(c && c.motion && c.motion.intensity, 0, 1, 0.5) };
@@ -404,6 +438,8 @@ export function normalizeClip(c, asset) {
   out.caption.position = oneOf(out.caption.position, ['bottom', 'center', 'top'], 'bottom');
   out.speed = num(out.speed, LIMITS.minSpeed, LIMITS.maxSpeed, 1);
   out.volume = num(out.volume, 0, 2, 1);
+  out.audioFadeIn = num(out.audioFadeIn, 0, 30, 0);
+  out.audioFadeOut = num(out.audioFadeOut, 0, 30, 0);
   out.mute = !!out.mute;
   out.locked = !!out.locked;
   // 读不到时长（duration<=0）的素材不设上限，否则入出点会被压成 0、片段消失
@@ -433,6 +469,7 @@ export function normalizeClip(c, asset) {
   // 旧字段 mute 与新字段 muted 同义，保持两者一致
   out.muted = c && c.muted !== undefined ? !!c.muted : out.mute;
   out.mute = out.muted;
+  if (c && 'denoise' in c) out.denoise = !!c.denoise;
   return out;
 }
 
@@ -472,12 +509,28 @@ export function normalizeProject(p, opts = {}) {
   out.settings.width = a.width; out.settings.height = a.height;
   out.settings.fps = num(out.settings.fps, 12, 60, 30);
 
-  // 素材：兼容数组写法；丢弃空记录
+  // 素材：兼容数组写法；丢弃空记录，清洗异常数值字段
   const rawAssets = Array.isArray(src.assets)
     ? Object.fromEntries(src.assets.filter((as) => isObj(as) && as.id).map((as) => [String(as.id), as]))
     : isObj(src.assets) ? src.assets : {};
   out.assets = {};
-  for (const [id, as] of Object.entries(rawAssets)) if (isObj(as)) out.assets[id] = createAsset({ ...as, id });
+  for (const [id, as] of Object.entries(rawAssets)) {
+    if (!isObj(as)) continue;
+    const asset = createAsset({ ...as, id });
+    const isStillKind = asset.kind === 'image' || asset.kind === 'sticker' || asset.kind === 'generated-image';
+    asset.duration = num(asset.duration, 0, 86400, isStillKind ? 0 : 5);
+    const rawW = asset.width === null || asset.width === '' || typeof asset.width === 'boolean' ? NaN : Number(asset.width);
+    const rawH = asset.height === null || asset.height === '' || typeof asset.height === 'boolean' ? NaN : Number(asset.height);
+    const rawFps = asset.fps === null || asset.fps === '' || typeof asset.fps === 'boolean' ? NaN : Number(asset.fps);
+    asset.width = asset.kind === 'audio'
+      ? Math.round(num(asset.width, 0, 16384, 0))
+      : (Number.isFinite(rawW) && rawW > 0 ? Math.round(clamp(rawW, 1, 16384)) : 1920);
+    asset.height = asset.kind === 'audio'
+      ? Math.round(num(asset.height, 0, 16384, 0))
+      : (Number.isFinite(rawH) && rawH > 0 ? Math.round(clamp(rawH, 1, 16384)) : 1080);
+    asset.fps = Number.isFinite(rawFps) && rawFps > 0 ? clamp(rawFps, 1, 240) : 30;
+    out.assets[id] = asset;
+  }
 
   const tracks = isObj(src.tracks) ? src.tracks : {};
   const video = arr(tracks.video);

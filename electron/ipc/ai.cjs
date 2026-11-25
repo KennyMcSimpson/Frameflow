@@ -11,6 +11,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { detectCodex, runCodex, _internals: codexInternals } = require('../lib/codex.cjs');
 const { run } = require('../lib/proc.cjs');
+const urlSafety = require('../lib/urlSafety.cjs');
 
 const { parseJsonLoose, normalizeUsage } = codexInternals;
 
@@ -166,9 +167,97 @@ function isCancel(err) {
 function normalizeBaseUrl(url) {
   let s = String(url || '').trim();
   if (!s) return 'https://api.openai.com/v1';
+  if (!/^https?:\/\/\S+$/i.test(s)) return '';
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+  } catch {
+    return '';
+  }
   s = s.replace(/\/+$/, '');
   s = s.replace(/\/(chat\/completions|images\/generations)$/i, '');
   return s;
+}
+
+const ALLOWED_LOCAL_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
+const LOCAL_IMAGE_MIME = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+};
+
+/** 校验本地图片路径：必须是允许的图片扩展名且为常规文件（软链目标扩展名亦须合法） */
+function isAllowedLocalImage(file) {
+  if (typeof file !== 'string' || !file.trim()) return false;
+  const ext = path.extname(file).toLowerCase();
+  if (!ALLOWED_LOCAL_IMAGE_EXTS.has(ext)) return false;
+  try {
+    const lst = fs.lstatSync(file);
+    if (lst.isSymbolicLink()) {
+      const real = fs.realpathSync(file);
+      if (!ALLOWED_LOCAL_IMAGE_EXTS.has(path.extname(real).toLowerCase())) return false;
+    }
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** 判断主机名/IP 是否指向本机、内网或链路本地地址（复用 urlSafety，防 SSRF） */
+const isPrivateIpOrHost = urlSafety.isPrivateHost;
+
+function originOf(url) {
+  try { return new URL(String(url || '')).origin; } catch { return ''; }
+}
+
+function normalizeOriginsList(allowedOrigins) {
+  return Array.isArray(allowedOrigins)
+    ? allowedOrigins.filter(Boolean)
+    : (allowedOrigins ? [allowedOrigins] : []);
+}
+
+function wrapImageUrlError(err) {
+  const isPrivate = err && err.code === 'UNSAFE_URL' && /本机或内网/.test(err.message || '');
+  const e = new Error(isPrivate
+    ? '图片服务返回的图片地址无效（不允许访问内网或本机地址）'
+    : '图片服务返回的图片地址无效');
+  if (err && err.code) e.code = err.code;
+  return e;
+}
+
+function assertSafeImageUrl(urlStr, allowedOrigins = [], opts) {
+  if (allowedOrigins && typeof allowedOrigins === 'object' && !Array.isArray(allowedOrigins)) {
+    opts = allowedOrigins;
+    allowedOrigins = opts.allowedOrigins || opts.allowedOrigin || [];
+  }
+  const origins = normalizeOriginsList(allowedOrigins);
+  const lookup = opts && typeof opts.lookup === 'function' ? opts.lookup : undefined;
+  if (lookup) {
+    return assertSafeImageUrlAsync(urlStr, origins, { lookup });
+  }
+  try {
+    return urlSafety.assertSafePublicUrl(String(urlStr || '').trim(), { allowedOrigins: origins }).toString();
+  } catch (err) {
+    throw wrapImageUrlError(err);
+  }
+}
+
+async function assertSafeImageUrlAsync(urlStr, allowedOrigins = [], opts) {
+  if (allowedOrigins && typeof allowedOrigins === 'object' && !Array.isArray(allowedOrigins)) {
+    opts = allowedOrigins;
+    allowedOrigins = opts.allowedOrigins || opts.allowedOrigin || [];
+  }
+  const origins = normalizeOriginsList(allowedOrigins);
+  const lookup = opts && typeof opts.lookup === 'function' ? opts.lookup : undefined;
+  try {
+    const u = await urlSafety.assertSafePublicUrlAsync(String(urlStr || '').trim(), { allowedOrigins: origins, lookup });
+    return u.toString();
+  } catch (err) {
+    throw wrapImageUrlError(err);
+  }
 }
 
 function schemaName(task) {
@@ -526,6 +615,134 @@ function sleep(ms, signal) {
   });
 }
 
+function linkSignals(signal, timeoutMs) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  return { combined, timeout };
+}
+
+async function readResponseCapped(res, maxBytes, signal) {
+  const tooLargeErr = () => { const e = new Error('生成的图片过大，无法保存'); e.tooLarge = true; return e; };
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        if (signal && signal.aborted) throw cancelledError();
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+        total += chunk.length;
+        if (total > maxBytes) {
+          try { await reader.cancel(); } catch {}
+          throw tooLargeErr();
+        }
+        chunks.push(chunk);
+      }
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+    return Buffer.concat(chunks, total);
+  }
+  if (res.body && typeof res.body[Symbol.asyncIterator] === 'function') {
+    const chunks = [];
+    let total = 0;
+    for await (const value of res.body) {
+      if (signal && signal.aborted) throw cancelledError();
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      total += chunk.length;
+      if (total > maxBytes) throw tooLargeErr();
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, total);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > maxBytes) throw tooLargeErr();
+  return buf;
+}
+
+/** 下载生成好的图片。地址是服务商给的临时链接：下载失败只重新下载（最多 3 次），不重新生成，免得再扣一次费 */
+async function downloadImage(url, signalOrOpts, maybeOpts) {
+  let signal;
+  let opts;
+  if (signalOrOpts && typeof signalOrOpts === 'object' && ('aborted' in signalOrOpts || typeof signalOrOpts.addEventListener === 'function')) {
+    signal = signalOrOpts;
+    opts = maybeOpts || {};
+  } else {
+    opts = (signalOrOpts && typeof signalOrOpts === 'object') ? signalOrOpts : (maybeOpts || {});
+    signal = opts.signal;
+  }
+  const {
+    allowedOrigin = '',
+    allowedOrigins = [],
+    fetchImpl,
+    fetch: fetchOpt,
+    sleepImpl,
+    lookup,
+  } = opts;
+  const origins = [...normalizeOriginsList(allowedOrigins), ...normalizeOriginsList(allowedOrigin)];
+  const rawFetch = typeof fetchImpl === 'function' ? fetchImpl : (typeof fetchOpt === 'function' ? fetchOpt : undefined);
+  const doFetch = rawFetch || globalThis.fetch;
+  const doSleep = typeof sleepImpl === 'function' ? sleepImpl : sleep;
+  const isMockFetch = typeof rawFetch === 'function' && rawFetch !== globalThis.fetch;
+  const checkUrl = (isMockFetch && !lookup)
+    ? (u, o) => assertSafeImageUrl(u, o)
+    : (u, o) => assertSafeImageUrlAsync(u, o, { lookup });
+  const initialUrl = await checkUrl(url, origins);
+  let lastErr = null;
+  for (let i = 0; i < IMAGE_DOWNLOAD_TRIES; i++) {
+    if (signal && signal.aborted) throw cancelledError();
+    if (i > 0) await doSleep(i === 1 ? 1500 : 4000, signal);
+    const { combined, timeout } = linkSignals(signal, IMAGE_DOWNLOAD_TIMEOUT_MS);
+    let res = null;
+    let curUrl = i === 0 ? initialUrl : await checkUrl(initialUrl, origins);
+    let hopErr = null;
+    for (let hop = 0; hop < 6; hop++) {
+      try {
+        res = await doFetch(curUrl, { signal: combined, redirect: 'manual' });
+      } catch (err) {
+        if (signal && signal.aborted) throw cancelledError();
+        hopErr = new Error(timeout.aborted ? '图片已生成，但下载超时：请检查网络后重试' : '图片已生成，但下载失败：请检查网络后重试');
+        res = null;
+        break;
+      }
+      if (res.url) await checkUrl(res.url, origins);
+      if (res.status >= 300 && res.status < 400) {
+        let loc = '';
+        try { loc = res.headers && res.headers.get && res.headers.get('location'); } catch {}
+        if (!loc) break;
+        try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+        if (hop === 5) throw new Error('图片下载重定向次数过多');
+        let nextUrl;
+        try { nextUrl = new URL(loc, curUrl).toString(); } catch { throw new Error('图片服务返回的图片地址无效'); }
+        curUrl = await checkUrl(nextUrl, origins);
+        continue;
+      }
+      break;
+    }
+    if (hopErr || !res) { lastErr = hopErr; continue; }
+    if (!res.ok) {
+      lastErr = new Error(`图片已生成，但下载失败（HTTP ${res.status}），请重试`);
+      // 链接失效或无权访问：再下也一样
+      if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw lastErr;
+      continue;
+    }
+    let len = 0;
+    try { len = Number(res.headers && res.headers.get && res.headers.get('content-length')) || 0; } catch {}
+    if (len > IMAGE_MAX_BYTES) throw new Error('生成的图片过大，无法保存');
+    try {
+      return await readResponseCapped(res, IMAGE_MAX_BYTES, combined);
+    } catch (err) {
+      if (signal && signal.aborted) throw cancelledError();
+      if (err && err.tooLarge) throw err;
+      lastErr = new Error(timeout.aborted ? '图片已生成，但下载超时：请检查网络后重试' : '图片已生成，但下载中断：请检查网络后重试');
+    }
+  }
+  throw lastErr || new Error('图片已生成，但下载失败，请重试');
+}
+
 module.exports = function register({ handle, ctx }) {
   // 联网与等待可由 ctx 注入（只给单测用：伪造响应、跳过退避等待），默认用全局 fetch
   const fetchFn = (...a) => (typeof ctx.fetch === 'function' ? ctx.fetch : globalThis.fetch)(...a);
@@ -656,7 +873,9 @@ module.exports = function register({ handle, ctx }) {
     if (want === 'openai') {
       const detail = openai.configured
         ? `OpenAI 兼容接口已配置（${openai.model}）`
-        : !openai.key ? '未填写 API Key：请在设置中填写 OpenAI 兼容接口的密钥' : '未填写模型名称：请在设置中填写模型';
+        : !openai.key ? '未填写 API Key：请在设置中填写 OpenAI 兼容接口的密钥'
+          : !openai.baseUrl ? '接口地址格式无效：请填写 http:// 或 https:// 开头的地址'
+            : '未填写模型名称：请在设置中填写模型';
       return { ...out, provider: 'openai', ready: openai.configured, model: openai.model, detail };
     }
     // auto
@@ -674,12 +893,6 @@ module.exports = function register({ handle, ctx }) {
   }
 
   // ───────────────────── OpenAI 兼容接口 ─────────────────────
-  function linkSignals(signal, timeoutMs) {
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    return { combined, timeout };
-  }
-
   function httpError(status, bodyText) {
     let detail = '';
     try {
@@ -739,6 +952,7 @@ module.exports = function register({ handle, ctx }) {
   }
 
   async function imageToDataUrl(file, signal) {
+    if (!isAllowedLocalImage(file)) throw new Error(`无法处理图片：${path.basename(String(file || ''))}`);
     const ffmpeg = ctx.paths && ctx.paths.ffmpeg;
     if (ffmpeg && fs.existsSync(ffmpeg)) {
       const out = path.join(tmpRoot(), `aiimg-${crypto.randomBytes(6).toString('hex')}.jpg`);
@@ -755,10 +969,13 @@ module.exports = function register({ handle, ctx }) {
         fsp.rm(out, { force: true }).catch(() => {});
       }
     }
-    // 兜底：直接读原图（仅常见格式）
+    // 兜底：直接读原图（仅允许的图片格式）
     const ext = path.extname(file).toLowerCase();
-    const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' }[ext];
+    const mime = LOCAL_IMAGE_MIME[ext];
     if (!mime) throw new Error(`无法处理图片：${path.basename(file)}`);
+    const st = await fsp.stat(file);
+    if (!st.isFile()) throw new Error(`无法处理图片：${path.basename(file)}`);
+    if (st.size > 15 * 1024 * 1024) throw new Error(`图片过大：${path.basename(file)}`);
     const buf = await fsp.readFile(file);
     if (buf.length > 15 * 1024 * 1024) throw new Error(`图片过大：${path.basename(file)}`);
     return `data:${mime};base64,${buf.toString('base64')}`;
@@ -768,7 +985,7 @@ module.exports = function register({ handle, ctx }) {
     const cfg = openaiConfig();
     if (!cfg.configured) throw new Error('OpenAI 兼容接口未配置：请在设置中填写 API Key 与模型');
     const phase = (k) => { if (onPhase) { try { onPhase(k); } catch {} } };
-    const imgs = (images || []).filter((p) => typeof p === 'string' && fs.existsSync(p));
+    const imgs = (images || []).filter(isAllowedLocalImage);
     const model = imgs.length && cfg.visionModel ? cfg.visionModel : cfg.model;
     const limit = Number(timeoutMs) > 0 ? Math.min(Number(timeoutMs), 600000) : OPENAI_TIMEOUT_MS;
     let userContent = String(prompt || '');
@@ -835,13 +1052,14 @@ module.exports = function register({ handle, ctx }) {
     }
     let usage = null;
     let attempts = 1;
+    const safeImages = Array.isArray(images) ? images.filter(isAllowedLocalImage) : [];
     const data = await runCodex({
       codexPath: state.codex.path,
       model: state.codexModel || undefined,
       system,
       prompt,
       schema,
-      images,
+      images: safeImages,
       timeoutMs,
       signal,
       tmpRoot: tmpRoot(),
@@ -1041,56 +1259,33 @@ module.exports = function register({ handle, ctx }) {
     const asp = imageAspect(aspect, size);
     if (st.provider === 'ark') {
       const r = await requestArkImage(st.ark, { prompt: text, aspect: asp, signal, onPhase, timeoutMs });
-      return { provider: 'ark', model: st.ark.model, aspect: asp, size: r.size, item: r.item };
+      return { provider: 'ark', model: st.ark.model, aspect: asp, size: r.size, item: r.item, baseUrl: st.ark.baseUrl };
     }
     const sz = openaiImageSize(size, asp);
     const result = await postJson(`${st.openai.baseUrl}/images/generations`, st.openai.key,
       { model: st.openai.imageModel, prompt: text, size: sz, n: 1 }, { signal, timeoutMs });
     const item = result && Array.isArray(result.data) ? result.data[0] : null;
     if (!item) throw new Error('图片服务没有返回图片');
-    return { provider: 'openai', model: st.openai.imageModel, aspect: asp, size: sz, item };
+    return { provider: 'openai', model: st.openai.imageModel, aspect: asp, size: sz, item, baseUrl: st.openai.baseUrl };
   }
 
-  /** 下载生成好的图片。地址是服务商给的临时链接：下载失败只重新下载（最多 3 次），不重新生成，免得再扣一次费 */
-  async function downloadImage(url, signal) {
-    if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('图片服务返回的图片地址无效');
-    let lastErr = null;
-    for (let i = 0; i < IMAGE_DOWNLOAD_TRIES; i++) {
-      if (signal && signal.aborted) throw cancelledError();
-      if (i > 0) await sleepFn(i === 1 ? 1500 : 4000, signal);
-      const { combined, timeout } = linkSignals(signal, IMAGE_DOWNLOAD_TIMEOUT_MS);
-      let res;
-      try {
-        res = await fetchFn(url, { signal: combined });
-      } catch (err) {
-        if (signal && signal.aborted) throw cancelledError();
-        lastErr = new Error(timeout.aborted ? '图片已生成，但下载超时：请检查网络后重试' : '图片已生成，但下载失败：请检查网络后重试');
-        continue;
-      }
-      if (!res.ok) {
-        lastErr = new Error(`图片已生成，但下载失败（HTTP ${res.status}），请重试`);
-        // 链接失效或无权访问：再下也一样
-        if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw lastErr;
-        continue;
-      }
-      let len = 0;
-      try { len = Number(res.headers && res.headers.get && res.headers.get('content-length')) || 0; } catch {}
-      if (len > IMAGE_MAX_BYTES) throw new Error('生成的图片过大，无法保存');
-      try {
-        return Buffer.from(await res.arrayBuffer());
-      } catch (err) {
-        if (signal && signal.aborted) throw cancelledError();
-        lastErr = new Error(timeout.aborted ? '图片已生成，但下载超时：请检查网络后重试' : '图片已生成，但下载中断：请检查网络后重试');
-      }
+  async function imageBytes(item, { signal, onPhase, allowedOrigin = '' } = {}) {
+    if (item && item.b64_json) {
+      const raw = String(item.b64_json);
+      if (raw.length > Math.ceil((IMAGE_MAX_BYTES * 4) / 3) + 16) throw new Error('生成的图片过大，无法保存');
+      return Buffer.from(raw, 'base64');
     }
-    throw lastErr || new Error('图片已生成，但下载失败，请重试');
-  }
-
-  async function imageBytes(item, { signal, onPhase } = {}) {
-    if (item && item.b64_json) return Buffer.from(String(item.b64_json), 'base64');
     if (item && item.url) {
       if (onPhase) { try { onPhase('download'); } catch {} }
-      return downloadImage(item.url, signal);
+      const customFetch = (typeof ctx.fetch === 'function' && ctx.fetch !== globalThis.fetch) ? ctx.fetch : undefined;
+      const customSleep = typeof ctx.sleep === 'function' ? ctx.sleep : undefined;
+      const customLookup = typeof ctx.lookup === 'function' ? ctx.lookup : undefined;
+      return downloadImage(item.url, signal, {
+        allowedOrigin,
+        fetchImpl: customFetch,
+        sleepImpl: customSleep,
+        lookup: customLookup,
+      });
     }
     throw new Error('图片服务返回的数据中没有图片');
   }
@@ -1130,7 +1325,7 @@ module.exports = function register({ handle, ctx }) {
       try {
         const out = await generateImage(st, { prompt, aspect, size, signal: job.signal, onPhase });
         job.throwIfCancelled();
-        const buf = await imageBytes(out.item, { signal: job.signal, onPhase });
+        const buf = await imageBytes(out.item, { signal: job.signal, onPhase, allowedOrigin: originOf(out.baseUrl) });
         job.throwIfCancelled();
         const saved = await saveImage(buf, dir, `${out.model}|${out.size}|${prompt}`);
         prog.event('done');
@@ -1165,7 +1360,7 @@ module.exports = function register({ handle, ctx }) {
     const t0 = Date.now();
     try {
       const out = await generateImage(st, { prompt: IMAGE_TEST_PROMPT, aspect: '16:9', signal: ac.signal, timeoutMs: IMAGE_TEST_TIMEOUT_MS });
-      const buf = await imageBytes(out.item, { signal: ac.signal });
+      const buf = await imageBytes(out.item, { signal: ac.signal, allowedOrigin: originOf(out.baseUrl) });
       // 只留最近一张测试图
       const dir = path.join(tmpRoot(), 'ai-image-test');
       await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -1195,4 +1390,5 @@ module.exports._internals = {
   // 出图
   ARK_BASE_URL, ARK_IMAGE_MODEL, ARK_IMAGE_SIZES, imageAspect, arkImageSizes, openaiImageSize, normalizeArkBaseUrl,
   pickImageProvider, noImageAIError, classifyArkImageError, arkImageError, arkResultError, sniffImage,
+  isAllowedLocalImage, isPrivateIpOrHost, assertSafeImageUrl, assertSafeImageUrlAsync, downloadImage,
 };

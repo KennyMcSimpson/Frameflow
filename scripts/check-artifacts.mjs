@@ -101,7 +101,7 @@ export async function inspect(dir) {
   check('安装包里没有 ffmpeg-static / ffprobe-static', !fs.existsSync(path.join(unpackedNm, 'ffmpeg-static')) && !fs.existsSync(path.join(unpackedNm, 'ffprobe-static')));
 
   // 许可与隐私
-  for (const rel of ['licenses/THIRD_PARTY_LICENSES.txt', 'licenses/privacy.txt', 'licenses/ffmpeg/LICENSE.txt', 'licenses/ffmpeg/SOURCE.txt']) {
+  for (const rel of ['licenses/THIRD_PARTY_LICENSES.txt', 'licenses/privacy.txt', 'licenses/ffmpeg/LICENSE.txt', 'licenses/ffmpeg/COPYING.GPLv3', 'licenses/ffmpeg/SOURCE.txt']) {
     check(`${rel} 存在`, fs.existsSync(path.join(resources, rel)));
   }
 
@@ -127,8 +127,13 @@ export async function inspect(dir) {
   check(`app.asar 条目数 ≤ ${LIMITS.asarEntries}`, entries.length <= LIMITS.asarEntries, String(entries.length));
 
   // 语言包与总体积
-  const locales = fs.readdirSync(path.join(dir, 'locales')).filter((n) => n.endsWith('.pak'));
-  check(`语言包 ≤ ${LIMITS.locales} 个`, locales.length <= LIMITS.locales, locales.join(', '));
+  const localesDir = path.join(dir, 'locales');
+  if (!fs.existsSync(localesDir) || !fs.statSync(localesDir).isDirectory()) {
+    check(`语言包 ≤ ${LIMITS.locales} 个`, false, `缺少目录：${localesDir}`);
+  } else {
+    const locales = fs.readdirSync(localesDir).filter((n) => n.endsWith('.pak'));
+    check(`语言包 ≤ ${LIMITS.locales} 个`, locales.length <= LIMITS.locales, locales.join(', '));
+  }
   if (fs.existsSync(ffDir)) {
     const ffBytes = dirBytes(ffDir);
     check(`resources/ffmpeg 体积 ≤ ${mb(LIMITS.ffmpegDirBytes)}`, ffBytes <= LIMITS.ffmpegDirBytes, mb(ffBytes));

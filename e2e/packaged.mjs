@@ -117,10 +117,15 @@ async function runSteps(page, { dataRoot }) {
   }
 
   const audio = await page.evaluate(() => window.ff.invoke('media:builtinAudio').catch((e) => ({ error: e.message })));
-  if (Array.isArray(audio)) step('内置音频清单', audio.length > 0 && audio.every((a) => a.path && a.title), `${audio.length} 条`);
-  else step('内置音频清单（接口未就绪，跳过）', true, audio?.error || '');
+  if (Array.isArray(audio)) {
+    const manifestPresent = fs.existsSync(path.join(RES, 'builtin-audio', 'manifest.json'));
+    const ok = (!manifestPresent || audio.length > 0) && audio.every((a) => a.path && a.title);
+    step('内置音频清单', ok, `${audio.length} 条`);
+  } else {
+    step('内置音频清单', false, audio?.error || '返回值不是数组');
+  }
 
-  for (const rel of ['licenses/THIRD_PARTY_LICENSES.txt', 'licenses/privacy.txt', 'licenses/ffmpeg/LICENSE.txt']) {
+  for (const rel of ['licenses/THIRD_PARTY_LICENSES.txt', 'licenses/privacy.txt', 'licenses/ffmpeg/LICENSE.txt', 'licenses/ffmpeg/SOURCE.txt']) {
     step(`${rel} 存在`, fs.existsSync(path.join(RES, rel)));
   }
 }

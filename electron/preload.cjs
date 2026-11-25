@@ -1,6 +1,6 @@
 'use strict';
 // 预加载脚本（沙箱模式）：只向页面暴露 window.ff 这一组受限接口，页面拿不到 ipcRenderer 和 Node。
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 
 // 页面可以订阅的主进程事件
 const EVENTS = new Set(['job:progress', 'job:done', 'job:error', 'app:flush', 'app:openFile', 'app:crashRecovered']);
@@ -56,7 +56,7 @@ contextBridge.exposeInMainWorld('ff', {
   asr: {
     status: () => invoke('asr:status'),
     transcribe: (payload) => invoke('asr:transcribe', payload),
-    installModel: () => invoke('asr:installModel'),
+    installModel: (payload) => invoke('asr:installModel', payload),
   },
   exportFrame: (payload) => invoke('export:frame', payload),
   on(event, cb) {
@@ -94,6 +94,12 @@ contextBridge.exposeInMainWorld('ff', {
   mediaUrl(absPath) {
     if (!absPath) return '';
     return 'ffmedia://local/' + encodeURIComponent(absPath);
+  },
+  setZoomFactor(factor) {
+    const n = Number(factor);
+    if (Number.isFinite(n) && n >= 0.5 && n <= 2 && webFrame && typeof webFrame.setZoomFactor === 'function') {
+      webFrame.setZoomFactor(n);
+    }
   },
   platform: process.platform,
 });

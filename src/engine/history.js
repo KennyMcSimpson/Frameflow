@@ -38,13 +38,14 @@ export function createHistory(limit = 100, { mergeWindow = MERGE_WINDOW_MS, cloc
     if (o.next !== undefined && sameState(state, o.next)) return 'noop';
     const t = Number.isFinite(o.time) ? o.time : clock();
     const top = past[past.length - 1];
-    future = [];
     if (top && o.mergeKey && top.mergeKey === o.mergeKey && t - top.time < mergeWindow) {
       // 合并：保留最早的旧状态，刷新时间与标签（连续拖动滑块只算一步）
+      future = [];
       past = [...past.slice(0, -1), { ...top, label, time: t }];
       return 'merged';
     }
     if (top && top.state === state) return 'same';
+    future = [];
     past = [...past, { state, label, mergeKey: o.mergeKey || null, time: t, selection: o.selection ?? null }].slice(-max);
     return 'pushed';
   }

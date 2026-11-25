@@ -161,6 +161,10 @@ export function makeCanvas(w, h) {
 
 export const scratchPool = new Map();
 
+export function releaseScratchPool() {
+  scratchPool.clear();
+}
+
 export function scratch(slot, w, h) {
   let s = scratchPool.get(slot);
   if (!s) {
@@ -175,5 +179,8 @@ export function scratch(slot, w, h) {
     s.ctx.setTransform(1, 0, 0, 1, 0, 0);
     s.ctx.clearRect(0, 0, w, h);
   }
+  s.ctx.globalAlpha = 1;
+  s.ctx.globalCompositeOperation = 'source-over';
+  if ('filter' in s.ctx) s.ctx.filter = 'none';
   return s;
 }

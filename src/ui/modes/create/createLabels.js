@@ -23,7 +23,10 @@ export const LIGHT_KEY_LABELS = { warm: '暖色', cool: '冷色', neutral: '中�
 export const LIGHT_MOODS = ['bright', 'soft', 'dramatic', 'night'];
 export const LIGHT_MOOD_LABELS = { bright: '明亮', soft: '柔和', dramatic: '戏剧感', night: '夜景' };
 
-export const SOURCE_LABELS = { bilibili: 'B站', youtube: 'YouTube', commons: 'Wikimedia Commons', pexels: 'Pexels', pixabay: 'Pixabay' };
+export const SOURCE_LABELS = {
+  bilibili: 'B站', youtube: 'YouTube', commons: 'Wikimedia Commons', pexels: 'Pexels', pixabay: 'Pixabay',
+  openverse: 'Openverse', archive: '互联网档案馆', nasa: 'NASA 影像库',
+};
 export const PROVIDER_LABELS = { codex: 'Codex', openai: 'API', local: '本地规则' };
 
 export const STATUS_META = {

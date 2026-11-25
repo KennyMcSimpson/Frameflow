@@ -110,16 +110,21 @@ async function clickAny(locators, timeout) {
   return true;
 }
 
-/** 软检查点：失败记 warning 并截一张 xx-fail，流程继续 */
-async function check(name, fn) {
+/** 检查点：核心检查点（01–09）失败记入 errors 触发非零退出；soft: true 时仅记 warning */
+async function check(name, fn, { soft = false } = {}) {
   const t0 = Date.now();
   try {
     const r = await fn();
     results.push({ name, ok: r !== false, ms: Date.now() - t0 });
-    if (r === false) warnings.push(`检查点未通过：${name}`);
+    if (r === false) {
+      const msg = `检查点未通过：${name}`;
+      if (soft) warnings.push(msg); else errors.push(msg);
+    }
   } catch (e) {
-    results.push({ name, ok: false, ms: Date.now() - t0, error: e.message.split('\n')[0] });
-    warnings.push(`检查点异常：${name}：${e.message.split('\n')[0]}`);
+    const detail = e.message.split('\n')[0];
+    results.push({ name, ok: false, ms: Date.now() - t0, error: detail });
+    const msg = `检查点异常：${name}：${detail}`;
+    if (soft) warnings.push(msg); else errors.push(msg);
   }
 }
 
@@ -192,7 +197,7 @@ try {
           media: q('.rf-media, [data-zone="media"], .media-panel'),
           preview: q('.rf-preview, [data-zone="preview"], video, canvas'),
           inspector: q('.rf-inspector, [data-zone="inspector"], .inspector'),
-          timeline: q('.rf-timeline, [data-zone="timeline"], .timeline, [data-clip-index]'),
+          timeline: q('.rf-timeline, [data-zone="timeline"], .timeline, .tl, [data-lane="video"]'),
         };
       });
       log('精修四区', JSON.stringify(zones));
@@ -200,7 +205,7 @@ try {
     });
 
     await check('04 选中片段属性', async () => {
-      const block = await firstVisible([win.locator('[data-clip-index="0"]'), win.locator('[data-clip-id]'), win.locator('.tl-clip')], 6000);
+      const block = await firstVisible([win.locator('[data-lane="video"] [data-clip-id]'), win.locator('[data-clip-id]'), win.locator('.tl-clip')], 6000);
       if (!block) throw new Error('时间线上没有片段');
       await block.click();
       await win.waitForTimeout(600);
@@ -226,15 +231,30 @@ try {
     });
 
     await check('05 播放', async () => {
+      await win.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+      const readPlayhead = () => win.evaluate(() => {
+        const timeEl = document.querySelector('.tl-head-time, .pv-time');
+        const headEl = document.querySelector('.tl-playhead');
+        return {
+          text: timeEl ? (timeEl.textContent || '').trim() : '',
+          x: headEl ? Math.round(headEl.getBoundingClientRect().x * 10) / 10 : null,
+        };
+      });
+      const before = await readPlayhead();
       await win.keyboard.press('Space');
       await win.waitForTimeout(1500);
       await win.keyboard.press('Space');
+      const after = await readPlayhead();
       await shot('05-refine-playing');
+      log('播放头', JSON.stringify({ before, after }));
+      const textMoved = !!(before.text && after.text && before.text !== after.text);
+      const xMoved = before.x != null && after.x != null && after.x > before.x + 1;
+      if (!textMoved && !xMoved) throw new Error(`按空格播放后播放头未移动（before=${JSON.stringify(before)}，after=${JSON.stringify(after)}）`);
       return true;
     });
 
     await check('05b 分割 / 定格 / 倒放', async () => {
-      const block = await firstVisible([win.locator('[data-clip-index="0"]'), win.locator('[data-clip-id]')], 3000);
+      const block = await firstVisible([win.locator('[data-lane="video"] [data-clip-id]'), win.locator('[data-clip-id]')], 3000);
       // 把播放头放到第一个片段中间
       if (block) {
         const bb = await block.boundingBox();
@@ -351,7 +371,7 @@ try {
     });
 
     await check('06 AI 助手抽屉', async () => {
-      const ok = await clickAny([byLabel('AI 助手'), byText('AI 助手'), byText('AI 精修'), win.locator('[data-tour="assistant"]')], 4000);
+      const ok = await clickAny([byLabel('AI 助手'), byText('AI 助手'), byText('AI 精修')], 4000);
       if (!ok) throw new Error('找不到 AI 助手入口');
       await win.waitForTimeout(500);
       const box = await firstVisible([win.locator('textarea.aie-input:visible'), win.locator('textarea:not(.insp-text):visible')], 3000);
@@ -384,14 +404,45 @@ try {
         if (!providers.some((p) => p.id === 'mock')) return { skip: '没有 mock provider' };
         const list = await ff.invoke('project:list');
         const projectId = list && list[0] && list[0].id;
+        let targetJobId = null;
+        const buffered = [];
+        let replay = () => {};
         const done = new Promise((resolve) => {
           const offs = [];
-          const fin = (v) => { offs.forEach((f) => f()); resolve(v); };
-          offs.push(ff.on('job:done', (d) => fin({ ok: true, kind: d.kind, asset: d.result && d.result.asset ? { name: d.result.asset.name, path: d.result.asset.path, source: d.result.asset.source } : null })));
-          offs.push(ff.on('job:error', (d) => fin({ ok: false, error: d.error })));
-          setTimeout(() => fin({ ok: false, error: 'timeout' }), 60000);
+          let settled = false;
+          let timer = null;
+          const fin = (v) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            offs.forEach((f) => f());
+            resolve(v);
+          };
+          const onDone = (d) => {
+            if (!d) return;
+            if (!targetJobId) { buffered.push({ ev: 'done', d }); return; }
+            if (d.jobId !== targetJobId) return;
+            fin({ ok: true, kind: d.kind, asset: d.result && d.result.asset ? { name: d.result.asset.name, path: d.result.asset.path, source: d.result.asset.source } : null });
+          };
+          const onErr = (d) => {
+            if (!d) return;
+            if (!targetJobId) { buffered.push({ ev: 'error', d }); return; }
+            if (d.jobId !== targetJobId) return;
+            fin({ ok: false, error: d.error });
+          };
+          offs.push(ff.on('job:done', onDone));
+          offs.push(ff.on('job:error', onErr));
+          timer = setTimeout(() => fin({ ok: false, error: 'timeout' }), 60000);
+          replay = () => {
+            for (const item of buffered) {
+              if (item.ev === 'done') onDone(item.d);
+              else onErr(item.d);
+            }
+          };
         });
         const { jobId } = await ff.videogen.generate({ projectId, provider: 'mock', prompt: '清晨咖啡店，咖啡师拉花特写，真人实拍', duration: 4, ratio: '16:9', res: '720p' });
+        targetJobId = jobId;
+        replay();
         return { jobId, ...(await done) };
       });
       log('videogen mock', JSON.stringify(r));

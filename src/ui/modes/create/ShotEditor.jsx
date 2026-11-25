@@ -75,11 +75,12 @@ function Preview({ shot, draft, aspect, source }) {
         shotSize={draft.shotSize} movement={draft.movement} watermark={false} style={{ width: '100%', height: '100%' }} />
     );
   } else body = <div className="cr-shot-empty"><Icon name="film" size={24} /></div>;
+  const page = asset && ((asset.stock && asset.stock.page) || (asset.source && asset.source.page));
   return (
     <div className="cr-insp-preview" style={style}>
       {body}
       <span className="cr-insp-source"><SourceDot kind={kind} withLabel /></span>
-      {asset && asset.source && asset.source.page && <span className="cr-insp-credit" title={asset.source.page}>{asset.credit || ''}</span>}
+      {page && <span className="cr-insp-credit" title={page}>{asset.credit || ''}</span>}
       {kind === 'none' && <span className="cr-insp-missing">还没有画面 · {shot.title}</span>}
     </div>
   );

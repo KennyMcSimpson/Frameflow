@@ -935,30 +935,58 @@ function beatsFromPcm(samples, rate = BEAT_RATE, hop = BEAT_HOP) {
   return { bpm: Math.round(bpm * 10) / 10, confidence: r3(tp.confidence), strength: r3(medStrength), beats };
 }
 
-/** ffmpeg 解码为 11025Hz 单声道 PCM（最长 maxSeconds 秒） */
-async function decodePcm(audioPath, { paths, ffmpeg, signal, maxSeconds = 900 } = {}) {
+const MAX_PCM_BYTES = 64 * 1024 * 1024;
+
+/** ffmpeg 解码为 11025Hz 单声道 PCM（最长 maxSeconds 秒，默认内存上限 64 MB） */
+async function decodePcm(audioPath, { paths, ffmpeg, signal, maxSeconds = 900, maxBytes = MAX_PCM_BYTES } = {}) {
+  if (signal && signal.aborted) throw cancelledError();
   const bin = ffmpeg || (paths && paths.ffmpeg);
   if (!bin) throw new Error('找不到 ffmpeg，无法检测节拍');
   if (!audioPath) throw new Error('缺少音频文件');
   await fs.promises.access(audioPath);
+  if (signal && signal.aborted) throw cancelledError();
   const { spawn } = require('node:child_process');
   const chunks = [];
+  let totalBytes = 0;
+  let capped = false;
+  const cap = Number(maxBytes) > 0 ? Number(maxBytes) : MAX_PCM_BYTES;
   await new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(cancelledError()); return; }
+    let settled = false;
     const p = spawn(bin, ['-hide_banner', '-nostdin', '-v', 'error', '-t', String(maxSeconds), '-i', audioPath,
       '-vn', '-ac', '1', '-ar', String(BEAT_RATE), '-f', 's16le', '-'], { windowsHide: true });
     const onAbort = () => { try { p.kill(); } catch {} };
-    if (signal) { if (signal.aborted) onAbort(); signal.addEventListener('abort', onAbort, { once: true }); }
-    p.stdout.on('data', (d) => chunks.push(d));
+    const cleanup = () => { if (signal) signal.removeEventListener('abort', onAbort); };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    p.stdout.on('data', (d) => {
+      if (capped) return;
+      const remain = cap - totalBytes;
+      if (d.length >= remain) {
+        if (remain > 0) { chunks.push(d.subarray(0, remain)); totalBytes += remain; }
+        capped = true;
+        try { p.kill(); } catch {}
+        return;
+      }
+      chunks.push(d);
+      totalBytes += d.length;
+    });
     p.stderr.on('data', () => {});
-    p.on('error', reject);
+    p.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(e);
+    });
     p.on('close', (code) => {
-      if (signal) signal.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (signal && signal.aborted) reject(cancelledError());
       else if (code !== 0 && !chunks.length) reject(new Error(`节拍检测解码失败（${code}）`));
       else resolve();
     });
   });
-  const buf = Buffer.concat(chunks);
+  const buf = Buffer.concat(chunks, totalBytes);
   return new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + (buf.length & ~1)));
 }
 

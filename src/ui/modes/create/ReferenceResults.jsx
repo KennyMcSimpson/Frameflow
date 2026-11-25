@@ -131,7 +131,7 @@ export default function ReferenceResults({ shotId }) {
         {ytdlp && !ytdlp.installed && (
           <div className="callout warn cr-drawer-note">
             当前只搜免版权素材库。安装 yt-dlp 后可以搜 B站 和 YouTube 上的同类视频。
-            <Button size="sm" variant="ghost" onClick={() => useStore.getState().openDialog('settings')}>打开设置</Button>
+            <Button size="sm" variant="ghost" onClick={() => useStore.getState().openDialog('settings', 'media')}>打开设置</Button>
           </div>
         )}
         {results.some((r) => isRestricted(r.license)) && (

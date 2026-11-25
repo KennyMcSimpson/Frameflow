@@ -44,10 +44,14 @@ module.exports = function register({ handle, ctx }) {
   const limiter = vg.createLimiter(2);
   const fetchFn = (...a) => globalThis.fetch(...a);
 
-  /** 设置项 media.encoder（'auto' | 'gpu' | 'cpu'）→ 转码时是否优先显卡 */
+  /** 设置项 media.encoder（'auto' | 'gpu' | 'cpu'）→ 转码时是否优先显卡；未显式覆盖时尊重 export.hwaccel === 'off' */
   function preferHw() {
     let setting = 'auto';
-    try { const m = settings && settings.get ? settings.get().media : null; if (m && m.encoder) setting = m.encoder; } catch {}
+    try {
+      const s = settings && settings.get ? settings.get() : null;
+      const enc = s && s.media && ['auto', 'gpu', 'cpu'].includes(s.media.encoder) ? s.media.encoder : 'auto';
+      setting = enc === 'auto' && s && s.export && s.export.hwaccel === 'off' ? 'cpu' : enc;
+    } catch {}
     return encoders.preferHwFor(setting, { purpose: 'proxy' });
   }
 
@@ -73,10 +77,27 @@ module.exports = function register({ handle, ctx }) {
     if (/^(data:|https?:)/i.test(file)) return file;
     let st;
     try { st = await fs.promises.stat(file); } catch { throw new vg.util.VideogenError('参考图文件不存在或已被移动，请重新选择', 'BAD_IMAGE'); }
+    if (!st.isFile() || st.size <= 0) throw new vg.util.VideogenError('参考图不是有效的图片文件，请重新选择', 'BAD_IMAGE');
     const ext = path.extname(file).toLowerCase();
+    if (!video && !ff.isImageFile(file)) {
+      throw new vg.util.VideogenError('参考图只支持常见图片格式（PNG/JPG/WebP/BMP/GIF 等）', 'BAD_IMAGE');
+    }
+    let w = 0; let h = 0;
+    if (!video && paths && paths.ffprobe) {
+      let info;
+      try {
+        info = await ff.probe(paths, file, { signal, measure: false });
+      } catch (e) {
+        if (isCancel(e)) throw e;
+        throw new vg.util.VideogenError('所选文件不是有效的图片，请重新选择', 'BAD_IMAGE');
+      }
+      if (!info || info.kind !== 'image' || !(info.width > 0 && info.height > 0)) {
+        throw new vg.util.VideogenError('所选文件不是有效的图片，请重新选择', 'BAD_IMAGE');
+      }
+      w = info.width;
+      h = info.height;
+    }
     if (!video && REF_DIRECT_EXT.has(ext) && st.size <= REF_MAX_BYTES) {
-      let w = 0; let h = 0;
-      try { const info = await ff.probe(paths, file, { signal, measure: false }); w = info.width; h = info.height; } catch (e) { if (isCancel(e)) throw e; }
       if (w > 0 && h > 0 && Math.max(w, h) <= REF_MAX_SIDE) return vg.util.imageToDataUrl(file);
     }
     const fallback = () => {
@@ -106,8 +127,15 @@ module.exports = function register({ handle, ctx }) {
 
   /** 参考图（首帧）：imagePath 优先；否则按 imageAssetId 在项目里找（图片用原图，视频取一帧） */
   async function resolveImage(payload, signal) {
-    const direct = typeof payload.imagePath === 'string' && path.isAbsolute(payload.imagePath) ? payload.imagePath : null;
-    if (direct) return refImageDataUrl(direct, { signal });
+    if (payload.imagePath != null && payload.imagePath !== '') {
+      if (typeof payload.imagePath !== 'string' || !path.isAbsolute(payload.imagePath)) {
+        throw new vg.util.VideogenError('参考图路径无效，请重新选择图片文件', 'BAD_IMAGE');
+      }
+      if (!ff.isImageFile(payload.imagePath)) {
+        throw new vg.util.VideogenError('参考图只支持常见图片格式（PNG/JPG/WebP/BMP/GIF 等）', 'BAD_IMAGE');
+      }
+      return refImageDataUrl(payload.imagePath, { signal });
+    }
     if (!payload.imageAssetId) return undefined;
     const proj = await readProject(payload.projectId);
     const a = projectAssets(proj).find((x) => x && x.id === payload.imageAssetId);
@@ -257,7 +285,10 @@ module.exports = function register({ handle, ctx }) {
       const dest = path.join(outDir(projectId), `${sha1(`${p.id}:${taskId}`)}.mp4`);
       if (!fs.existsSync(dest)) {
         if (result.localPath) await fs.promises.copyFile(result.localPath, dest);
-        else await vg.util.downloadTo(fetchFn, result.url, dest, { headers: result.headers || {}, signal: job.signal, onProgress: (x) => job.progress('下载中', 0.86 + x * 0.1, `下载中 ${Math.round(x * 100)}%`) });
+        else {
+          const allowedOrigins = cfg && cfg.baseUrl ? [cfg.baseUrl] : [];
+          await vg.util.downloadWithRetry(fetchFn, result.url, dest, { headers: result.headers || {}, signal: job.signal, allowedOrigins, onProgress: (x) => job.progress('下载中', 0.86 + x * 0.1, `下载中 ${Math.round(x * 100)}%`) });
+        }
       }
       job.progress('下载中', 0.97, '导入素材…');
       const asset = await importGenerated(dest, { ...meta, provider: p.id, taskId, model: cfg.model || p.defaultModel }, job.signal);
@@ -290,17 +321,29 @@ module.exports = function register({ handle, ctx }) {
     if (!vg.isConfigured(p, cfg)) { const e = new Error(`尚未配置 ${p.label} 的密钥，请在「设置 → AI 视频生成」填写`); e.code = 'NO_KEY'; throw e; }
     const prompt = String(payload.prompt || '').trim().slice(0, 2000);
     if (!prompt && !payload.imageAssetId && !payload.imagePath) throw new Error('请填写画面描述');
-    const image = await resolveImage(payload);
-    const input = {
+    if (payload.imagePath != null && payload.imagePath !== '') {
+      if (typeof payload.imagePath !== 'string' || !path.isAbsolute(payload.imagePath) || !ff.isImageFile(payload.imagePath)) {
+        throw new vg.util.VideogenError('参考图必须是有效的图片文件（PNG/JPG/WebP 等）', 'BAD_IMAGE');
+      }
+    }
+    const baseInput = {
       prompt,
       negative: payload.negative ? String(payload.negative).slice(0, 1000) : undefined,
-      image,
       duration: Math.max(1, Math.min(20, Number(payload.duration) || 5)),
       ratio: RATIOS.has(payload.ratio) ? payload.ratio : '16:9',
       res: typeof payload.res === 'string' ? payload.res : '720p',
     };
     const meta = { projectId: payload.projectId || null, shotId: payload.shotId || null, provider: p.id, prompt, taskId: null };
-    return ctx.jobs.start('videogen', (job) => execute(job, { p, cfg, input, projectId: payload.projectId, meta }), meta);
+    return ctx.jobs.start('videogen', async (job) => {
+      job.throwIfCancelled();
+      let image;
+      if (payload.imagePath || payload.imageAssetId) {
+        job.progress('排队中', 0.01, '正在准备参考图…');
+        image = await resolveImage(payload, job.signal);
+        job.throwIfCancelled();
+      }
+      return execute(job, { p, cfg, input: { ...baseInput, image }, projectId: payload.projectId, meta });
+    }, meta);
   });
 
   handle('videogen:resume', async ({ projectId, tasks } = {}) => {

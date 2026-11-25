@@ -10,6 +10,7 @@ const crypto = require('node:crypto');
 const ff = require('../lib/ff.cjs');
 const editProxy = require('../lib/proxy.cjs');
 const encoders = require('../lib/encoders.cjs');
+const { isUncPath } = require('../lib/urlSafety.cjs');
 let analyzerLib = null;
 function analyzer() { if (!analyzerLib) { try { analyzerLib = require('../lib/analyzer.cjs'); } catch { analyzerLib = {}; } } return analyzerLib; }
 
@@ -24,8 +25,11 @@ const ENCODER_SETTINGS = ['auto', 'gpu', 'cpu'];
 
 function requireFile(p) {
   if (!p || typeof p !== 'string') throw new Error('未提供文件路径');
+  if (isUncPath(p)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
   if (!path.isAbsolute(p)) throw new Error('文件路径必须是完整的绝对路径');
-  return path.resolve(p);
+  const abs = path.resolve(p);
+  if (isUncPath(abs)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
+  return abs;
 }
 
 function assetId() { return 'ast_' + crypto.randomBytes(6).toString('hex'); }
@@ -142,11 +146,14 @@ module.exports = function register({ handle, ctx }) {
   }, 4000);
   if (warm && typeof warm.unref === 'function') warm.unref();
 
-  /** 设置项 media.encoder：'auto' | 'gpu' | 'cpu'（默认 auto） */
+  /** 设置项 media.encoder：'auto' | 'gpu' | 'cpu'（默认 auto；未显式覆盖时尊重 export.hwaccel === 'off'） */
   function encoderSetting() {
     try {
-      const m = ctx.settings && typeof ctx.settings.get === 'function' ? ctx.settings.get().media : null;
-      return m && ENCODER_SETTINGS.includes(m.encoder) ? m.encoder : 'auto';
+      const s = ctx.settings && typeof ctx.settings.get === 'function' ? ctx.settings.get() : null;
+      const m = s ? s.media : null;
+      const enc = m && ENCODER_SETTINGS.includes(m.encoder) ? m.encoder : 'auto';
+      if (enc === 'auto' && s && s.export && s.export.hwaccel === 'off') return 'cpu';
+      return enc;
     } catch { return 'auto'; }
   }
   const preferHw = () => encoders.preferHwFor(encoderSetting(), { purpose: 'proxy' });
@@ -321,16 +328,35 @@ module.exports = function register({ handle, ctx }) {
     if (info.durationUnknown) asset.durationUnknown = true;
     if (stats) asset.stats = stats;
 
-    // 音频：节拍检测（失败不影响导入，最多 20 秒）
+    // 音频：节拍检测（失败不影响导入，最多 20 秒；超时主动中止 ffmpeg 并清定时器）
     if (info.kind === 'audio' && typeof analyzer().detectBeats === 'function') {
       report(0.96, `检测节拍：${path.basename(file)}`);
+      const ac = new AbortController();
+      let timedOut = false;
+      const onJobAbort = () => ac.abort();
+      if (job.signal) {
+        if (job.signal.aborted) ac.abort();
+        else job.signal.addEventListener('abort', onJobAbort, { once: true });
+      }
+      const timer = setTimeout(() => { timedOut = true; ac.abort(); }, 20000);
       try {
-        const beats = await Promise.race([
-          analyzer().detectBeats(file, { paths, signal: job.signal }),
-          new Promise((resolve) => setTimeout(() => resolve(null), 20000)),
-        ]);
+        const p = Promise.resolve().then(() => analyzer().detectBeats(file, { paths, signal: ac.signal }));
+        p.catch(() => {});
+        const beats = await p;
         if (Array.isArray(beats) && beats.length) asset.beats = beats;
-      } catch (e) { if (isCancel(e)) throw e; console.warn('[media:import] 节拍检测失败', e && e.message); }
+      } catch (e) {
+        if (job.signal && job.signal.aborted) throw e;
+        if (timedOut && isCancel(e)) {
+          console.warn('[media:import] 节拍检测超时（20 秒），已跳过');
+        } else if (isCancel(e)) {
+          throw e;
+        } else {
+          console.warn('[media:import] 节拍检测失败', e && e.message);
+        }
+      } finally {
+        clearTimeout(timer);
+        if (job.signal) job.signal.removeEventListener('abort', onJobAbort);
+      }
     }
 
     // 预览代理（≤1280、每 15 帧一个关键帧）：原片能直接播、但 4K / 解码重（VP9、AV1）/ 关键帧稀疏（>2 秒）时后台生成。
@@ -368,8 +394,9 @@ module.exports = function register({ handle, ctx }) {
     const seen = new Set();
     const files = [];
     for (const p of list) {
-      if (typeof p !== 'string' || !p || !path.isAbsolute(p)) continue;
+      if (typeof p !== 'string' || !p || isUncPath(p) || !path.isAbsolute(p)) continue;
       const abs = path.resolve(p);
+      if (isUncPath(abs)) continue;
       const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
       if (seen.has(key)) continue;
       seen.add(key);

@@ -109,11 +109,16 @@ function run(bin, args, opts = {}) {
     let killWait = null;
     let killing = null; // 取消/超时后要报的错：等进程真正退出再报，调用方随后清理临时文件时文件已不被占用
     let settled = false;
+    let onAbort = null;
     const finish = (fn, v) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       if (killWait) clearTimeout(killWait);
+      if (opts.signal && onAbort) {
+        try { opts.signal.removeEventListener('abort', onAbort); } catch {}
+        onAbort = null;
+      }
       fn(v);
     };
     const killThenReject = (e) => {
@@ -155,7 +160,7 @@ function run(bin, args, opts = {}) {
       finish(resolve, { code: code == null ? -1 : code, stdout: opts.encoding === 'buffer' ? buf : buf.toString('utf8'), stderr: err });
     });
     if (opts.signal) {
-      const onAbort = () => {
+      onAbort = () => {
         if (settled || killing) return;
         log.info('[proc] 已取消', name, `${Date.now() - t0}ms`);
         killThenReject(cancelledError());

@@ -4,6 +4,7 @@ import useStore from '../../store.js';
 import * as apiMod from '../../api.js';
 import { Button, Icon, Select, Switch, fmtTime } from '../../components/ui.jsx';
 import { TEXT_PRESETS, LIMITS } from '../../../engine/model.js';
+import { trackFlags } from '../../../engine/timeline.js';
 import {
   InspSection, InspRow, NumField, TextDraft, ColorField, Param, ChoiceGrid, SubPages, usePage, patchItem, useEdit, runOp, T_NONE, FMT,
 } from './InspCommon.jsx';
@@ -38,8 +39,10 @@ const AUDIO_ROLES = [
 
 // ================= 文字 =================
 export function InspText({ text }) {
+  const project = useStore((s) => s.project);
   const [page, setPage] = usePage('text', 'text');
-  const dis = !!text.locked;
+  const trackLocked = !!(project && trackFlags(project, 'text').locked);
+  const dis = !!text.locked || trackLocked;
   const remove = () => {
     const r = useStore.getState().commit([{ type: 'removeText', target: T_NONE, textId: text.id }], '删除文字');
     if (r.ok) useStore.getState().clearSelection();
@@ -54,7 +57,7 @@ export function InspText({ text }) {
         </div>
         <Button size="sm" variant="ghost" icon="trash" title="删除文字" onClick={remove} disabled={dis} />
       </div>
-      {dis && <div className="insp-locked"><span className="grow">此文字已锁定，无法修改。</span></div>}
+      {dis && <div className="insp-locked"><span className="grow">{trackLocked ? '文字轨已锁定，请先在轨道头解锁。' : '此文字已锁定，无法修改。'}</span></div>}
       <SubPages pages={[{ id: 'text', label: '文本', icon: 'text' }, { id: 'anim', label: '动画', icon: 'sparkles' }]} value={page} onChange={setPage} />
       <div className="insp-page-body" key={page}>
         {page === 'text' ? <TextStyle text={text} disabled={dis} /> : <TextAnimation text={text} disabled={dis} />}
@@ -84,7 +87,7 @@ export function TextStyle({ text, disabled: dis, compact, makeSet }) {
           <Select value={text.font || ''} disabled={dis} options={FONTS} onChange={(font) => now(set({ font }), '字体')} />
         </InspRow>
         <InspRow label="颜色">
-          <ColorField value={text.color} disabled={dis} onPreview={(color) => live.preview(set({ color }).fb)} onCommit={(color) => now(set({ color }), '文字颜色')} />
+          <ColorField value={text.color} disabled={dis} swatches={TEXT_SWATCHES} label="文字颜色" onPreview={(color) => live.preview(set({ color }).fb)} onCommit={(color) => now(set({ color }), '文字颜色')} />
         </InspRow>
         <Param label="字号" min={0.3} max={3} step={0.05} value={text.size || 1} resetValue={1} format={FMT.times} disabled={dis} {...bind((size) => set({ size }), '字号')} />
         {!compact && (
@@ -96,7 +99,7 @@ export function TextStyle({ text, disabled: dis, compact, makeSet }) {
       </InspSection>
       <InspSection id="t-deco" title="描边 · 阴影 · 背景" icon="layers">
         <InspRow label="描边色">
-          <ColorField value={stroke.color} disabled={dis} onCommit={(color) => now(set({ stroke: { ...stroke, color, width: stroke.width || 2 } }), '描边颜色')} />
+          <ColorField value={stroke.color} disabled={dis} swatches={EDGE_SWATCHES} label="描边色" onCommit={(color) => now(set({ stroke: { ...stroke, color, width: stroke.width || 2 } }), '描边颜色')} />
         </InspRow>
         <Param label="描边粗细" min={0} max={12} step={0.5} value={stroke.width || 0} resetValue={0} format={(v) => `${v.toFixed(1)} px`} disabled={dis}
           {...bind((width) => set({ stroke: { ...stroke, width } }), '描边粗细')} />
@@ -113,7 +116,7 @@ export function TextStyle({ text, disabled: dis, compact, makeSet }) {
         {bg && (
           <>
             <InspRow label="背景色">
-              <ColorField value={bg.color} disabled={dis} onCommit={(color) => now(set({ bg: { ...bg, color } }), '背景颜色')} />
+              <ColorField value={bg.color} disabled={dis} swatches={EDGE_SWATCHES} label="背景色" onCommit={(color) => now(set({ bg: { ...bg, color } }), '背景颜色')} />
             </InspRow>
             <Param label="背景不透明" min={0} max={1} step={0.01} value={bg.opacity == null ? 0.55 : bg.opacity} resetValue={0.55} format={FMT.pct} disabled={dis}
               {...bind((opacity) => set({ bg: { ...bg, opacity } }), '背景不透明度')} />
@@ -140,18 +143,56 @@ export function InspAudioTrack({ audio }) {
   const project = useStore((s) => s.project);
   const asset = project.assets[audio.assetId];
   const [page, setPage] = usePage('audiotrack', 'basic');
+  const [analyzingBeats, setAnalyzingBeats] = useState(false);
   const { bind, now } = useEdit(audio.id);
   const set = (patch) => ({ ops: [{ type: 'updateAudio', target: T_NONE, audioId: audio.id, audio: patch }], fb: patchItem('audio', audio.id, patch) });
-  const dis = !!audio.locked;
+  const trackLocked = !!(project && trackFlags(project, 'audio').locked);
+  const dis = !!audio.locked || trackLocked;
   const len = Math.max(0, audio.out - audio.in);
   const srcMax = asset && Number(asset.duration) > 0 ? Number(asset.duration) : LIMITS.maxDuration;
   const st = () => useStore.getState();
+  const bInfo = beatInfo(asset);
   const remove = () => { const r = st().commit([{ type: 'removeAudio', target: T_NONE, audioId: audio.id }], '删除音频'); if (r.ok) st().clearSelection(); };
   const duck = () => { const r = runOp({ type: 'autoDuck', amount: 0.25 }, '自动闪避'); if (r && r.ok) st().toast('已在人声/原声出现处自动压低背景音乐', 'ok'); };
-  const beats = () => {
-    if (!asset || !Array.isArray(asset.beats) || !asset.beats.length) { st().toast('这段音乐还没有分析出节拍（导入时自动分析，稍后再试）', 'warn'); return; }
+  const beats = async () => {
+    if (analyzingBeats) return;
+    if (!asset) { st().toast('找不到这段音频的素材信息', 'warn'); return; }
+    let info = beatInfo(asset);
+    if (!Array.isArray(asset.beats) || info.status === 'unknown') {
+      if (!asset.path || !api || typeof api.call !== 'function' || api.available === false) {
+        st().toast('这段音乐还没有分析出节拍，且无法读取音频文件', 'warn');
+        return;
+      }
+      const projectId = st().project && st().project.id;
+      setAnalyzingBeats(true);
+      try {
+        const raw = await api.call('media:beats', { path: asset.path });
+        const norm = normalizeBeats(raw);
+        const tempo = { bpm: norm.bpm, confidence: norm.confidence };
+        const curProj = st().project;
+        if (!curProj || curProj.id !== projectId || !curProj.assets[asset.id]) return;
+        st().update((p) => {
+          const curAsset = p.assets[asset.id];
+          if (!curAsset) return p;
+          return { ...p, assets: { ...p.assets, [asset.id]: { ...curAsset, beats: norm.beats, tempo } } };
+        });
+        info = beatInfo({ ...asset, beats: norm.beats, tempo });
+      } catch (e) {
+        st().toast('分析节拍失败：' + (e && e.message ? e.message : '未知原因'), 'error');
+        return;
+      } finally {
+        setAnalyzingBeats(false);
+      }
+    }
+    if (info.status !== 'ok' || !info.beats.length) {
+      st().toast('这段音乐没有明显节拍，暂时无法自动踩点', 'warn');
+      return;
+    }
     const r = runOp({ type: 'snapCutsToBeats', assetId: asset.id }, '剪辑点对齐节拍');
-    if (r && r.ok) st().toast(`已把剪辑点对齐到 ${asset.beats.length} 个节拍附近`, 'ok');
+    if (r && r.ok) {
+      const moved = movedCuts(r);
+      st().toast(moved != null ? `已把 ${moved} 个剪辑点对齐到音乐节拍` : `已把剪辑点对齐到 ${info.beats.length} 个节拍附近`, 'ok');
+    }
   };
   const vkeys = Array.isArray(audio.volumeKeys) ? audio.volumeKeys : [];
 
@@ -165,7 +206,7 @@ export function InspAudioTrack({ audio }) {
         </div>
         <Button size="sm" variant="ghost" icon="trash" title="删除音频" onClick={remove} disabled={dis} />
       </div>
-      {dis && <div className="insp-locked"><span className="grow">此音频已锁定，无法修改。</span></div>}
+      {dis && <div className="insp-locked"><span className="grow">{trackLocked ? '音频轨已锁定，请先在轨道头解锁。' : '此音频已锁定，无法修改。'}</span></div>}
       <SubPages pages={[{ id: 'basic', label: '基础', icon: 'volume' }, { id: 'tools', label: '处理', icon: 'wand' }]} value={page} onChange={setPage} />
       <div className="insp-page-body" key={page}>
         {page === 'basic' ? (
@@ -195,9 +236,9 @@ export function InspAudioTrack({ audio }) {
               <Icon name="volume" size={16} />
               <span className="grow"><b>自动闪避</b><small>有人声或原声时自动压低这段音乐</small></span>
             </button>
-            <button type="button" className="insp-action" disabled={dis} onClick={beats}>
+            <button type="button" className="insp-action" disabled={dis || analyzingBeats} onClick={beats}>
               <Icon name="bolt" size={16} />
-              <span className="grow"><b>踩点</b><small>把视频剪辑点吸附到音乐节拍{asset && asset.beats ? `（${asset.beats.length} 拍）` : ''}</small></span>
+              <span className="grow"><b>{analyzingBeats ? '正在分析节拍…' : '踩点'}</b><small>把视频剪辑点吸附到音乐节拍（{describeBeats(bInfo)}）</small></span>
             </button>
           </InspSection>
         )}

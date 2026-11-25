@@ -8,7 +8,6 @@
 /e2e/tmp/
 /e2e/*-harness/build/
 /e2e/*-harness/out/
-/docs/research/
 .env
 .env.*
 !.env.example

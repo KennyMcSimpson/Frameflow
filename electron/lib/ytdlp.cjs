@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { once } = require('node:events');
 const { run } = require('./proc.cjs');
+const urlSafety = require('./urlSafety.cjs');
 
 // 固定版本：升级时同时改 YTDLP_TAG 和 YTDLP_SHA256（取自该版本发布页的 SHA2-256SUMS 里 yt-dlp.exe 那一行）
 const YTDLP_REPO = 'https://github.com/yt-dlp/yt-dlp';
@@ -35,10 +36,20 @@ function throwIfAborted(signal) {
   if (signal && signal.aborted) throw cancelledError();
 }
 
+const SENSITIVE_HEADER_RE = /^(authorization|proxy-authorization|cookie|x-goog-api-key|x-api-key|api-key)$|api[-_]?key|auth|token/i;
+
+function stripSensitiveHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (!SENSITIVE_HEADER_RE.test(k)) out[k] = v;
+  }
+  return out;
+}
+
 /** 在 Electron 主进程中优先用 net.fetch（遵循系统代理），否则用 Node 内置 fetch。 */
 async function httpFetch(url, opts = {}) {
   const headers = { 'User-Agent': USER_AGENT, ...(opts.headers || {}) };
-  const init = { method: opts.method || 'GET', headers, signal: opts.signal, redirect: 'follow' };
+  const init = { method: opts.method || 'GET', headers, signal: opts.signal, redirect: opts.redirect || 'follow' };
   if (process.versions && process.versions.electron && process.type === 'browser') {
     try {
       const electron = require('electron');
@@ -81,8 +92,16 @@ function networkErrorMessage(err) {
  * fetchImpl：测试注入用，默认 httpFetch。
  * @returns {Promise<{ file, size, contentType, sha256 }>}
  */
-async function downloadUrlToFile(url, dest, { signal, onProgress, headers, idleTimeoutMs = 30000, connectTimeoutMs = 30000, maxBytes = 4 * 1024 * 1024 * 1024, sha256, fetchImpl } = {}) {
+async function downloadUrlToFile(url, dest, { signal, onProgress, headers, idleTimeoutMs = 30000, connectTimeoutMs = 30000, maxBytes = 4 * 1024 * 1024 * 1024, sha256, fetchImpl, allowedOrigins = [], maxRedirects = 5, lookup } = {}) {
   throwIfAborted(signal);
+  const isMockFetch = typeof fetchImpl === 'function' && fetchImpl !== globalThis.fetch && fetchImpl !== httpFetch;
+  const checkUrl = (isMockFetch && !lookup)
+    ? (u, o) => urlSafety.assertSafePublicUrl(u, o)
+    : (u, o) => urlSafety.assertSafePublicUrlAsync(u, { ...o, lookup });
+  let curParsed = await checkUrl(url, { allowedOrigins });
+  let curUrl = curParsed.href;
+  let curHeaders = headers ? { ...headers } : {};
+  const redirectLimit = Math.max(0, Number.isFinite(Number(maxRedirects)) ? Number(maxRedirects) : 5);
   const ctrl = new AbortController();
   let timedOut = false;
   let timer = null;
@@ -95,15 +114,61 @@ async function downloadUrlToFile(url, dest, { signal, onProgress, headers, idleT
   const part = dest + '.part';
   const hasher = crypto.createHash('sha256');
   let ws = null;
-  try {
-    arm(connectTimeoutMs);
-    let res;
+  let wsClosed = true;
+  let wsClosePromise = null;
+  const waitWsClose = async () => {
+    if (wsClosed || !wsClosePromise) return;
+    let t;
     try {
-      res = await (typeof fetchImpl === 'function' ? fetchImpl(url, { headers, signal: ctrl.signal }) : httpFetch(url, { headers, signal: ctrl.signal }));
-    } catch (e) {
-      if (signal && signal.aborted) throw cancelledError();
-      if (timedOut) throw new Error('下载超时：服务器长时间没有响应');
-      throw new Error('下载失败：' + networkErrorMessage(e));
+      await Promise.race([
+        wsClosePromise,
+        new Promise((r) => { t = setTimeout(r, 2000); if (t.unref) t.unref(); }),
+      ]);
+    } finally {
+      clearTimeout(t);
+    }
+  };
+  try {
+    let res;
+    for (let hop = 0; ; hop++) {
+      arm(connectTimeoutMs);
+      try {
+        const reqOpts = { headers: curHeaders, signal: ctrl.signal, redirect: 'manual' };
+        res = await (typeof fetchImpl === 'function' ? fetchImpl(curUrl, reqOpts) : httpFetch(curUrl, reqOpts));
+      } catch (e) {
+        if (signal && signal.aborted) throw cancelledError();
+        if (timedOut) throw new Error('下载超时：服务器长时间没有响应');
+        throw new Error('下载失败：' + networkErrorMessage(e));
+      }
+      if (res && res.url) {
+        await checkUrl(res.url, { allowedOrigins });
+      }
+      const status = Number(res && res.status) || 0;
+      const loc = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('location') : null;
+      if (status >= 300 && status < 400 && loc) {
+        try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+        if (hop >= redirectLimit) {
+          const err = new Error('下载重定向次数过多');
+          err.code = 'REDIRECT';
+          throw err;
+        }
+        let resolved;
+        try {
+          resolved = new URL(loc, curUrl).href;
+        } catch {
+          const err = new Error('下载重定向地址无效');
+          err.code = 'BAD_URL';
+          throw err;
+        }
+        const nextParsed = await checkUrl(resolved, { allowedOrigins });
+        if (nextParsed.origin !== curParsed.origin) {
+          curHeaders = stripSensitiveHeaders(curHeaders);
+        }
+        curParsed = nextParsed;
+        curUrl = nextParsed.href;
+        continue;
+      }
+      break;
     }
     if (!res.ok) {
       if (res.status === 404) throw new Error('下载失败：文件不存在（HTTP 404）');
@@ -115,6 +180,10 @@ async function downloadUrlToFile(url, dest, { signal, onProgress, headers, idleT
     if (total && total > maxBytes) throw new Error(`文件过大（${Math.round(total / 1048576)} MB），已放弃下载`);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     ws = fs.createWriteStream(part);
+    wsClosed = false;
+    wsClosePromise = new Promise((resolve) => {
+      ws.once('close', () => { wsClosed = true; resolve(); });
+    });
     const wsError = new Promise((_, reject) => ws.once('error', reject));
     wsError.catch(() => {});
     let received = 0;
@@ -143,6 +212,7 @@ async function downloadUrlToFile(url, dest, { signal, onProgress, headers, idleT
     }
     if (timer) { clearTimeout(timer); timer = null; }
     await Promise.race([new Promise((resolve) => ws.end(resolve)), wsError]);
+    await waitWsClose();
     ws = null;
     if (total && received < total) throw new Error('下载不完整，请重试');
     if (received === 0) throw new Error('下载失败：文件为空');
@@ -159,7 +229,11 @@ async function downloadUrlToFile(url, dest, { signal, onProgress, headers, idleT
     if (onProgress) onProgress(1, received, total || received);
     return { file: dest, size: received, contentType: res.headers.get('content-type') || '', sha256: digest };
   } catch (e) {
-    if (ws) { try { ws.destroy(); } catch {} }
+    if (ws) {
+      try { ws.destroy(); } catch {}
+      await waitWsClose();
+      ws = null;
+    }
     try { fs.rmSync(part, { force: true }); } catch {}
     throw e;
   } finally {
@@ -277,7 +351,7 @@ function writeLicenseNotice(dir, tag, sha) {
  * 默认装固定版本（YTDLP_TAG）并核对内置的 SHA-256；latest=true 时先查最新版本，用同版本的 SHA2-256SUMS 核对。
  * 下载放进新建的空临时目录，校验通过后才替换旧文件；任何一步失败都保留旧版本。
  */
-async function installYtdlp(paths, { signal, onProgress, latest = false, fetchImpl, skipRunCheck = false } = {}) {
+async function installYtdlp(paths, { signal, onProgress, latest = false, fetchImpl, skipRunCheck = false, lookup } = {}) {
   if (!paths || !paths.ytdlp) throw new Error('无法确定 yt-dlp 的安装位置');
   const dest = paths.ytdlp;
   const report = (p, msg) => { if (onProgress) onProgress(p, msg); };
@@ -301,6 +375,7 @@ async function installYtdlp(paths, { signal, onProgress, latest = false, fetchIm
     await downloadUrlToFile(releaseAssetUrl(tag), tmp, {
       signal,
       fetchImpl,
+      lookup,
       sha256: sha,
       idleTimeoutMs: 45000,
       connectTimeoutMs: 45000,
@@ -449,11 +524,17 @@ function toHttps(u) {
   return u;
 }
 
+function decodeCodePoint(cp) {
+  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : '';
+}
+
 function stripHtml(s) {
   return String(s || '')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => decodeCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, n) => decodeCodePoint(Number(n)))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -614,8 +695,8 @@ function cleanupPartials(outDir, base) {
  * 用 yt-dlp 下载视频（可选字幕），返回 { file, subtitlesFile, info }。
  * opts.fileBase：输出文件名（不含扩展名），缺省按时间生成。
  */
-async function downloadVideo(paths, url, outDir, { maxSeconds = 0, withSubs = false, signal, onProgress, fileBase } = {}) {
-  if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('请提供以 http(s):// 开头的视频网址');
+async function downloadVideo(paths, url, outDir, { maxSeconds = 0, withSubs = false, signal, onProgress, fileBase, allowedOrigins = [], lookup } = {}) {
+  await urlSafety.assertSafePublicUrlAsync(url, { allowedOrigins, lookup });
   const bin = await requireYtdlp(paths);
   if (!paths.ffmpeg || !fs.existsSync(paths.ffmpeg)) throw new Error('找不到 ffmpeg，无法下载与合并视频');
   fs.mkdirSync(outDir, { recursive: true });

@@ -130,7 +130,20 @@ export default function BriefPanel() {
         <Field label="避免"><TagInput value={brief.avoid} placeholder="输入后按 Enter" onChange={set('avoid')} /></Field>
       </CrGroup>
 
-      <CrGroup title="推荐技法" defaultOpen={false} extra={<span className="cr-section-link xs" role="link" onClick={(e) => { e.stopPropagation(); close(); useStore.getState().setMode('library'); }}>去拆片库</span>}>
+      <CrGroup
+        title="推荐技法"
+        defaultOpen={false}
+        extra={(
+          <button
+            type="button"
+            className="cr-section-link xs"
+            style={{ padding: 0, border: 0, background: 'transparent', flex: 'none' }}
+            onClick={() => { close(); useStore.getState().setMode('library'); }}
+          >
+            去拆片库
+          </button>
+        )}
+      >
         <TechniqueList brief={brief} />
       </CrGroup>
     </CrDrawer>

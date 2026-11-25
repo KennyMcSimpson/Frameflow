@@ -3,24 +3,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BUILTIN_TECHNIQUES, BUILTIN_TECHNIQUE_MAP, getBuiltinTechnique } from '../src/engine/builtinTechniques.js';
 import { createSampleProject } from '../src/engine/sample.js';
+import { applyOps, OP_TYPES } from '../src/engine/ops.js';
+import { buildFirstCut } from '../src/engine/firstcut.js';
 import {
   TECHNIQUE_CATEGORIES, SHOT_SIZES, ANGLES, SHOT_MOVEMENTS, TRANSITIONS, LOOKS, MOTIONS,
   PREVIZ_SETTINGS, PREVIZ_SUBJECTS, PREVIZ_ACTIONS, createProject, createAsset, createClip,
 } from '../src/engine/model.js';
-
-const SPEC_OP_TYPES = [
-  'setColor', 'setLook', 'setMotion', 'setTransform', 'setFx', 'setTransition', 'setCaption', 'setSpeed', 'setVolume',
-  'trim', 'setDuration', 'split', 'delete', 'duplicate', 'move', 'insertAsset', 'replaceAsset', 'lock', 'unlock',
-  'addText', 'updateText', 'removeText', 'addAudio', 'updateAudio', 'removeAudio', 'matchColor', 'harmonize', 'applyPacing', 'setProject',
-];
-
-async function loadOps() {
-  try {
-    return await import('../src/engine/ops.js');
-  } catch {
-    return null;
-  }
-}
 
 const nonEmpty = (s) => typeof s === 'string' && s.trim().length > 0;
 
@@ -60,9 +48,8 @@ test('category 均合法且 11 类全部覆盖', () => {
   for (const c of TECHNIQUE_CATEGORIES) assert.ok(seen.has(c), `分类 ${c} 没有任何技法卡`);
 });
 
-test('apply.ops 的 type 均在 OP_TYPES 内，参数枚举合法', async () => {
-  const ops = await loadOps();
-  const OP_TYPES = ops && Array.isArray(ops.OP_TYPES) ? ops.OP_TYPES : SPEC_OP_TYPES;
+test('apply.ops 的 type 均在 OP_TYPES 内，参数枚举合法', () => {
+  assert.ok(Array.isArray(OP_TYPES) && OP_TYPES.length > 0);
   let withApply = 0;
   for (const t of BUILTIN_TECHNIQUES) {
     if (!t.apply) continue;
@@ -81,9 +68,7 @@ test('apply.ops 的 type 均在 OP_TYPES 内，参数枚举合法', async () => 
   assert.ok(withApply >= 30, `可一键套用的技法只有 ${withApply} 张`);
 });
 
-test('可套用技法在真实项目上通过 applyOps（ops.js 存在时）', async (t) => {
-  const ops = await loadOps();
-  if (!ops || typeof ops.applyOps !== 'function') { t.skip('ops.js 尚不可用'); return; }
+test('可套用技法在真实项目上通过 applyOps', () => {
   const p = createProject({ name: '技法套用测试' });
   const assets = [0, 1, 2].map((i) => createAsset({ id: `ast_${i}`, kind: 'video', name: `素材${i}.mp4`, path: `C:/v/${i}.mp4`, duration: 8, width: 1920, height: 1080, hasAudio: true,
     stats: { luma: 0.4 + i * 0.1, contrast: 0.4, saturation: 0.3 + i * 0.05, warmth: 0.05 * (i - 1), tint: 0, palette: ['#334455', '#aa8866', '#eeddcc'] } }));
@@ -92,7 +77,7 @@ test('可套用技法在真实项目上通过 applyOps（ops.js 存在时）', a
   const failures = [];
   for (const tq of BUILTIN_TECHNIQUES) {
     if (!tq.apply) continue;
-    const r = ops.applyOps(p, tq.apply.ops, { selectedClipIds: ['clp_1'] });
+    const r = applyOps(p, tq.apply.ops, { selectedClipIds: ['clp_1'] });
     if (!r.ok) failures.push(`${tq.id}：${r.errors.join('；')}`);
   }
   assert.deepEqual(failures, []);
@@ -144,12 +129,9 @@ test('示例项目：7 个分镜、字段完整、技法 id 均存在、预演�
   assert.notEqual(q.storyboard[0].id, p.storyboard[0].id);
 });
 
-test('示例项目能被 firstcut 生成初剪（firstcut.js 存在时）', async (t) => {
-  let fc = null;
-  try { fc = await import('../src/engine/firstcut.js'); } catch { fc = null; }
-  if (!fc || typeof fc.buildFirstCut !== 'function') { t.skip('firstcut.js 尚不可用'); return; }
+test('示例项目能被 firstcut 生成初剪', () => {
   const p = createSampleProject();
-  const r = fc.buildFirstCut(p);
+  const r = buildFirstCut(p);
   const project = r && r.project ? r.project : r;
   assert.ok(project && project.tracks && project.tracks.video.length === 7, '初剪应有 7 个片段');
 });

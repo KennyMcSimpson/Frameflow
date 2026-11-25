@@ -21,6 +21,16 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // 允许打包分发的许可（SPDX）。其它许可需要先评估再加入。
 export const ALLOWED = new Set(['MIT', 'ISC', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', '0BSD', 'Unlicense', 'CC0-1.0', 'BlueOak-1.0.0', 'Zlib']);
 
+// 允许的 SPDX WITH 附加例外白名单；未列入的限制性或未知例外一律拒绝。
+export const ALLOWED_EXCEPTIONS = new Set([
+  'LLVM-exception',
+  'Classpath-exception-2.0',
+  'GCC-exception-3.1',
+  'Swift-exception',
+  'Universal-FOSS-exception-1.0',
+  'Font-exception-2.0',
+]);
+
 // 许可正文（不含版权行），与上游 LICENSE 文件逐字一致
 const MIT_BODY = `Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -97,7 +107,7 @@ export const PORTED = [
   {
     name: 'PySceneDetect', license: 'BSD-3-Clause', url: 'https://github.com/Breakthrough/PySceneDetect',
     use: '拆片分析里的镜头切换检测（按其算法用 JavaScript 重写）', files: ['electron/lib/shotdetect.cjs'],
-    text: `BSD 3-Clause License\n\nCopyright (C) 2014, Brandon Castellano\n\n${BSD3_BODY}`,
+    text: `BSD 3-Clause License\n\nCopyright (C) 2014-2024 Brandon Castellano\n\n${BSD3_BODY}`,
   },
 ];
 
@@ -116,21 +126,78 @@ export function licenseOf(pkg) {
   return '';
 }
 
-// 简单的 SPDX 判断：OR 任一允许即可，AND 必须全部允许
+// SPDX 布尔表达式判断：支持括号、优先级 () > AND > OR，严格区分运算符大小写（仅允许大写 AND/OR/WITH），
+// 以及 `<license> WITH <exception>` 双白名单核验（主许可须在 ALLOWED、例外须在 ALLOWED_EXCEPTIONS）。
+// 解析失败或存在多余符号时按严格原则返回 false。
 export function isAllowed(expr) {
-  const s = String(expr || '').replace(/[()]/g, ' ').trim();
-  if (!s) return false;
-  if (/\sOR\s/i.test(s)) return s.split(/\s+OR\s+/i).some((p) => isAllowed(p));
-  if (/\sAND\s/i.test(s)) return s.split(/\s+AND\s+/i).every((p) => isAllowed(p));
-  return ALLOWED.has(s.trim());
+  const tokens = String(expr || '').match(/[()]|[^\s()]+/g);
+  if (!tokens || !tokens.length) return false;
+  let pos = 0;
+
+  const isKeyword = (t) => t === 'AND' || t === 'OR' || t === 'WITH';
+
+  function parseOr() {
+    let val = parseAnd();
+    while (pos < tokens.length && tokens[pos] === 'OR') {
+      pos += 1;
+      const rhs = parseAnd();
+      val = val || rhs;
+    }
+    return val;
+  }
+
+  function parseAnd() {
+    let val = parsePrimary();
+    while (pos < tokens.length && tokens[pos] === 'AND') {
+      pos += 1;
+      const rhs = parsePrimary();
+      val = val && rhs;
+    }
+    return val;
+  }
+
+  function parsePrimary() {
+    if (pos >= tokens.length) throw new Error('unexpected end');
+    const tok = tokens[pos];
+    if (tok === '(') {
+      pos += 1;
+      const val = parseOr();
+      if (tokens[pos] !== ')') throw new Error('missing )');
+      pos += 1;
+      return val;
+    }
+    if (tok === ')' || isKeyword(tok)) throw new Error(`unexpected token ${tok}`);
+    pos += 1;
+    // 支持 `<license> WITH <exception>`：主许可与附加例外必须同时命中各自白名单
+    if (pos < tokens.length && tokens[pos] === 'WITH') {
+      pos += 1;
+      const exc = tokens[pos];
+      if (!exc || exc === '(' || exc === ')' || isKeyword(exc)) throw new Error('missing exception');
+      pos += 1;
+      return ALLOWED.has(tok) && ALLOWED_EXCEPTIONS.has(exc);
+    }
+    return ALLOWED.has(tok);
+  }
+
+  try {
+    const result = parseOr();
+    return pos === tokens.length && result;
+  } catch {
+    return false;
+  }
 }
 
 // 从源码中找出裸模块名（import x from 'pkg' / import('pkg') / export ... from 'pkg'）
 export function bareSpecifiers(code) {
+  // 先剥离 JS 单行与块级注释（同时跳过字符串与模板字面量，避免误伤其中的 // 或 /*）
+  const stripped = String(code || '').replace(
+    /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    (m) => (m.startsWith('//') || m.startsWith('/*') ? ' ' : m),
+  );
   const out = new Set();
   const re = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]/g;
   let m;
-  while ((m = re.exec(code))) {
+  while ((m = re.exec(stripped))) {
     const spec = m[1];
     if (spec.startsWith('.') || spec.startsWith('/') || /^[a-z]+:/i.test(spec)) continue;
     out.add(spec);
@@ -226,10 +293,10 @@ export function buildDocument({ app, ffmpeg, electron, pkgs, ported = PORTED, au
   push(RULE, '一、FFmpeg（音视频处理）', RULE);
   push(`版本：${ffmpeg.version}`);
   push(`构建：${ffmpeg.file}（${ffmpeg.source}，Windows 64 位 LGPL 共享库构建）`);
-  push(`许可：GNU 宽通用公共许可证（LGPL）第 3 版`);
+  push(`许可：GNU 宽通用公共许可证（${ffmpeg.licenseDetail || 'LGPL v3'}）`);
   push('文件：安装目录 resources\\ffmpeg 下的 ffmpeg.exe、ffprobe.exe 以及 av*.dll、sw*.dll。');
   push('本软件以独立程序的方式调用 FFmpeg，没有修改其源代码。你可以用自己编译的兼容版本替换上述文件。');
-  push('许可全文：resources\\licenses\\ffmpeg\\LICENSE.txt');
+  push('许可全文：resources\\licenses\\ffmpeg\\LICENSE.txt（以及随附的 GNU GPL v3 文本 resources\\licenses\\ffmpeg\\COPYING.GPLv3）');
   push('源代码获取方式：resources\\licenses\\ffmpeg\\SOURCE.txt');
   push(`构建来源：${ffmpeg.source}/releases/tag/${ffmpeg.tag}`);
   push(`FFmpeg 源代码：https://github.com/FFmpeg/FFmpeg/tree/${ffmpeg.ffmpegCommit}`);
@@ -333,7 +400,7 @@ function main() {
   if (!fs.existsSync(buildInfoPath)) problems.push('缺少 vendor/ffmpeg/bin/ffmpeg-build.json，请先运行 npm run fetch:ffmpeg');
   const ffmpeg = fs.existsSync(buildInfoPath) ? readJson(buildInfoPath) : null;
   if (ffmpeg && ffmpeg.license !== 'LGPL') problems.push(`FFmpeg 不是 LGPL 构建：${ffmpeg.licenseDetail || ffmpeg.license}`);
-  for (const f of ['LICENSE.txt', 'SOURCE.txt']) {
+  for (const f of ['LICENSE.txt', 'COPYING.GPLv3', 'SOURCE.txt']) {
     if (!fs.existsSync(path.join(ROOT, 'vendor', 'ffmpeg', f))) problems.push(`缺少 vendor/ffmpeg/${f}`);
   }
 

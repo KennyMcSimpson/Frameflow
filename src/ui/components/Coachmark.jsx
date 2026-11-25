@@ -37,12 +37,13 @@ function findTarget(sel) {
 
 const PAD = 6;
 const CARD_W = 300;
+const EMPTY_STEPS = [];
 
 export default function Coachmark({ mode, steps, force = false, onDone }) {
   const done = useStore((s) => !!(s.onboarding && s.onboarding[mode]));
   const anyDialog = useStore((s) => Object.values(s.dialogs || {}).some(Boolean));
   const setOnboarding = useStore((s) => s.setOnboarding);
-  const list = steps || DEFAULT_TOURS[mode] || [];
+  const list = steps || DEFAULT_TOURS[mode] || EMPTY_STEPS;
   const [idx, setIdx] = useState(0);
   const [rect, setRect] = useState(null);
   const [ready, setReady] = useState(false);
@@ -91,7 +92,17 @@ export default function Coachmark({ mode, steps, force = false, onDone }) {
     return () => { window.removeEventListener('resize', measure); clearInterval(t); };
   }, [active, ready, idx, step]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useLayoutEffect(() => { if (cardRef.current) setCardH(cardRef.current.offsetHeight); });
+  const next = useCallback(() => {
+    const after = list.findIndex((s, i) => i > idx && findTarget(s.target));
+    if (after >= 0) setIdx(after); else finish();
+  }, [list, idx, finish]);
+
+  useLayoutEffect(() => {
+    if (cardRef.current) {
+      const h = cardRef.current.offsetHeight;
+      if (h) setCardH((prev) => (prev === h ? prev : h));
+    }
+  }, [active, ready, idx, step]);
 
   useEffect(() => {
     if (!active || !ready) return undefined;
@@ -101,14 +112,10 @@ export default function Coachmark({ mode, steps, force = false, onDone }) {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  });
+  }, [active, ready, finish, next]);
 
   const visible = list.map((s, i) => ({ s, i })).filter(({ s }) => findTarget(s.target));
   const pos = visible.findIndex((v) => v.i === idx);
-  const next = () => {
-    const after = visible.find((v) => v.i > idx);
-    if (after) setIdx(after.i); else finish();
-  };
 
   if (!active || !ready || typeof document === 'undefined') return null;
   if (!visible.length) return null; // 目标都不在：不打扰，下次再显示

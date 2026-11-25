@@ -5,12 +5,143 @@ const fs = require('node:fs');
 const path = require('node:path');
 const log = require('../lib/log.cjs');
 
-// shell:openPath 拒绝直接运行的可执行/脚本类文件
-const BLOCKED_OPEN_EXT = new Set([
-  '.exe', '.com', '.bat', '.cmd', '.ps1', '.psm1', '.psd1', '.ps1xml', '.psc1', '.vb', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.wsc',
-  '.msi', '.msp', '.msix', '.msixbundle', '.appx', '.appxbundle', '.scr', '.scf', '.pif', '.lnk', '.reg', '.hta', '.cpl', '.jar', '.dll',
-  '.sys', '.url', '.appref-ms', '.application', '.gadget', '.inf', '.settingcontent-ms', '.chm', '.diagcab', '.xll',
+// shell:openPath 只放行文件夹与白名单内的安全文件类型
+const ALLOWED_OPEN_EXT = new Set([
+  '.mp4', '.mov', '.mkv', '.webm', '.gif',
+  '.mp3', '.wav', '.m4a',
+  '.png', '.jpg', '.jpeg', '.webp',
+  '.srt', '.vtt', '.txt', '.log',
+  '.ffproj', '.json',
 ]);
+
+// media:register 允许注册的媒体文件扩展名白名单
+const ALLOWED_MEDIA_EXT = new Set([
+  '.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi', '.ts', '.mts', '.m2ts', '.wmv', '.flv', '.3gp',
+  '.mp3', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.flac', '.wma', '.aiff', '.aif',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
+  '.vtt', '.srt', '.ass', '.ssa', '.lrc',
+]);
+
+const UNC_RE = /^[\\/]{2}/;
+
+function isUncPath(p) {
+  return typeof p === 'string' && (UNC_RE.test(p) || UNC_RE.test(p.trim()));
+}
+
+function hasTrailingDotOrSpace(p) {
+  if (typeof p !== 'string') return false;
+  if (/[.\s]$/.test(p)) return true;
+  const stripped = p.replace(/[\\/]+$/, '');
+  return /[.\s]$/.test(stripped);
+}
+
+function normPath(p) {
+  const abs = path.resolve(p);
+  return process.platform === 'win32' ? abs.toLowerCase() : abs;
+}
+
+/** 解析真实路径：拒绝 UNC、符号链接取目标、悬空符号链接与非 ENOENT 错误返回 null */
+function resolveRealPathSafe(p) {
+  if (typeof p !== 'string' || !p || isUncPath(p)) return null;
+  const abs = path.resolve(p);
+  if (isUncPath(abs)) return null;
+  try {
+    const real = fs.realpathSync(abs);
+    return isUncPath(real) ? null : real;
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return null;
+  }
+  try {
+    if (fs.lstatSync(abs).isSymbolicLink()) return null;
+  } catch {}
+  const parts = [];
+  let cur = abs;
+  while (true) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return isUncPath(abs) ? null : abs;
+    parts.unshift(path.basename(cur));
+    cur = parent;
+    if (isUncPath(cur)) return null;
+    try {
+      const realParent = fs.realpathSync(cur);
+      if (isUncPath(realParent)) return null;
+      const joined = path.join(realParent, ...parts);
+      return isUncPath(joined) ? null : joined;
+    } catch (e) {
+      if (!e || e.code !== 'ENOENT') return null;
+    }
+  }
+}
+
+function isInsideDir(dir, target) {
+  if (!dir || !target) return false;
+  const d = dir.endsWith(path.sep) ? dir : dir + path.sep;
+  return target === dir || target.startsWith(d);
+}
+
+function isBlockedUserDataMedia(p, ctxPaths) {
+  if (typeof p !== 'string' || !p || isUncPath(p)) return true;
+  const abs = path.resolve(p);
+  if (isUncPath(abs)) return true;
+  const real = resolveRealPathSafe(abs);
+  if (!real) return true;
+
+  const blockedDirs = [];
+  try { const ld = log.logDir && log.logDir(); if (ld) blockedDirs.push(ld); } catch {}
+  let ud = '';
+  try { ud = (ctxPaths && ctxPaths.userData) || require('electron').app.getPath('userData') || ''; } catch {}
+  if (ud) blockedDirs.push(path.join(ud, 'logs'));
+  let dr = '';
+  try {
+    if (ctxPaths) {
+      if (ctxPaths.dataRootRaw !== undefined) dr = ctxPaths.dataRootRaw || '';
+      else if (typeof ctxPaths.tryDataRoot === 'function') dr = ctxPaths.tryDataRoot() || '';
+      else if (typeof ctxPaths.dataRoot === 'string') dr = ctxPaths.dataRoot;
+    }
+  } catch {}
+
+  const targets = new Set([normPath(abs), normPath(real)]);
+  for (const bd of blockedDirs) {
+    const bdSet = new Set([normPath(bd)]);
+    const rbd = resolveRealPathSafe(bd);
+    if (rbd) bdSet.add(normPath(rbd));
+    for (const d of bdSet) {
+      for (const t of targets) if (isInsideDir(d, t)) return true;
+    }
+  }
+  if (!ud) return false;
+  const udNorms = new Set([normPath(ud)]);
+  const rud = resolveRealPathSafe(ud);
+  if (rud) udNorms.add(normPath(rud));
+  const drNorms = new Set();
+  if (dr) {
+    drNorms.add(normPath(dr));
+    const rdr = resolveRealPathSafe(dr);
+    if (rdr) drNorms.add(normPath(rdr));
+  }
+  for (const udDir of udNorms) {
+    for (const t of targets) {
+      if (!isInsideDir(udDir, t)) continue;
+      let insideDataRoot = false;
+      for (const drDir of drNorms) {
+        if (drDir !== udDir && isInsideDir(drDir, t)) { insideDataRoot = true; break; }
+      }
+      if (!insideDataRoot) return true;
+      const rel = t.slice(udDir.length).replace(/^[\\/]+/, '');
+      const base = path.basename(t);
+      if (
+        /^(secrets|settings)(\.|$)/i.test(base)
+        || base === 'running.lock'
+        || base === 'encoders.json'
+        || /\.log$/i.test(base)
+        || /^logs([\\/]|$)/i.test(rel)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 const TASKBAR_MODES = new Set(['normal', 'indeterminate', 'error', 'paused']);
 
@@ -77,7 +208,7 @@ module.exports = function register({ handle, ctx }) {
     const sampleMedia = path.join(root, 'sample-media');
     let ok = false;
     try { ok = fs.statSync(sampleMedia).isDirectory(); } catch {}
-    if (ok) { try { ctx.registerMediaPath(sampleMedia); } catch {} }
+    if (ok) { try { if (typeof ctx.addMediaRoot === 'function') ctx.addMediaRoot(sampleMedia); } catch {} }
     return { root, sampleMedia, sampleMediaOk: ok, packaged };
   };
   const parentWindow = () => {
@@ -102,8 +233,11 @@ module.exports = function register({ handle, ctx }) {
       ? withTimeout(ytdlpLib.ytdlpStatus(paths), 8000, ytdlpFallback)
       : Promise.resolve(ytdlpFallback);
     const codexFallback = { ok: false, path: null, version: null, loggedIn: false };
-    const codexP = codexLib && typeof codexLib.detectCodex === 'function'
-      ? withTimeout(codexLib.detectCodex(settingsView(ctx.settings)), 10000, codexFallback)
+    const sv = settingsView(ctx.settings);
+    const aiProvider = String((sv && sv.ai && sv.ai.provider) || '').toLowerCase();
+    const skipCodexProbe = aiProvider === 'local' || aiProvider === 'openai' || aiProvider === 'none';
+    const codexP = !skipCodexProbe && codexLib && typeof codexLib.detectCodex === 'function'
+      ? withTimeout(codexLib.detectCodex(sv), 10000, codexFallback)
       : Promise.resolve(codexFallback);
 
     const [yt, cx] = await Promise.all([ytdlpP, codexP]);
@@ -188,29 +322,73 @@ module.exports = function register({ handle, ctx }) {
   handle('shell:openExternal', async ({ url } = {}) => {
     let u;
     try { u = new URL(String(url || '')); } catch { throw new Error('链接格式不正确'); }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('出于安全考虑，只能打开 http/https 网页链接');
+    if (u.protocol !== 'https:') throw new Error('出于安全考虑，只能打开 https 网页链接');
     await shell.openExternal(u.toString());
     return true;
   });
 
   handle('shell:showItem', async ({ path: p } = {}) => {
+    if (!p || typeof p !== 'string') throw new Error('未提供文件路径');
+    if (isUncPath(p)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
     const abs = requirePath(p, '文件路径');
+    if (isUncPath(abs)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
     if (!fs.existsSync(abs)) {
       const dir = path.dirname(abs);
-      if (fs.existsSync(dir)) { const err = await shell.openPath(dir); if (err) throw new Error(`无法打开文件夹：${err}`); return true; }
-      throw new Error(`文件不存在或已被移动：${abs}`);
+      if (isUncPath(dir)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
+      let dirSt;
+      try { dirSt = fs.statSync(dir); } catch { dirSt = null; }
+      if (!dirSt || !dirSt.isDirectory()) {
+        throw new Error(`文件不存在或已被移动：${abs}`);
+      }
+      let realDir;
+      try { realDir = fs.realpathSync(dir); } catch {
+        throw new Error(`无法解析文件夹真实路径：${dir}`);
+      }
+      if (isUncPath(realDir)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
+      let realDirSt;
+      try { realDirSt = fs.statSync(realDir); } catch {
+        throw new Error(`无法读取文件夹：${realDir}`);
+      }
+      if (!realDirSt.isDirectory()) {
+        throw new Error(`文件不存在或已被移动：${abs}`);
+      }
+      const err = await shell.openPath(realDir);
+      if (err) throw new Error(`无法打开文件夹：${err}`);
+      return true;
     }
-    shell.showItemInFolder(abs);
+    let realAbs;
+    try { realAbs = fs.realpathSync(abs); } catch {
+      throw new Error(`无法解析文件真实路径：${abs}`);
+    }
+    if (isUncPath(realAbs)) throw new Error('出于安全考虑，不允许访问网络路径（UNC）');
+    shell.showItemInFolder(realAbs);
     return true;
   });
 
   handle('shell:openPath', async ({ path: p } = {}) => {
+    if (!p || typeof p !== 'string') throw new Error('未提供路径');
+    if (isUncPath(p)) throw new Error('出于安全考虑，不允许打开网络路径（UNC）');
+    if (hasTrailingDotOrSpace(p)) throw new Error('路径格式不合法');
     const abs = requirePath(p, '路径');
+    if (isUncPath(abs)) throw new Error('出于安全考虑，不允许打开网络路径（UNC）');
     if (!fs.existsSync(abs)) throw new Error(`文件或文件夹不存在：${abs}`);
-    let isDir = false;
-    try { isDir = fs.statSync(abs).isDirectory(); } catch {}
-    if (!isDir && BLOCKED_OPEN_EXT.has(path.extname(abs).toLowerCase())) throw new Error('出于安全考虑，不能直接打开程序或脚本文件');
-    const err = await shell.openPath(abs);
+    let real;
+    try { real = fs.realpathSync(abs); } catch {
+      throw new Error(`无法解析路径真实位置：${abs}`);
+    }
+    if (isUncPath(real)) throw new Error('出于安全考虑，不允许打开网络路径（UNC）');
+    if (hasTrailingDotOrSpace(real)) throw new Error('路径格式不合法');
+    let st;
+    try { st = fs.statSync(real); } catch { throw new Error(`无法读取路径：${real}`); }
+    if (!st.isDirectory()) {
+      if (!st.isFile()) throw new Error('出于安全考虑，不能打开该类型的路径');
+      const ext = path.extname(abs).toLowerCase();
+      const realExt = path.extname(real).toLowerCase();
+      if (!ALLOWED_OPEN_EXT.has(ext) || !ALLOWED_OPEN_EXT.has(realExt)) {
+        throw new Error('出于安全考虑，不能直接打开该类型的文件');
+      }
+    }
+    const err = await shell.openPath(real);
     if (err) throw new Error(`无法打开：${err}`);
     return true;
   });
@@ -218,7 +396,26 @@ module.exports = function register({ handle, ctx }) {
   handle('media:register', async ({ paths: list } = {}) => {
     if (!Array.isArray(list)) throw new Error('paths 必须是路径数组');
     for (const p of list) {
-      if (typeof p === 'string' && p && path.isAbsolute(p)) ctx.registerMediaPath(p);
+      if (typeof p !== 'string' || !p) continue;
+      if (isUncPath(p) || !path.isAbsolute(p)) continue;
+      const abs = path.resolve(p);
+      if (isUncPath(abs)) continue;
+      if (typeof ctx.isSafeMediaPath === 'function') {
+        if (!ctx.isSafeMediaPath(p)) continue;
+        ctx.registerMediaPath(p);
+        continue;
+      }
+      if (!ALLOWED_MEDIA_EXT.has(path.extname(p).toLowerCase()) || !ALLOWED_MEDIA_EXT.has(path.extname(abs).toLowerCase())) continue;
+      const real = resolveRealPathSafe(abs);
+      if (!real || isUncPath(real) || !ALLOWED_MEDIA_EXT.has(path.extname(real).toLowerCase())) continue;
+      if (isBlockedUserDataMedia(abs, ctx.paths) || isBlockedUserDataMedia(real, ctx.paths)) continue;
+      try {
+        if (!fs.statSync(real).isFile()) continue;
+      } catch (e) {
+        if (!e || e.code !== 'ENOENT') continue;
+        try { if (fs.lstatSync(abs).isSymbolicLink()) continue; } catch {}
+      }
+      ctx.registerMediaPath(p);
     }
     return true;
   });

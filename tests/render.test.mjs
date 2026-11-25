@@ -340,7 +340,7 @@ test('v3 animatedProps: transform/opacity/color 走关键帧', () => {
 test('v3 srcTimeOf: 倒放 / 定格 / 常速（timeline.sourceTimeAt 缺失时的回退）', () => {
   const clip = { in: 2, out: 6, speed: 2 };
   const v = srcTimeOf(clip, 1);
-  assert.ok(near(v, 4) || Number.isFinite(v));
+  assert.ok(near(v, 4));
   const rev = srcTimeOf({ in: 2, out: 6, speed: 1, reverse: true }, 1);
   assert.ok(near(rev, 5), `倒放应从出点往回走，得到 ${rev}`);
   assert.equal(srcTimeOf({ in: 3, out: 3, still: true }, 1.5), 3);

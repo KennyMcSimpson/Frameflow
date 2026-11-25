@@ -130,7 +130,9 @@ test('buildFirstCut：用户指定素材优先于实拍参考素材', () => {
 
 // ---------- v3：默认源顺序、同摄影师优先、AI 关键词、示例实拍素材 ----------
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import {
   DEFAULT_STOCK_SOURCES, autoFootageSources, buildFootageQueriesLLM, parseFootageQueries, buildFootageQueryRequest,
@@ -139,6 +141,9 @@ import {
 import { createSampleProject, SAMPLE_MEDIA, sampleMediaDir } from '../src/engine/sample.js';
 
 const requireCjs = createRequire(import.meta.url);
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const BUILD_DIR = path.join(ROOT, 'build');
+const SAMPLE_MEDIA_DIR = path.join(BUILD_DIR, 'sample-media');
 
 test('默认源顺序：自动配素材时有 Key 的图库在前、免 Key 来源兜底；B站/YouTube 不进自动配素材', () => {
   assert.deepEqual([...DEFAULT_STOCK_SOURCES], ['pexels', 'pixabay', 'commons', 'nasa', 'archive']);
@@ -206,36 +211,60 @@ test('zhToEnTerms 扩充词表', () => {
   assert.deepEqual(zhToEnTerms('推门 背影 晨光'), ['opening door', 'from behind', 'morning light']);
 });
 
-test('示例素材：manifest 与内置清单一致、文件存在、总大小 ≤40MB、真人实拍许可', () => {
-  const dir = path.resolve('build/sample-media');
-  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+test('示例素材：manifest 与内置清单一致、真人实拍许可（有磁盘视频或要求素材时一并验体积）', () => {
+  const manifestPath = path.join(SAMPLE_MEDIA_DIR, 'manifest.json');
+  assert.ok(fs.existsSync(manifestPath), `缺少 ${manifestPath}`);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   assert.ok(manifest.length >= 6 && manifest.length <= 8);
   assert.deepEqual(manifest.map((m) => [m.file, m.shotIndex]), SAMPLE_MEDIA.map((m) => [m.file, m.shotIndex]));
-  let total = 0;
   for (const m of manifest) {
     assert.ok(m.credit && m.url && m.license, m.file);
-    total += fs.statSync(path.join(dir, m.file)).size;
   }
-  assert.ok(total <= 40 * 1048576);
+  const hasMp4 = fs.readdirSync(SAMPLE_MEDIA_DIR).some((f) => /\.mp4$/i.test(f));
+  if (hasMp4 || process.env.FF_REQUIRE_ASSETS === '1') {
+    let total = 0;
+    for (const m of manifest) {
+      total += fs.statSync(path.join(SAMPLE_MEDIA_DIR, m.file)).size;
+    }
+    assert.ok(total <= 40 * 1048576);
+  }
 });
 
 test('示例项目：每个镜头引用实拍素材（source=stock），初剪不用 previz', () => {
   assert.equal(sampleMediaDir('C:\\app\\resources'), 'C:\\app\\resources\\sample-media');
   assert.equal(sampleMediaDir('/x/build/sample-media/'), '/x/build/sample-media');
-  const p = createSampleProject({ resources: path.resolve('build') });
-  for (const s of p.storyboard) {
-    const a = p.assets[s.footageAssetId];
-    assert.ok(a, `第 ${s.index} 镜缺实拍`);
-    assert.equal(a.source, 'stock');
-    assert.ok(a.credit);
-    assert.ok(fs.existsSync(a.path), a.path);
+  const tmpResources = fs.mkdtempSync(path.join(os.tmpdir(), 'ff-sample-media-'));
+  try {
+    const tmpSampleDir = path.join(tmpResources, 'sample-media');
+    fs.mkdirSync(tmpSampleDir, { recursive: true });
+    for (const m of SAMPLE_MEDIA) {
+      fs.writeFileSync(path.join(tmpSampleDir, m.file), Buffer.from('dummy-mp4'));
+    }
+    const p = createSampleProject({ resources: tmpResources });
+    for (const s of p.storyboard) {
+      const a = p.assets[s.footageAssetId];
+      assert.ok(a, `第 ${s.index} 镜缺实拍`);
+      assert.equal(a.source, 'stock');
+      assert.ok(a.credit);
+      assert.ok(fs.existsSync(a.path), a.path);
+    }
+    const { project, report } = buildFirstCut(p);
+    assert.equal(project.tracks.video.length, p.storyboard.length);
+    for (const c of project.tracks.video) assert.equal(project.assets[c.assetId].source, 'stock');
+    assert.ok(!report.some((r) => /预演/.test(r)));
+    // 素材目录未知 / 文件缺失时兜底 previz
+    const q = createSampleProject({ resources: tmpResources, missing: ['shot04-latte-art.mp4'] });
+    const cut = buildFirstCut(q).project;
+    assert.equal(cut.tracks.video.filter((c) => cut.assets[c.assetId].kind === 'previz').length, 1);
+  } finally {
+    fs.rmSync(tmpResources, { recursive: true, force: true });
   }
-  const { project, report } = buildFirstCut(p);
-  assert.equal(project.tracks.video.length, p.storyboard.length);
-  for (const c of project.tracks.video) assert.equal(project.assets[c.assetId].source, 'stock');
-  assert.ok(!report.some((r) => /预演/.test(r)));
-  // 素材目录未知 / 文件缺失时兜底 previz
-  const q = createSampleProject({ resources: path.resolve('build'), missing: ['shot04-latte-art.mp4'] });
-  const cut = buildFirstCut(q).project;
-  assert.equal(cut.tracks.video.filter((c) => cut.assets[c.assetId].kind === 'previz').length, 1);
+  const hasRealMp4 = fs.existsSync(SAMPLE_MEDIA_DIR) && fs.readdirSync(SAMPLE_MEDIA_DIR).some((f) => /\.mp4$/i.test(f));
+  if (hasRealMp4 || process.env.FF_REQUIRE_ASSETS === '1') {
+    const pReal = createSampleProject({ resources: BUILD_DIR });
+    for (const s of pReal.storyboard) {
+      const a = pReal.assets[s.footageAssetId];
+      assert.ok(a && fs.existsSync(a.path), a ? a.path : `第 ${s.index} 镜缺实拍`);
+    }
+  }
 });

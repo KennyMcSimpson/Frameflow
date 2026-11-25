@@ -105,13 +105,17 @@ test('fetch-builtin-audio：曲目都固定了哈希，id 唯一，条目符合�
   assert.equal(s.sourceUrl, undefined);
 });
 
-test('内置音频清单（已生成时）通过体检规则', () => {
+test('内置音频清单通过体检规则（有磁盘音频或要求素材时一并验文件存在）', () => {
   const dir = path.join(ROOT, 'build', 'builtin-audio');
   const file = path.join(dir, 'manifest.json');
-  if (!fs.existsSync(file)) return;
+  assert.ok(fs.existsSync(file), '缺少 build/builtin-audio/manifest.json');
   const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepEqual(checkAudioManifest(manifest, (f) => fs.existsSync(path.join(dir, f))), []);
+  assert.deepEqual(checkAudioManifest(manifest, () => true), []);
   assert.ok(manifest.items.some((i) => i.kind === 'sfx'));
+  const hasAudioFiles = fs.readdirSync(dir).some((f) => /\.m4a$/i.test(f));
+  if (hasAudioFiles || process.env.FF_REQUIRE_ASSETS === '1') {
+    assert.deepEqual(checkAudioManifest(manifest, (f) => fs.existsSync(path.join(dir, f))), []);
+  }
 });
 
 // ---------- gen-licenses ----------
@@ -123,8 +127,12 @@ test('gen-licenses：许可字段与白名单判断', () => {
   assert.ok(isAllowed('MIT'));
   assert.ok(isAllowed('(MIT OR GPL-3.0)'));
   assert.ok(!isAllowed('MIT AND GPL-3.0'));
+  assert.ok(!isAllowed('(MIT OR Apache-2.0) AND GPL-3.0'));
   assert.ok(!isAllowed('GPL-3.0-or-later'));
   assert.ok(!isAllowed(''));
+  assert.ok(!isAllowed('MIT WITH NonCommercial-Restriction'));
+  assert.ok(!isAllowed('mit or apache-2.0'));
+  assert.ok(isAllowed('Apache-2.0 WITH LLVM-exception'));
   assert.deepEqual(checkPackages([{ name: 'a', version: '1', license: 'MIT', text: 'x' }]), []);
   assert.equal(checkPackages([{ name: 'b', version: '1', license: 'GPL-3.0', text: 'x' }]).length, 1);
   assert.equal(checkPackages([{ name: 'c', version: '1', license: 'MIT', text: '' }]).length, 1);
@@ -215,10 +223,14 @@ test('after-pack：资源齐全才放行，GPL 构建与缺许可文件会失败
     put('ffmpeg/ffprobe.exe');
     put('ffmpeg/ffmpeg-build.json', JSON.stringify({ license: 'LGPL' }));
     put('licenses/ffmpeg/LICENSE.txt');
+    put('licenses/ffmpeg/COPYING.GPLv3');
     put('licenses/ffmpeg/SOURCE.txt');
     put('licenses/privacy.txt');
     assert.throws(() => checkResources(res), /THIRD_PARTY_LICENSES/);
     put('licenses/THIRD_PARTY_LICENSES.txt');
+    fs.unlinkSync(path.join(res, 'licenses', 'ffmpeg', 'COPYING.GPLv3'));
+    assert.throws(() => checkResources(res), /COPYING\.GPLv3/);
+    put('licenses/ffmpeg/COPYING.GPLv3');
     const warn = console.warn;
     console.warn = () => {};
     try { assert.doesNotThrow(() => checkResources(res)); } finally { console.warn = warn; }

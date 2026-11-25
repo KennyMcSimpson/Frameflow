@@ -939,6 +939,7 @@ async function scanVideo(paths, file, opts = {}) {
     const watchdog = setInterval(() => {
       if (Date.now() - lastActivity > stallMs) fail(new Error('视频解码超时，文件可能过大或已损坏'));
     }, Math.min(5000, Math.max(200, stallMs / 4)));
+    watchdog.unref?.();
 
     let exitCode = null;
     if (worker) {
@@ -999,20 +1000,38 @@ async function scanVideo(paths, file, opts = {}) {
 
 function runFf(bin, args, { signal, timeoutMs = 600000 } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(cancelledError()); return; }
     const { spawn } = require('node:child_process');
     let p;
     try { p = spawn(bin, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] }); } catch (e) { reject(e); return; }
     let stderr = '';
+    let timedOut = false;
+    let settled = false;
     const onAbort = () => { try { p.kill(); } catch {} };
-    if (signal) { if (signal.aborted) onAbort(); signal.addEventListener('abort', onAbort, { once: true }); }
-    const timer = setTimeout(() => { try { p.kill(); } catch {} }, timeoutMs);
-    p.stderr.on('data', (d) => { if (stderr.length < 20000) stderr += d.toString(); });
-    p.on('error', (e) => { clearTimeout(timer); reject(e); });
-    p.on('close', (code) => {
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; try { p.kill(); } catch {} }, timeoutMs);
+    timer.unref?.();
+    const cleanup = () => {
       clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    p.stderr.on('data', (d) => { if (stderr.length < 20000) stderr += d.toString(); });
+    p.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(e);
+    });
+    p.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (signal && signal.aborted) reject(cancelledError());
-      else resolve({ code, stderr });
+      else if (timedOut) {
+        const err = new Error('导出关键帧超时');
+        err.code = 'TIMEOUT';
+        reject(err);
+      } else resolve({ code, stderr });
     });
   });
 }

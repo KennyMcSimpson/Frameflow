@@ -83,31 +83,40 @@ export default function AnalysisList({ onAdd }) {
         {list.map((a) => (
           <div
             key={a.id}
-            role="button"
-            tabIndex={0}
             className={'lib-item' + (a.id === selectedId ? ' selected' : '')}
-            onClick={() => lib.selectAnalysis(a.id)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); lib.selectAnalysis(a.id); } }}
+            style={{ padding: 0 }}
           >
-            <span className="lib-item-thumb">
-              {a.thumb ? <img src={api.mediaUrl(a.thumb)} alt="" loading="lazy" draggable={false} /> : <Icon name="film" size={16} />}
-              {Number(a.duration) > 0 && <span className="lib-item-dur">{fmtClock(a.duration)}</span>}
-            </span>
-            <span className="lib-item-body">
-              <span className="lib-item-title" title={a.title}>{a.title || '未命名视频'}</span>
-              <span className="lib-item-meta">
-                <span className="lib-item-cat">{ANALYSIS_CATEGORY_LABELS[a.category] || '其他'}</span>
-                <span>{Number(a.shotCount) || 0} 镜</span>
-                <span>{Number(a.techniqueCount) || 0} 技法</span>
-                {a.status === 'partial' && <Chip kind="warn">部分</Chip>}
+            <button
+              type="button"
+              className="lib-item-main"
+              aria-current={a.id === selectedId ? 'true' : undefined}
+              onClick={() => lib.selectAnalysis(a.id)}
+              style={{
+                display: 'flex', gap: 'var(--space-3)', flex: 1, minWidth: 0, padding: 'var(--space-2)',
+                border: 0, background: 'transparent', textAlign: 'left', cursor: 'pointer',
+              }}
+            >
+              <span className="lib-item-thumb">
+                {a.thumb ? <img src={api.mediaUrl(a.thumb)} alt="" loading="lazy" draggable={false} /> : <Icon name="film" size={16} />}
+                {Number(a.duration) > 0 && <span className="lib-item-dur">{fmtClock(a.duration)}</span>}
               </span>
-              <span className="lib-item-date">{fmtDate(a.createdAt)}</span>
-            </span>
+              <span className="lib-item-body">
+                <span className="lib-item-title" title={a.title}>{a.title || '未命名视频'}</span>
+                <span className="lib-item-meta">
+                  <span className="lib-item-cat">{ANALYSIS_CATEGORY_LABELS[a.category] || '其他'}</span>
+                  <span>{Number(a.shotCount) || 0} 镜</span>
+                  <span>{Number(a.techniqueCount) || 0} 技法</span>
+                  {a.status === 'partial' && <Chip kind="warn">部分</Chip>}
+                </span>
+                <span className="lib-item-date">{fmtDate(a.createdAt)}</span>
+              </span>
+            </button>
             <button
               type="button"
               className="lib-item-del"
               title="删除这条记录"
-              onClick={(e) => { e.stopPropagation(); setConfirm(a); }}
+              aria-label={`删除「${a.title || '未命名视频'}」`}
+              onClick={() => setConfirm(a)}
             >
               <Icon name="trash" size={13} />
             </button>

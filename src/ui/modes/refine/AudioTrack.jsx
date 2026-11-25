@@ -15,14 +15,28 @@ const PEAKS_PER_SECOND = 50;
 const MAX_CANVAS_W = 4096;
 
 const waveCache = createPromiseCache();
-const waveDone = new Map(); // path -> { peaks, duration }
+const waveDone = new Map(); // path -> { peaks, duration } (LRU 上限 200)
+const MAX_WAVE_CACHE = 200;
+
+function setWaveDone(path, data) {
+  if (waveDone.has(path)) waveDone.delete(path);
+  waveDone.set(path, data);
+  while (waveDone.size > MAX_WAVE_CACHE) {
+    waveDone.delete(waveDone.keys().next().value);
+  }
+}
 
 function loadWaveform(path) {
-  if (waveDone.has(path)) return Promise.resolve(waveDone.get(path));
+  if (waveDone.has(path)) {
+    const hit = waveDone.get(path);
+    waveDone.delete(path);
+    waveDone.set(path, hit);
+    return Promise.resolve(hit);
+  }
   return waveCache.get(path, () => mediaQueue.push(() => api.call('media:waveform', { path, peaksPerSecond: PEAKS_PER_SECOND })))
     .then((r) => {
       const data = { peaks: Array.isArray(r && r.peaks) ? r.peaks : [], duration: Number(r && r.duration) || 0 };
-      waveDone.set(path, data);
+      if (data.peaks.length > 0 || data.duration > 0) setWaveDone(path, data);
       return data;
     });
 }
@@ -31,17 +45,28 @@ function loadWaveform(path) {
 const Waveform = memo(function Waveform({ path, srcIn, srcOut, width, height, volume }) {
   const [ref, inView] = useInView();
   const canvasRef = useRef(null);
-  const [data, setData] = useState(() => (path ? waveDone.get(path) || null : null));
-  const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(() => (path && waveDone.has(path) ? { path, data: waveDone.get(path) } : null));
+  const [failedPath, setFailedPath] = useState(null);
+  const data = loaded && loaded.path === path ? loaded.data : null;
+  const failed = failedPath === path;
 
   useEffect(() => {
-    if (!inView || !path || data) return undefined;
+    if (!inView || !path) return undefined;
+    if (waveDone.has(path)) {
+      const hit = waveDone.get(path);
+      waveDone.delete(path);
+      waveDone.set(path, hit);
+      setLoaded({ path, data: hit });
+      setFailedPath(null);
+      return undefined;
+    }
+    if (loaded && loaded.path === path) return undefined;
     let alive = true;
     loadWaveform(path)
-      .then((d) => { if (alive) setData(d); })
-      .catch(() => { if (alive) setFailed(true); });
+      .then((d) => { if (alive) { setLoaded({ path, data: d }); setFailedPath(null); } })
+      .catch(() => { if (alive) setFailedPath(path); });
     return () => { alive = false; };
-  }, [inView, path, data]);
+  }, [inView, path, loaded]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -190,6 +215,7 @@ const AudioBlock = memo(function AudioBlock({ audio, asset, start, srcIn, srcOut
     <div
       className={cls}
       style={{ left, width, top, height }}
+      data-audio-id={audio.id}
       title={`${ROLE_LABELS[audio.role] || '音频'}：${name}\n${start.toFixed(2)}s 起 · ${len.toFixed(2)} 秒 · 音量 ${Math.round((Number(shown.volume) || 0) * 100)}%${locked ? '\n已锁定' : '\n拖动改位置，拖边缘裁剪；音量线上下拖，角上圆点调淡入淡出'}`}
       onPointerDown={(e) => onDown(e, audio.id, 'body')}
       onDoubleClick={() => { pause(); seek(start); }}

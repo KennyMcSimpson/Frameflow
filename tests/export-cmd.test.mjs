@@ -1,5 +1,5 @@
 // export.cjs 测试：buildExportArgs 纯函数 + 真实 ffmpeg 帧管道编码 + IPC 会话流程（begin/frame/end/cancel）。
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
@@ -81,7 +81,7 @@ test('buildExportArgs：1 段音频 → 无 amix，含淡入淡出与延迟', ()
   assert.deepEqual(args.slice(i - 5, i + 1), ['-ss', '3', '-t', '4', '-i', 'C:\\m\\music.mp3']);
   const fc = argAfter(args, '-filter_complex');
   assert.equal(fc,
-    '[1:a]aresample=48000,aformat=channel_layouts=stereo,volume=0.8,afade=t=in:st=0:d=0.5,afade=t=out:st=3:d=1,adelay=1250|1250[a0];' +
+    '[1:a]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=0.8,afade=t=in:st=0:d=0.5,afade=t=out:st=3:d=1,adelay=1250|1250[a0];' +
     '[a0]apad,atrim=start=0:end=10[aout]');
   assert.ok(!fc.includes('amix'));
   assert.ok(!args.includes('anullsrc=r=48000:cl=stereo'));
@@ -215,11 +215,17 @@ function makeCtx() {
   const registered = [];
   const ctx = { paths: { ffmpeg, ffprobe }, jobs, registerMediaPath: (p) => registered.push(p), send() {} };
   registerExport({ handle: (ch, fn) => { handlers[ch] = fn; }, ctx });
-  const waitJob = (jobId) => new Promise((resolve) => {
+  const waitJob = (jobId, timeoutMs = 30000) => new Promise((resolve, reject) => {
+    const hit = () => events.find((x) => (x.ev === 'job:done' || x.ev === 'job:error') && x.data.jobId === jobId);
+    const existing = hit();
+    if (existing) { resolve(existing); return; }
+    const deadline = Date.now() + timeoutMs;
     const iv = setInterval(() => {
-      const e = events.find((x) => (x.ev === 'job:done' || x.ev === 'job:error') && x.data.jobId === jobId);
-      if (e) { clearInterval(iv); resolve(e); }
+      const e = hit();
+      if (e) { clearInterval(iv); resolve(e); return; }
+      if (Date.now() > deadline) { clearInterval(iv); reject(new Error(`waitJob(${jobId}) 超时（${timeoutMs}ms）`)); }
     }, 20);
+    if (iv.unref) iv.unref();
   });
   return { handlers, events, waitJob, registered };
 }
@@ -243,7 +249,11 @@ test('IPC：export:begin/frame/end 完整流程（覆盖已存在文件）', { s
   assert.equal(res.path, path.resolve(outPath));
   assert.ok(res.size > 1000);
   assert.ok(Math.abs(res.duration - 1) < 0.15, `duration=${res.duration}`);
-  assert.ok(!fs.existsSync(outPath + '.part.mp4'), 'part 文件应已改名');
+  assert.equal(
+    fs.readdirSync(dir).filter((f) => f.startsWith(path.basename(outPath) + '.') && f.includes('.part.')).length,
+    0,
+    'part 文件应已改名',
+  );
   checkOutput(outPath, 1);
   assert.deepEqual(registered, [path.resolve(outPath)]);
   const fin = await waitJob(jobId);
@@ -265,7 +275,11 @@ test('IPC：export:cancel 杀进程、删 part、任务标记取消', { skip: !h
   assert.equal(fin.ev, 'job:error');
   assert.equal(fin.data.cancelled, true);
   await new Promise((r) => setTimeout(r, 300));
-  assert.ok(!fs.existsSync(outPath + '.part.mp4'), 'part 文件应被删除');
+  assert.equal(
+    fs.readdirSync(dir).filter((f) => f.startsWith(path.basename(outPath) + '.') && f.includes('.part.')).length,
+    0,
+    'part 文件应被删除',
+  );
   assert.ok(!fs.existsSync(outPath));
   await assert.rejects(handlers['export:frame']({ jobId, data: frames[0] }), /不存在或已结束/);
 });
@@ -283,9 +297,10 @@ test('IPC：参数校验与零帧结束', { skip: !haveBins && '缺少 ffmpeg-st
   assert.ok(!fs.existsSync(path.join(dir, 'zero.mp4')));
 });
 
-test('清理测试临时目录', () => {
+after(() => {
   if (fixture) {
     try { fs.rmSync(fixture.dir, { recursive: true, force: true }); } catch {}
+    fixture = null;
   }
 });
 
@@ -314,7 +329,8 @@ test('v3 buildExportArgs: 码率 / mov / 硬件编码器 / gif / mp3 / wav', () 
   const br = buildExportArgs({ ...base, bitrate: 10000 });
   assert.ok(br.includes('-b:v') && br.includes('10000k') && !br.includes('-crf'));
   const mov = buildExportArgs({ ...base, format: 'mov' });
-  assert.equal(mov[mov.indexOf('-f', 20) + 1] === 'mov' || mov.includes('mov'), true);
+  const movFmtIdx = mov.lastIndexOf('-f');
+  assert.ok(movFmtIdx >= 0 && mov[movFmtIdx + 1] === 'mov', `缺少输出 -f mov：${mov.join(' ')}`);
   const nv = buildExportArgs({ ...base, encoder: 'h264_nvenc' });
   assert.ok(nv.includes('h264_nvenc') && nv.includes('-b:v') && !nv.includes('-crf'));
   const bogus = buildExportArgs({ ...base, encoder: 'evil' });
@@ -334,12 +350,15 @@ test('v3 textsToSrt (主进程内联)', () => {
 
 test('v3 真实 ffmpeg：音量表达式 + 倒放 + 降噪 + 仅音频 MP3 可编码', { skip: !ffmpeg }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exv3-'));
-  const src = path.join(dir, 'tone.wav');
-  spawnSync(ffmpeg, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', src]);
-  const out = path.join(dir, 'o.mp3');
-  const args = buildExportArgs({ output: out, format: 'mp3', duration: 2, audioPlan: { segments: [{ path: src, timelineStart: 0.2, srcIn: 0, srcOut: 3, speed: 1.5, volume: 1, reverse: true, denoise: true, volumeKeys: [{ t: 0, v: 0 }, { t: 1, v: 1 }] }] } });
-  const r = spawnSync(ffmpeg, args, { encoding: 'utf8' });
-  assert.equal(r.status, 0, r.stderr);
-  assert.ok(fs.statSync(out).size > 1000);
-  fs.rmSync(dir, { recursive: true, force: true });
+  try {
+    const src = path.join(dir, 'tone.wav');
+    spawnSync(ffmpeg, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', src]);
+    const out = path.join(dir, 'o.mp3');
+    const args = buildExportArgs({ output: out, format: 'mp3', duration: 2, audioPlan: { segments: [{ path: src, timelineStart: 0.2, srcIn: 0, srcOut: 3, speed: 1.5, volume: 1, reverse: true, denoise: true, volumeKeys: [{ t: 0, v: 0 }, { t: 1, v: 1 }] }] } });
+    const r = spawnSync(ffmpeg, args, { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(fs.statSync(out).size > 1000);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

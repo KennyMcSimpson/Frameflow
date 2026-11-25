@@ -53,11 +53,17 @@ function keyFromUrl(u) {
   return name.split('.')[0] || '';
 }
 
+function decodeCodePoint(cp) {
+  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : '';
+}
+
 function stripHtml(s) {
   return String(s || '')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => decodeCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, n) => decodeCodePoint(Number(n)))
     .replace(/\s+/g, ' ')
     .trim();
 }

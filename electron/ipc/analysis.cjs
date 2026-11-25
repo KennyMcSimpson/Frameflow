@@ -7,11 +7,171 @@ const crypto = require('node:crypto');
 const yt = require('../lib/ytdlp.cjs');
 const { analyzeVideo } = require('../lib/analyzer.cjs');
 const web = require('./web.cjs');
+const urlSafety = require('../lib/urlSafety.cjs');
 
 const ID_RE = /^[A-Za-z0-9_-]+$/;
 const ANALYSIS_CATEGORIES = ['film', 'tutorial', 'interview', 'short', 'ad', 'vfx', 'other'];
 const CATEGORY_LABELS = { film: '电影片段', tutorial: '拍摄教程', interview: '演员访谈', short: '短视频', ad: '广告', vfx: '特效', other: '其他' };
 const TECHNIQUE_CATEGORIES = ['transition', 'lighting', 'camera', 'rhythm', 'composition', 'color', 'dialogue', 'vfx', 'product', 'narrative', 'sound'];
+const ALLOWED_LIBRARY_MEDIA_EXT = new Set([
+  '.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.ts', '.flv', '.wmv',
+  '.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp',
+  '.srt', '.vtt',
+]);
+
+function normPath(p) {
+  const abs = path.resolve(p);
+  return process.platform === 'win32' ? abs.toLowerCase() : abs;
+}
+
+function isInsideDir(dir, target) {
+  if (!dir || !target) return false;
+  const d = dir.endsWith(path.sep) ? dir : dir + path.sep;
+  return target === dir || target.startsWith(d);
+}
+
+function resolveDirReal(d) {
+  if (typeof d !== 'string' || !d || urlSafety.isUncPath(d)) return null;
+  const abs = path.resolve(d);
+  if (urlSafety.isUncPath(abs)) return null;
+  try {
+    const r = fs.realpathSync(abs);
+    return urlSafety.isUncPath(r) ? null : r;
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return null;
+  }
+  const parts = [];
+  let cur = abs;
+  while (true) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return abs;
+    parts.unshift(path.basename(cur));
+    cur = parent;
+    if (urlSafety.isUncPath(cur)) return null;
+    try {
+      const rp = fs.realpathSync(cur);
+      if (urlSafety.isUncPath(rp)) return null;
+      const joined = path.join(rp, ...parts);
+      return urlSafety.isUncPath(joined) ? null : joined;
+    } catch (e) {
+      if (!e || e.code !== 'ENOENT') return null;
+    }
+  }
+}
+
+function isBlockedUserDataMedia(abs, real, paths) {
+  const targets = new Set([normPath(abs), normPath(real)]);
+  const blockedDirs = [];
+  try {
+    const logMod = require('../lib/log.cjs');
+    const ld = logMod && typeof logMod.logDir === 'function' ? logMod.logDir() : '';
+    if (ld && !urlSafety.isUncPath(ld)) {
+      blockedDirs.push(normPath(ld));
+      const rld = resolveDirReal(ld);
+      if (rld) blockedDirs.push(normPath(rld));
+    }
+  } catch {}
+
+  let ud = '';
+  try { ud = (paths && paths.userData) || ''; } catch {}
+  if (!ud) {
+    try {
+      const e = require('electron');
+      if (e && e.app) ud = e.app.getPath('userData') || '';
+    } catch {}
+  }
+  if (ud && !urlSafety.isUncPath(ud)) {
+    const logsSub = path.join(ud, 'logs');
+    blockedDirs.push(normPath(logsSub));
+    const rLogs = resolveDirReal(logsSub);
+    if (rLogs) blockedDirs.push(normPath(rLogs));
+  }
+  for (const d of blockedDirs) {
+    for (const t of targets) {
+      if (isInsideDir(d, t)) return true;
+    }
+  }
+
+  if (!ud || urlSafety.isUncPath(ud)) return false;
+
+  const udDirs = new Set([normPath(ud)]);
+  const rud = resolveDirReal(ud);
+  if (rud) udDirs.add(normPath(rud));
+
+  let dr = '';
+  try {
+    if (paths) {
+      if (paths.dataRootRaw !== undefined) dr = paths.dataRootRaw || '';
+      else if (typeof paths.tryDataRoot === 'function') dr = paths.tryDataRoot() || '';
+      else if (typeof paths.dataRoot === 'string') dr = paths.dataRoot;
+    }
+  } catch {}
+  const drDirs = new Set();
+  if (dr && !urlSafety.isUncPath(dr)) {
+    drDirs.add(normPath(dr));
+    const rdr = resolveDirReal(dr);
+    if (rdr) drDirs.add(normPath(rdr));
+  }
+
+  for (const udDir of udDirs) {
+    for (const t of targets) {
+      if (!isInsideDir(udDir, t)) continue;
+      let insideDataRoot = false;
+      for (const drDir of drDirs) {
+        if (drDir !== udDir && isInsideDir(drDir, t)) { insideDataRoot = true; break; }
+      }
+      if (!insideDataRoot) return true;
+      const rel = t.slice(udDir.length).replace(/^[\\/]+/, '');
+      const base = path.basename(t);
+      if (
+        /^(secrets|settings)(\.|$)/i.test(base)
+        || base === 'running.lock'
+        || base === 'encoders.json'
+        || /\.log$/i.test(base)
+        || /^logs([\\/]|$)/i.test(rel)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function validateLibraryMediaFile(paths, ctx, candidate) {
+  if (typeof candidate !== 'string' || !candidate.trim()) return { ok: false, reason: '文件路径无效' };
+  if (urlSafety.isUncPath(candidate)) return { ok: false, reason: '不允许使用网络路径（UNC）' };
+  if (!path.isAbsolute(candidate)) return { ok: false, reason: '文件路径必须是完整的绝对路径' };
+  const abs = path.resolve(candidate);
+  if (urlSafety.isUncPath(abs)) return { ok: false, reason: '不允许使用网络路径（UNC）' };
+  const rawExt = path.extname(candidate).toLowerCase();
+  const absExt = path.extname(abs).toLowerCase();
+  if (!rawExt || !ALLOWED_LIBRARY_MEDIA_EXT.has(rawExt) || !ALLOWED_LIBRARY_MEDIA_EXT.has(absExt)) {
+    return { ok: false, reason: '不支持的媒体文件类型' };
+  }
+  if (ctx && typeof ctx.isSafeMediaPath === 'function' && !ctx.isSafeMediaPath(candidate)) {
+    return { ok: false, reason: '不允许将受保护目录或非媒体文件加入素材库' };
+  }
+  let real;
+  try {
+    real = fs.realpathSync(abs);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: false, reason: '文件不存在' };
+    return { ok: false, reason: '无法校验文件路径' };
+  }
+  if (!real || urlSafety.isUncPath(real)) return { ok: false, reason: '不允许使用网络路径（UNC）' };
+  const realExt = path.extname(real).toLowerCase();
+  if (!realExt || !ALLOWED_LIBRARY_MEDIA_EXT.has(realExt)) {
+    return { ok: false, reason: '不支持的媒体文件类型' };
+  }
+  let st;
+  try { st = fs.statSync(real); } catch { return { ok: false, reason: '无法读取文件信息' }; }
+  if (!st.isFile()) return { ok: false, reason: '目标不是有效文件' };
+  if (isBlockedUserDataMedia(abs, real, paths)) {
+    return { ok: false, reason: '不允许将应用内部数据目录中的文件加入素材库' };
+  }
+  return { ok: true, abs, real, ext: realExt };
+}
 
 function rid(prefix) { return `${prefix}_${crypto.randomBytes(6).toString('hex')}`; }
 function nowIso() { return new Date().toISOString(); }
@@ -127,21 +287,29 @@ const libraryStore = {
    * 加入素材库。copy=true 时把库外文件复制到 library/media；按来源路径/URL 去重（重复则更新）。
    * @returns {Promise<Asset[]>} 入库后的素材
    */
-  async addAssets(paths, assets, { copy = true } = {}) {
+  async addAssets(paths, assets, { copy = true, ctx = null } = {}) {
     const input = (Array.isArray(assets) ? assets : []).filter((a) => a && typeof a === 'object');
     const prepared = [];
     const skipped = [];
     for (const a of input) {
       if (a.kind === 'previz' || !a.path) { skipped.push(`${a.name || '素材'}：预演或无文件的素材不能加入素材库`); continue; }
-      if (!fs.existsSync(a.path)) { skipped.push(`${a.name || '素材'}：文件不存在`); continue; }
-      const entry = { ...a, source: { ...(a.source || {}), type: 'library' }, tags: Array.isArray(a.tags) ? a.tags.map(String).slice(0, 30) : [] };
-      if (copy && !isInside(a.path, paths.library)) {
-        const ext = path.extname(a.path) || '.mp4';
-        const dest = path.join(paths.libraryMedia, `${yt.safeBase(a.name || 'asset')}_${crypto.createHash('sha1').update(path.resolve(a.path)).digest('hex').slice(0, 8)}${ext}`);
+      const checked = validateLibraryMediaFile(paths, ctx, a.path);
+      if (!checked.ok) { skipped.push(`${a.name || '素材'}：${checked.reason}`); continue; }
+      const entry = { ...a, path: checked.real, source: { ...(a.source || {}), type: 'library' }, tags: Array.isArray(a.tags) ? a.tags.map(String).slice(0, 30) : [] };
+      if (entry.thumb && typeof entry.thumb === 'string' && !/^data:image\//i.test(entry.thumb)) {
+        const thumbCheck = validateLibraryMediaFile(paths, ctx, entry.thumb);
+        if (!thumbCheck.ok) delete entry.thumb;
+        else entry.thumb = thumbCheck.real;
+      }
+      const libReal = (paths && paths.library && resolveDirReal(paths.library)) || (paths && paths.library) || '';
+      const alreadyInLibrary = !!(libReal && isInsideDir(normPath(libReal), normPath(checked.real)));
+      if (copy && !alreadyInLibrary) {
+        const ext = checked.ext;
+        const dest = path.join(paths.libraryMedia, `${yt.safeBase(a.name || 'asset')}_${crypto.createHash('sha1').update(checked.abs).digest('hex').slice(0, 8)}${ext}`);
         if (!fs.existsSync(dest)) {
           const tmp = dest + '.copying';
           try {
-            await fs.promises.copyFile(a.path, tmp);
+            await fs.promises.copyFile(checked.real, tmp);
             await renameRetry(tmp, dest);
           } catch (e) {
             try { fs.rmSync(tmp, { force: true }); } catch {}
@@ -149,7 +317,8 @@ const libraryStore = {
             continue;
           }
         }
-        entry.libraryFrom = path.resolve(a.originalPath || a.path);
+        const fromPath = (a.originalPath && !urlSafety.isUncPath(a.originalPath)) ? path.resolve(a.originalPath) : checked.abs;
+        entry.libraryFrom = fromPath;
         entry.path = dest;
         delete entry.originalPath;
       }
@@ -338,7 +507,33 @@ async function listAnalyses(paths) {
 
 function registerAnalysisMedia(ctx, a) {
   if (!a) return;
-  for (const p of [a.assetPath, a.source && a.source.path]) if (p) ctx.registerMediaPath(p);
+  for (const p of [a.assetPath, a.source && a.source.path]) if (p && !urlSafety.isUncPath(p)) ctx.registerMediaPath(p);
+}
+
+function isAllowedAssetPath(ctx, paths, candidate) {
+  if (typeof candidate !== 'string' || !candidate.trim() || urlSafety.isUncPath(candidate) || !path.isAbsolute(candidate)) return false;
+  const abs = path.resolve(candidate);
+  if (urlSafety.isUncPath(abs)) return false;
+  let resolved = abs;
+  try { resolved = fs.realpathSync(abs); } catch {}
+  if (urlSafety.isUncPath(resolved)) return false;
+  if (paths && paths.userData) {
+    let ud = path.resolve(paths.userData);
+    try { ud = fs.realpathSync(ud); } catch {}
+    const inUserData = isInside(candidate, paths.userData) || isInside(resolved, ud);
+    if (inUserData) {
+      const inManaged = (paths.library && isInside(resolved, paths.library))
+        || (paths.analyses && isInside(resolved, paths.analyses));
+      if (!inManaged) return false;
+    }
+  }
+  if (ctx && typeof ctx.isAllowedMedia === 'function') {
+    return !!ctx.isAllowedMedia(candidate) && !!ctx.isAllowedMedia(resolved);
+  }
+  return !!(
+    (paths && paths.library && isInside(resolved, paths.library))
+    || (paths && paths.analyses && isInside(resolved, paths.analyses))
+  );
 }
 
 async function linkTechniqueToAnalysis(paths, analysisId, techId, add) {
@@ -374,13 +569,15 @@ async function startAnalysis(ctx, job, payload) {
     let base = 0;
 
     if (url) {
-      if (!/^https?:\/\//i.test(url)) throw new Error('网址格式不正确，请粘贴以 http(s):// 开头的视频链接');
+      const allowedOrigins = (ctx && ctx.allowedOrigins) || [];
+      urlSafety.assertSafePublicUrl(url, { allowedOrigins });
       const platform = yt.platformOf(url);
       job.progress('download', 0, '正在解析视频链接…');
       const dl = await yt.downloadVideo(paths, url, paths.libraryMedia, {
         maxSeconds: maxSeconds > 0 ? maxSeconds : 0,
         withSubs: true,
         signal: job.signal,
+        allowedOrigins,
         fileBase: `${yt.safeBase(title || platform || 'video')}_${id.slice(4, 12)}`,
         onProgress: (p, msg) => job.progress('download', p * 0.35, msg),
       });
@@ -408,13 +605,15 @@ async function startAnalysis(ctx, job, payload) {
       asset.analysisId = id;
       if (maxSeconds > 0) asset.clipSeconds = maxSeconds;
       if (subtitlesFile) asset.subtitlesPath = subtitlesFile;
-      try { await libraryStore.addAssets(paths, [asset], { copy: false }); } catch (e) { console.warn('[analysis] 加入素材库失败', e.message); }
+      try { await libraryStore.addAssets(paths, [asset], { copy: false, ctx }); } catch (e) { console.warn('[analysis] 加入素材库失败', e.message); }
       assetPath = asset.path;
       source = { type: 'url', url, platform, path: file };
       base = 0.4;
     } else if (localPath) {
-      if (!fs.existsSync(localPath)) throw new Error('找不到这个视频文件，可能已被移动或删除');
+      if (urlSafety.isUncPath(localPath)) throw new Error('出于安全考虑，不允许分析网络路径（UNC）文件');
       file = path.resolve(localPath);
+      if (urlSafety.isUncPath(file)) throw new Error('出于安全考虑，不允许分析网络路径（UNC）文件');
+      if (!fs.existsSync(file)) throw new Error('找不到这个视频文件，可能已被移动或删除');
       ctx.registerMediaPath(file);
       if (!title) title = path.basename(file, path.extname(file));
       source = { type: 'file', path: file };
@@ -428,8 +627,10 @@ async function startAnalysis(ctx, job, payload) {
       }
       if (!info.hasVideo || info.kind !== 'video') throw new Error('这个文件没有视频画面，无法拆片');
       // 本地字幕：同名 .vtt / .srt
-      for (const ext of ['.vtt', '.zh.vtt', '.srt']) {
-        const cand = file.slice(0, -path.extname(file).length) + ext;
+      const ext = path.extname(file);
+      const stem = ext ? file.slice(0, -ext.length) : file;
+      for (const subExt of ['.vtt', '.zh.vtt', '.srt']) {
+        const cand = stem + subExt;
         if (fs.existsSync(cand)) { subtitlesFile = cand; break; }
       }
       if (ff.needsProxy(info, file)) {
@@ -496,8 +697,14 @@ module.exports = function register({ handle, ctx }) {
   handle('analysis:start', async (payload = {}) => {
     payload = payload || {};
     if (!payload.url && !payload.path) throw new Error('请提供视频网址或本地视频文件');
-    // 契约 C4：带视频站链接时，联网之前先确认用户已同意使用须知（未同意 → NEED_CONSENT，渲染端弹同意框后重试）
-    if (payload.url) requireVideoSiteConsent(ctx);
+    if (payload.path && urlSafety.isUncPath(String(payload.path))) {
+      throw new Error('出于安全考虑，不允许分析网络路径（UNC）文件');
+    }
+    if (payload.url) {
+      urlSafety.assertSafePublicUrl(String(payload.url).trim(), { allowedOrigins: (ctx && ctx.allowedOrigins) || [] });
+      // 契约 C4：带视频站链接时，联网之前先确认用户已同意使用须知（未同意 → NEED_CONSENT，渲染端弹同意框后重试）
+      requireVideoSiteConsent(ctx);
+    }
     const title = payload.title || payload.url || (payload.path ? path.basename(payload.path) : '拆片');
     return jobs.start('analysis', (job) => startAnalysis(ctx, job, payload), { title: String(title).slice(0, 80), url: payload.url || null, path: payload.path || null });
   });
@@ -515,12 +722,25 @@ module.exports = function register({ handle, ctx }) {
     const file = analysisFile(paths, analysis.id);
     const saved = await updateJson(file, null, (cur) => {
       if (!cur || typeof cur !== 'object') throw new Error('找不到这条拆片记录，可能已被删除');
+      let assetPath = cur.assetPath;
+      if (Object.prototype.hasOwnProperty.call(analysis, 'assetPath') && analysis.assetPath !== cur.assetPath) {
+        if (analysis.assetPath == null || analysis.assetPath === '') {
+          assetPath = cur.assetPath;
+        } else if (isAllowedAssetPath(ctx, paths, analysis.assetPath)) {
+          assetPath = path.resolve(analysis.assetPath);
+        } else {
+          const err = new Error('不允许将拆片记录的媒体路径修改为未授权位置');
+          err.code = 'FORBIDDEN_PATH';
+          throw err;
+        }
+      }
       const next = {
         ...cur,
         ...analysis,
         id: cur.id,
         createdAt: cur.createdAt,
         source: cur.source,
+        assetPath,
         shots: Array.isArray(analysis.shots) ? analysis.shots : cur.shots,
         techniqueIds: strArr(analysis.techniqueIds != null ? analysis.techniqueIds : cur.techniqueIds, 500),
         updatedAt: nowIso(),
@@ -577,8 +797,8 @@ module.exports = function register({ handle, ctx }) {
   });
 
   handle('library:assets', async ({ query } = {}) => {
-    const list = (await libraryStore.listAssets(paths)).filter((a) => a.path && fs.existsSync(a.path));
-    for (const a of list) for (const p of [a.path, a.originalPath, a.thumb]) if (p) ctx.registerMediaPath(p);
+    const list = (await libraryStore.listAssets(paths)).filter((a) => a.path && !urlSafety.isUncPath(a.path) && fs.existsSync(a.path));
+    for (const a of list) for (const p of [a.path, a.originalPath, a.thumb]) if (p && !urlSafety.isUncPath(p)) ctx.registerMediaPath(p);
     const q = String(query || '').trim();
     const sorted = list.sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
     if (!q) return sorted;
@@ -591,8 +811,8 @@ module.exports = function register({ handle, ctx }) {
 
   handle('library:addAssets', async ({ assets } = {}) => {
     if (!Array.isArray(assets) || !assets.length) throw new Error('没有要加入素材库的素材');
-    const saved = await libraryStore.addAssets(paths, assets, { copy: true });
-    for (const a of saved) for (const p of [a.path, a.thumb]) if (p) ctx.registerMediaPath(p);
+    const saved = await libraryStore.addAssets(paths, assets, { copy: true, ctx });
+    for (const a of saved) for (const p of [a.path, a.thumb]) if (p && !urlSafety.isUncPath(p)) ctx.registerMediaPath(p);
     return saved;
   });
 };

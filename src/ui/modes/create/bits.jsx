@@ -291,11 +291,22 @@ export function CrGroup({ title, defaultOpen = true, children, extra }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className={'cr-group' + (open ? ' open' : '')}>
-      <button type="button" className="cr-group-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
-        <span className="grow">{title}</span>
+      <div className="cr-group-head" style={{ cursor: 'default' }}>
+        <button
+          type="button"
+          className="cr-group-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, height: '100%',
+            padding: 0, border: 0, background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer',
+          }}
+        >
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
+          <span className="grow">{title}</span>
+        </button>
         {extra}
-      </button>
+      </div>
       {open && <div className="cr-group-body">{children}</div>}
     </section>
   );

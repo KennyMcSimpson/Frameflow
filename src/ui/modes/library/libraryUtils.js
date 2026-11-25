@@ -1,6 +1,7 @@
 // 拆片库纯函数工具：URL 提取、分类猜测、统计描述、刻度计算、数据规范化。
 // 不依赖 DOM / store / api，node 可测（tests/libraryUtils.test.mjs）。
 import { uid } from '../../../engine/ids.js';
+import { SHOT_SIZE_LABELS, SHOT_MOVEMENT_LABELS } from '../../../engine/model.js';
 
 export const TECHNIQUE_CATEGORY_KEYS = ['transition', 'lighting', 'camera', 'rhythm', 'composition', 'color', 'dialogue', 'vfx', 'product', 'narrative', 'sound'];
 export const ANALYSIS_CATEGORY_KEYS = ['film', 'tutorial', 'interview', 'short', 'ad', 'vfx', 'other'];
@@ -387,6 +388,8 @@ export function buildAnalysisReport(analysis, techniques = [], labels = {}) {
   if (!a) return '';
   const catL = (labels && labels.category) || {};
   const tcL = (labels && labels.techCategory) || {};
+  const sizeL = (labels && labels.shotSize) || SHOT_SIZE_LABELS;
+  const moveL = (labels && labels.movement) || SHOT_MOVEMENT_LABELS;
   const L = [];
   L.push(`# 拆片报告：${a.title}`, '');
   const src = a.source || {};
@@ -421,7 +424,11 @@ export function buildAnalysisReport(analysis, techniques = [], labels = {}) {
     L.push('| # | 入点 | 时长 | 景别 | 运镜 | 说明 |', '| --- | --- | --- | --- | --- | --- |');
     a.shots.forEach((s, i) => {
       const ai = s.ai || {};
-      L.push(`| ${i + 1} | ${fmtClock(s.start)} | ${fmtSec(s.duration)} | ${mdEsc(ai.shotSize || ai.size || '')} | ${mdEsc(ai.movement || ai.camera || '')} | ${mdEsc(ai.purpose || ai.description || '')} |`);
+      const rawSize = ai.shotSize || ai.size || '';
+      const rawMove = ai.movement || ai.camera || '';
+      const sizeText = (rawSize && sizeL[rawSize]) || rawSize;
+      const moveText = (rawMove && moveL[rawMove]) || rawMove;
+      L.push(`| ${i + 1} | ${fmtClock(s.start)} | ${fmtSec(s.duration)} | ${mdEsc(sizeText)} | ${mdEsc(moveText)} | ${mdEsc(ai.purpose || ai.description || ai.notes || ai.subject || '')} |`);
     });
     L.push('');
   }

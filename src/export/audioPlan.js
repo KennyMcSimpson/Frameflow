@@ -23,7 +23,7 @@ function fit(seg, duration) {
     const hi = Math.min(total, duration - timelineStart);
     const parts = clipParts(seg.speedParts, lo, hi, seg.reverse);
     if (!parts.length) return null;
-    if (volumeKeys && lo > 0) volumeKeys = volumeKeys.map((k) => ({ t: round3(k.t - lo), v: k.v }));
+    if (volumeKeys && lo > 0) volumeKeys = volumeKeys.map((k) => ({ t: Math.max(0, round3(k.t - lo)), v: k.v }));
     const length = parts[parts.length - 1].t1;
     let fi = Math.max(0, seg.fadeIn);
     let fo = Math.max(0, seg.fadeOut);
@@ -43,7 +43,7 @@ function fit(seg, duration) {
     };
   }
   if (timelineStart < 0) {
-    if (volumeKeys) volumeKeys = volumeKeys.map((k) => ({ t: round3(k.t + timelineStart), v: k.v }));
+    if (volumeKeys) volumeKeys = volumeKeys.map((k) => ({ t: Math.max(0, round3(k.t + timelineStart)), v: k.v }));
     if (seg.reverse) srcOut -= -timelineStart * speed; else srcIn += -timelineStart * speed;
     timelineStart = 0;
   }
@@ -137,28 +137,38 @@ function clipParts(parts, lo, hi, reverse) {
 export function effectiveSpeed(clip, timelineDuration) {
   const c = clip || {};
   const base = num(c.speed, 1) > 0 ? num(c.speed, 1) : 1;
-  if (!Array.isArray(c.speedCurve) || !c.speedCurve.length) return base;
+  if (!Array.isArray(c.speedCurve) || c.speedCurve.length < 2) return base;
   const srcLen = Math.max(0, num(c.out) - num(c.in));
   let dur = num(timelineDuration);
   if (!(dur > 0) && typeof TL.clipDuration === 'function') {
     try { dur = num(TL.clipDuration(c)); } catch { dur = 0; }
   }
   if (!(dur > 0)) {
-    // 本地积分：时长 = ∫ srcLen / v(t) dt（t 为归一化源进度）
-    const pts = c.speedCurve.slice().sort((a, b) => a.t - b.t);
-    const vAt = (t) => {
-      if (t <= pts[0].t) return pts[0].v;
-      for (let i = 0; i < pts.length - 1; i += 1) if (t <= pts[i + 1].t) { const a = pts[i]; const b = pts[i + 1]; return a.v + (b.v - a.v) * ((t - a.t) / Math.max(1e-6, b.t - a.t)); }
-      return pts[pts.length - 1].v;
-    };
-    let acc = 0;
-    for (let i = 0; i < 64; i += 1) acc += 1 / Math.max(0.1, vAt((i + 0.5) / 64) * base);
-    dur = (acc / 64) * srcLen;
+    // 与 timeline.js 曲线语义一致：曲线定义在归一化时间线进度 u∈[0,1] 上，平均速度 = ∫_0^1 clamp(v(u),0.1,10) du
+    const pts = c.speedCurve
+      .filter((p) => p && Number.isFinite(Number(p.t)) && Number(p.v) > 0)
+      .slice()
+      .sort((a, b) => Number(a.t) - Number(b.t));
+    if (pts.length >= 2) {
+      const clampV = (v) => Math.min(10, Math.max(0.1, Number(v)));
+      let mean = 0;
+      for (let i = 0; i < pts.length - 1; i += 1) {
+        const t0 = Math.min(1, Math.max(0, Number(pts[i].t)));
+        const t1 = Math.min(1, Math.max(0, Number(pts[i + 1].t)));
+        if (t1 <= t0) continue;
+        mean += ((clampV(pts[i].v) + clampV(pts[i + 1].v)) / 2) * (t1 - t0);
+      }
+      if (mean > 0 && srcLen > 0) dur = srcLen / mean;
+    }
   }
   return dur > 0 && srcLen > 0 ? srcLen / dur : base;
 }
 
 const spParts = (c, d) => { const p = speedSegments(c, d); return p.length ? { speedParts: p } : {}; };
+
+const trackFlags = (project, kind, n) => (typeof TL.trackFlags === 'function'
+  ? TL.trackFlags(project, kind, n)
+  : { locked: false, hidden: false, muted: false });
 
 /**
  * 硬切处的最短淡入淡出（秒）。声音在切点处突然开始或中断，波形跳变会发出「咔哒」声；
@@ -177,11 +187,12 @@ function seamless(a, b) {
 }
 
 /** 主轨镜头的声音描述（不出声时为 null），用于判断相邻镜头是否无缝相接 */
-function mainVoice(item, assets) {
+function mainVoice(item, assets, videoMuted = false) {
   const clip = item && item.clip;
   const asset = clip && assets[clip.assetId];
   const volume = num(clip && clip.volume, 1);
-  if (!asset || !asset.hasAudio || !asset.path || clip.mute || clip.muted || clip.still || volume <= 0) return null;
+  const hasKeys = !!(clip && clip.keys && Array.isArray(clip.keys.volume) && clip.keys.volume.length);
+  if (videoMuted || !asset || !asset.hasAudio || !asset.path || clip.mute || clip.muted || clip.still || (volume <= 0 && !hasKeys)) return null;
   return {
     path: asset.path,
     start: num(item.start),
@@ -192,7 +203,7 @@ function mainVoice(item, assets) {
     volume,
     reverse: !!clip.reverse,
     curve: Array.isArray(clip.speedCurve) && clip.speedCurve.length > 0,
-    keys: !!(clip.keys && Array.isArray(clip.keys.volume) && clip.keys.volume.length),
+    keys: hasKeys,
   };
 }
 
@@ -206,93 +217,105 @@ export function buildAudioPlan(project, { duration } = {}) {
     : audioClips.reduce((m, a) => Math.max(m, num(a.start) + Math.max(0, num(a.out) - num(a.in))), lastEnd);
 
   const segments = [];
-  const voices = layout.map((item) => mainVoice(item, assets));
+  const videoMuted = trackFlags(project, 'video').muted;
+  const voices = layout.map((item) => mainVoice(item, assets, videoMuted));
 
-  layout.forEach((item, i) => {
-    const { clip } = item;
-    const asset = assets[clip.assetId];
-    const volume = num(clip.volume, 1);
-    if (!asset || !asset.hasAudio || !asset.path || clip.mute || clip.muted || clip.still || volume <= 0) return;
-    const kv = clip.keys && Array.isArray(clip.keys.volume) && clip.keys.volume.length ? clip.keys.volume : null;
-    const next = layout[i + 1];
-    const overlapIn = num(item.overlap);
-    const overlapOut = next ? num(next.overlap) : 0;
-    // 硬切：没有转场重叠、也不是和相邻镜头无缝相接（同一素材被分割）时，两端各加 30ms 防爆音
-    const edgeIn = overlapIn > 0 || seamless(voices[i - 1], voices[i]) ? 0 : EDGE_FADE;
-    const edgeOut = overlapOut > 0 || seamless(voices[i], voices[i + 1]) ? 0 : EDGE_FADE;
-    const seg = fit({
-      path: asset.path,
-      timelineStart: item.start,
-      srcIn: num(clip.in),
-      srcOut: num(clip.out),
-      speed: effectiveSpeed(clip, item.duration),
-      ...spParts(clip, item.duration),
-      // 音量关键帧为绝对音量：此时基础音量置 1，避免重复相乘
-      volume: kv ? 1 : volume,
-      volumeKeys: kv ? kv.map((k) => ({ t: num(k.t), v: num(k.v, 1) })) : undefined,
-      reverse: !!clip.reverse,
-      denoise: !!clip.denoise,
-      fadeIn: Math.max(num(clip.audioFadeIn), overlapIn, edgeIn),
-      fadeOut: Math.max(num(clip.audioFadeOut), overlapOut, edgeOut),
-      role: 'clip',
-    }, total);
-    if (seg) segments.push(seg);
-  });
+  if (!videoMuted) {
+    layout.forEach((item, i) => {
+      const { clip } = item;
+      const asset = assets[clip.assetId];
+      const volume = num(clip.volume, 1);
+      const kv = clip.keys && Array.isArray(clip.keys.volume) && clip.keys.volume.length ? clip.keys.volume : null;
+      if (!asset || !asset.hasAudio || !asset.path || clip.mute || clip.muted || clip.still || (volume <= 0 && !kv)) return;
+      const next = layout[i + 1];
+      const overlapIn = num(item.overlap);
+      const overlapOut = next ? num(next.overlap) : 0;
+      // 硬切：没有转场重叠、也不是和相邻镜头无缝相接（同一素材被分割）时，两端各加 30ms 防爆音
+      const edgeIn = overlapIn > 0 || seamless(voices[i - 1], voices[i]) ? 0 : EDGE_FADE;
+      const edgeOut = overlapOut > 0 || seamless(voices[i], voices[i + 1]) ? 0 : EDGE_FADE;
+      const seg = fit({
+        path: asset.path,
+        timelineStart: item.start,
+        srcIn: num(clip.in),
+        srcOut: num(clip.out),
+        speed: effectiveSpeed(clip, item.duration),
+        ...spParts(clip, item.duration),
+        // 音量关键帧为绝对音量：此时基础音量置 1，避免重复相乘
+        volume: kv ? 1 : volume,
+        volumeKeys: kv ? kv.map((k) => ({ t: num(k.t), v: num(k.v, 1) })) : undefined,
+        reverse: !!clip.reverse,
+        denoise: !!clip.denoise,
+        fadeIn: Math.max(num(clip.audioFadeIn), overlapIn, edgeIn),
+        fadeOut: Math.max(num(clip.audioFadeOut), overlapOut, edgeOut),
+        role: 'clip',
+      }, total);
+      if (seg) segments.push(seg);
+    });
+  }
 
-  // 音频轨：分割开的同一段音乐首尾相接时不加淡变，其余两端至少 30ms
+  // 音频轨：分割开的同一段音乐首尾相接时不加淡变，其余两端至少 30ms；静音/零音量片段不参与拼接且不出声
+  const audioMuted = trackFlags(project, 'audio').muted;
   const tracks = audioClips.map((clip) => {
     const asset = assets[clip && clip.assetId];
-    if (!asset || !asset.path) return null;
+    const vol = num(clip && clip.volume, 1);
+    if (audioMuted || !clip || !asset || !asset.path || clip.muted || clip.mute || vol <= 0) return null;
     const start = num(clip.start);
     const srcIn = num(clip.in);
     const srcOut = num(clip.out);
     return {
-      path: asset.path, start, end: start + Math.max(0, srcOut - srcIn), srcIn, srcOut, speed: 1, volume: num(clip.volume, 1),
+      path: asset.path, start, end: start + Math.max(0, srcOut - srcIn), srcIn, srcOut, speed: 1, volume: vol,
       reverse: false, curve: false, keys: Array.isArray(clip.volumeKeys) && clip.volumeKeys.length > 0,
     };
   });
-  audioClips.forEach((clip, i) => {
-    const asset = assets[clip && clip.assetId];
-    if (!asset || !asset.path) return;
-    const me = tracks[i];
-    const joinedIn = tracks.some((v, j) => j !== i && seamless(v, me));
-    const joinedOut = tracks.some((v, j) => j !== i && seamless(me, v));
-    const seg = fit({
-      path: asset.path,
-      timelineStart: num(clip.start),
-      srcIn: num(clip.in),
-      srcOut: num(clip.out),
-      speed: 1,
-      volume: num(clip.volume, 1),
-      // volumeKeys（含自动闪避 autoDuck 写入的）为相对倍数，t 为片段内秒数
-      volumeKeys: Array.isArray(clip.volumeKeys) && clip.volumeKeys.length ? clip.volumeKeys.map((k) => ({ t: num(k.t), v: num(k.v, 1) })) : undefined,
-      denoise: !!clip.denoise,
-      fadeIn: Math.max(num(clip.fadeIn), joinedIn ? 0 : EDGE_FADE),
-      fadeOut: Math.max(num(clip.fadeOut), joinedOut ? 0 : EDGE_FADE),
-      role: clip.role || 'music',
-    }, total);
-    if (seg) segments.push(seg);
-  });
+  if (!audioMuted) {
+    audioClips.forEach((clip, i) => {
+      const me = tracks[i];
+      if (!me) return;
+      const joinedIn = tracks.some((v, j) => j !== i && seamless(v, me));
+      const joinedOut = tracks.some((v, j) => j !== i && seamless(me, v));
+      const seg = fit({
+        path: me.path,
+        timelineStart: num(clip.start),
+        srcIn: num(clip.in),
+        srcOut: num(clip.out),
+        speed: 1,
+        volume: me.volume,
+        // volumeKeys（含自动闪避 autoDuck 写入的）为相对倍数，t 为片段内秒数
+        volumeKeys: Array.isArray(clip.volumeKeys) && clip.volumeKeys.length ? clip.volumeKeys.map((k) => ({ t: num(k.t), v: num(k.v, 1) })) : undefined,
+        denoise: !!clip.denoise,
+        fadeIn: Math.max(num(clip.fadeIn), joinedIn ? 0 : EDGE_FADE),
+        fadeOut: Math.max(num(clip.fadeOut), joinedOut ? 0 : EDGE_FADE),
+        role: clip.role || 'music',
+      }, total);
+      if (seg) segments.push(seg);
+    });
+  }
 
   // 画中画自带的声音
-  const muteOverlayTracks = (project && project.tracks && project.tracks.overlay) || {};
   for (const o of (Array.isArray(project && project.overlays) ? project.overlays : [])) {
     const asset = assets[o && o.assetId];
-    if (!asset || !asset.hasAudio || !asset.path || o.muted || o.kind === 'image' || o.kind === 'sticker') continue;
-    if (muteOverlayTracks[o.track] && muteOverlayTracks[o.track].muted) continue;
+    if (!asset || !asset.hasAudio || !asset.path || o.mute || o.muted || o.still || o.kind === 'image' || o.kind === 'sticker') continue;
+    if (trackFlags(project, 'overlay', o.track || 1).muted) continue;
+    const kv = o.keys && Array.isArray(o.keys.volume) && o.keys.volume.length ? o.keys.volume : null;
     const vol = num(o.volume, 1);
-    if (vol <= 0) continue;
+    if (vol <= 0 && !kv) continue;
+    const srcIn = num(o.in);
+    const srcOut = num(o.out);
+    const speed = effectiveSpeed(o);
+    const segDur = speed > 0 ? Math.max(0, (srcOut - srcIn) / speed) : 0;
     const seg = fit({
       path: asset.path,
       timelineStart: num(o.start),
-      srcIn: num(o.in),
-      srcOut: num(o.out),
-      speed: effectiveSpeed(o),
+      srcIn,
+      srcOut,
+      speed,
       ...spParts(o),
-      volume: vol,
+      volume: kv ? 1 : vol,
+      volumeKeys: kv ? kv.map((k) => ({ t: num(k.t), v: num(k.v, 1) })) : undefined,
       reverse: !!o.reverse,
-      fadeIn: EDGE_FADE,
-      fadeOut: EDGE_FADE,
+      denoise: !!o.denoise,
+      fadeIn: Math.min(segDur / 2, Math.max(EDGE_FADE, num(o.audioFadeIn))),
+      fadeOut: Math.min(segDur / 2, Math.max(EDGE_FADE, num(o.audioFadeOut))),
       role: 'overlay',
     }, total);
     if (seg) segments.push(seg);

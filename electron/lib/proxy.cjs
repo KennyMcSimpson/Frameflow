@@ -70,12 +70,16 @@ async function makeEditProxy({ ffmpeg, input, output, info = {}, signal, onProgr
   const dur = Number(info.duration) || 0;
   let best = 0; // 换编码器重来时进度不倒退
   const once = (enc) => {
+    if (signal && signal.aborted) { const e = new Error('已取消'); e.code = 'CANCELLED'; return Promise.reject(e); }
     const tmp = `${output}.${crypto.randomBytes(3).toString('hex')}.part.mp4`;
     return new Promise((resolve, reject) => {
+      if (signal && signal.aborted) { const e = new Error('已取消'); e.code = 'CANCELLED'; reject(e); return; }
+      let settled = false;
       const p = spawn(ffmpeg, proxyArgs(input, tmp, info, enc), { windowsHide: true });
       let tail = '';
       const onAbort = () => { try { p.kill(); } catch {} };
-      if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+      const cleanup = () => { if (signal) signal.removeEventListener('abort', onAbort); };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
       p.stderr.on('data', (d) => {
         tail = (tail + d).slice(-600);
         const t = parseTime(tail);
@@ -84,9 +88,16 @@ async function makeEditProxy({ ffmpeg, input, output, info = {}, signal, onProgr
           if (v > best) { best = v; try { onProgress(v); } catch {} }
         }
       });
-      p.on('error', reject);
+      p.on('error', (e) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(e);
+      });
       p.on('close', (code) => {
-        if (signal) signal.removeEventListener('abort', onAbort);
+        if (settled) return;
+        settled = true;
+        cleanup();
         if (signal && signal.aborted) { const e = new Error('已取消'); e.code = 'CANCELLED'; reject(e); return; }
         if (code === 0) resolve(tmp);
         else reject(new Error(`生成剪辑代理失败（${tail.split(/\r?\n/).filter((l) => l && !/time=/.test(l)).slice(-1)[0] || code}）`));

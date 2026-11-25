@@ -1,7 +1,8 @@
 // 主题学习：输入主题 → 联网搜索 B站 / YouTube → 勾选候选 → 加入拆片队列。
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import api from '../../api.js';
 import useStore from '../../store.js';
+import { withConsent, isConsentDeclined } from '../../consent.js';
 import { Button, Select, Icon, Spinner, Chip } from '../../components/ui.jsx';
 import useLibrary from './libraryActions.js';
 import { CATEGORY_OPTIONS, YtdlpNotice } from './AddPanel.jsx';
@@ -29,17 +30,29 @@ export default function TopicLearn() {
   const [results, setResults] = useState(null); // WebResult[] | null
   const [errors, setErrors] = useState([]);
   const [checked, setChecked] = useState({});
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const toast = useStore.getState().toast;
   const guessed = guessCategory(topic);
   const effCategory = category || guessed;
 
   const search = async (q = topic) => {
+    if (loading) return;
     const query = String(q || '').trim();
     if (!query) { toast('请先输入想学习的主题', 'warn'); return; }
     if (yt.checked && !yt.installed) { toast('联网搜索视频需要先安装下载组件 yt-dlp', 'warn'); return; }
+    const seq = ++seqRef.current;
     setLoading(true); setResults(null); setErrors([]);
     try {
-      const r = await api.call('web:search', { query, sources: [source], kind: 'video', limit: Number(count) });
+      const r = await withConsent(
+        () => api.call('web:search', { query, sources: [source], kind: 'video', limit: Number(count) }),
+        'videoSites',
+      );
+      if (!mountedRef.current || seq !== seqRef.current) return;
       const list = (r && Array.isArray(r.results) ? r.results : []).filter((x) => x && x.url).slice(0, Number(count));
       setResults(list);
       setErrors(r && Array.isArray(r.errors) ? r.errors : []);
@@ -47,10 +60,16 @@ export default function TopicLearn() {
       list.forEach((x) => { c[x.url] = true; });
       setChecked(c);
     } catch (e) {
-      setResults([]);
-      setErrors([{ source, error: e.message }]);
+      if (!mountedRef.current || seq !== seqRef.current) return;
+      if (isConsentDeclined(e)) {
+        setResults(null);
+        setErrors([]);
+      } else {
+        setResults([]);
+        setErrors([{ source, error: e.message }]);
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && seq === seqRef.current) setLoading(false);
     }
   };
 
@@ -76,7 +95,13 @@ export default function TopicLearn() {
           placeholder="例如：咖啡产品短视频"
           value={topic}
           onChange={(e) => { setTopic(e.target.value); setCategory(null); }}
-          onKeyDown={(e) => { if (e.key === 'Enter') search(); }}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter') {
+              if (loading) return;
+              search();
+            }
+          }}
         />
       </div>
       {!topic && (
@@ -127,20 +152,22 @@ export default function TopicLearn() {
                 }}>{selected.length < results.length ? '全选' : '全不选'}</Button>
               </div>
               {results.map((r) => (
-                <label key={r.url} className={'lib-cand' + (checked[r.url] ? ' on' : '')}>
-                  <input type="checkbox" checked={!!checked[r.url]} onChange={(e) => setChecked({ ...checked, [r.url]: e.target.checked })} />
-                  <span className="lib-cand-thumb">
-                    {r.thumb ? <img src={thumbUrl(r.thumb)}alt="" loading="lazy" draggable={false} referrerPolicy="no-referrer" /> : <Icon name="film" size={16} />}
-                    {Number(r.duration) > 0 && <span className="lib-cand-dur mono">{fmtClock(r.duration)}</span>}
-                  </span>
-                  <span className="lib-cand-body">
-                    <span className="lib-cand-title" title={r.title}>{r.title || r.url}</span>
-                    <span className="xs muted ellipsis">{r.author || PLATFORM_LABELS[r.source] || ''}</span>
-                  </span>
-                  <button type="button" className="btn ghost sm icon" title="打开原网页" onClick={(e) => { e.preventDefault(); api.call('shell:openExternal', { url: r.url }).catch(() => {}); }}>
+                <div key={r.url} className={'lib-cand' + (checked[r.url] ? ' on' : '')}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={!!checked[r.url]} onChange={(e) => setChecked((prev) => ({ ...prev, [r.url]: e.target.checked }))} />
+                    <span className="lib-cand-thumb">
+                      {r.thumb ? <img src={thumbUrl(r.thumb)} alt="" loading="lazy" draggable={false} referrerPolicy="no-referrer" /> : <Icon name="film" size={16} />}
+                      {Number(r.duration) > 0 && <span className="lib-cand-dur mono">{fmtClock(r.duration)}</span>}
+                    </span>
+                    <span className="lib-cand-body">
+                      <span className="lib-cand-title" title={r.title}>{r.title || r.url}</span>
+                      <span className="xs muted ellipsis">{r.author || PLATFORM_LABELS[r.source] || ''}</span>
+                    </span>
+                  </label>
+                  <button type="button" className="btn ghost sm icon" title="打开原网页" aria-label="打开原网页" onClick={() => api.call('shell:openExternal', { url: r.url }).catch(() => {})}>
                     <Icon name="external" size={13} />
                   </button>
-                </label>
+                </div>
               ))}
               <div className="hint" style={{ margin: '6px 0' }}>
                 <Chip>{(results[0] && results[0].license) || '版权归原作者，仅供学习参考'}</Chip>

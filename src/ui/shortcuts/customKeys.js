@@ -6,9 +6,12 @@ import { useSyncExternalStore } from 'react';
 import api from '../api.js';
 import useStore from '../store.js';
 import {
-  effectiveShortcuts, findConflicts, getShortcutOverrides, getShortcutsVersion, kbdOf,
-  sanitizeOverrides, setShortcutOverrides, subscribeShortcuts,
+  comboFromEvent, effectiveShortcuts, findConflicts, firesInInput, getShortcutOverrides, getShortcutsVersion,
+  isTypingTarget, kbdOf, keymapFor, matchShortcut, sanitizeOverrides, setShortcutOverrides, shortcutById,
+  subscribeShortcuts,
 } from './registry.js';
+
+export { comboFromEvent, firesInInput, isTypingTarget, keymapFor, matchShortcut, shortcutById };
 
 export const LOCAL_KEY = 'ff.shortcuts.overrides';
 
@@ -57,9 +60,10 @@ export function overridesFromSettings(settings) {
   return {};
 }
 
-/** 把设置里的自定义按键应用到注册表（App.jsx 在设置变化时调用）。→ 生效后的按键冲突 [{ combo, ids }] */
-export function applyShortcutSettings(settings) {
-  setShortcutOverrides(overridesFromSettings(settings));
+/** 把设置里的自定义按键应用到注册表（加载/刷新设置时调用）。对 null/空设置安全，并在变化时通知订阅者。→ 生效后的按键冲突 [{ combo, ids }] */
+export function applyShortcutSettings(settings = null) {
+  const next = overridesFromSettings(settings && typeof settings === 'object' ? settings : null);
+  setShortcutOverrides(next);
   return findConflicts(effectiveShortcuts());
 }
 

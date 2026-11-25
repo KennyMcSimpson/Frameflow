@@ -52,8 +52,18 @@ const STYLE = `
 .aie-compose .aie-preview-toggle { flex-wrap: wrap; row-gap: 4px; }
 `;
 
-// 消息 id → 提交时的历史栈顶条目；用于判断「是否仍是最近一步」
+// 消息 id → { entry: 提交时的历史栈顶条目, memUndo: 该步写入的记忆回滚信息 }；用于判断「是否仍是最近一步」
 const undoAnchors = new Map();
+let undoAnchorsProjectId = null;
+
+function setUndoAnchor(msgId, entry) {
+  const pid = useStore.getState().project?.id || null;
+  if (undoAnchorsProjectId !== pid) {
+    undoAnchors.clear();
+    undoAnchorsProjectId = pid;
+  }
+  undoAnchors.set(msgId, { entry, memUndo: null });
+}
 
 // ---------------- 消息读写（不进撤销历史） ----------------
 function pushMsg(msg) {
@@ -94,16 +104,27 @@ function fmtElapsed(ms) {
   return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒`;
 }
 
-/** 写进项目记忆（不进撤销历史）：规矩永久保留，普通记录过多时自动合并 */
+/** 写进项目记忆（不进撤销历史）：规矩永久保留，普通记录过多时自动合并；返回回滚信息 */
 function remember(entries) {
   const list = (entries || []).filter((e) => e && typeof e.text === 'string' && e.text.trim());
-  if (!list.length) return;
-  useStore.getState().update((p) => {
+  if (!list.length) return null;
+  const st = useStore.getState();
+  const prevDecisions = Array.isArray(st.project && st.project.memory && st.project.memory.decisions)
+    ? st.project.memory.decisions
+    : [];
+  const prevIds = new Set(prevDecisions.map((d) => d && d.id).filter(Boolean));
+  let afterDecisions = prevDecisions;
+  st.update((p) => {
     const mem = p.memory || { styleGuide: '', decisions: [], colorBaseline: null };
     let decisions = Array.isArray(mem.decisions) ? mem.decisions : [];
     for (const e of list) decisions = addMemory(decisions, e);
+    afterDecisions = decisions;
     return { ...p, memory: { ...mem, decisions } };
   });
+  const afterIds = new Set(afterDecisions.map((d) => d && d.id).filter(Boolean));
+  const addedIds = afterDecisions.filter((d) => d && d.id && !prevIds.has(d.id)).map((d) => d.id);
+  const compacted = prevDecisions.some((d) => d && d.id && !afterIds.has(d.id));
+  return { addedIds, prevDecisions, compacted };
 }
 
 function normalizeLocal(r, text) {
@@ -121,7 +142,7 @@ function commitWithAnchor(ops, label, msgId, ctx) {
   const r = st.commit(ops, label, { silent: true, ctx });
   if (r.ok) {
     const past = useStore.getState().past;
-    if (past.length) undoAnchors.set(msgId, past[past.length - 1]);
+    if (past.length) setUndoAnchor(msgId, past[past.length - 1]);
   }
   return r;
 }
@@ -144,7 +165,7 @@ function commitPlan(plan, label, msgId, ctx) {
   }, label, { silent: true });
   if (r.ok) {
     const past = useStore.getState().past;
-    if (past.length) undoAnchors.set(msgId, past[past.length - 1]);
+    if (past.length) setUndoAnchor(msgId, past[past.length - 1]);
     const paths = ((result && result.assetsAdded) || []).map((a) => a && a.path).filter(Boolean);
     if (paths.length) api.call('media:register', { paths }).catch(() => {});
   }
@@ -206,6 +227,7 @@ export default function AIEditPanel() {
 
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(null); // { step, phase, startedAt, slow }
+  const [confirmClear, setConfirmClear] = useState(false);
   // 关闭（默认）：小改动直接生效、大改动先确认；打开：AI 的每次修改都先确认
   const [confirmAll, setConfirmAll] = useState(() => readPref('ai.confirmAll', false) === true);
   const runRef = useRef(0);
@@ -213,6 +235,33 @@ export default function AIEditPanel() {
   const abortRef = useRef(null);
   const listRef = useRef(null);
   const inputRef = useRef(null);
+
+  const projectId = project ? project.id : null;
+  useEffect(() => {
+    if (undoAnchorsProjectId !== projectId) {
+      undoAnchors.clear();
+      undoAnchorsProjectId = projectId;
+    }
+    setConfirmClear(false);
+  }, [projectId]);
+
+  useEffect(() => () => {
+    runRef.current += 1;
+    if (abortRef.current) {
+      try { abortRef.current.abort(); } catch { /* 已结束 */ }
+      abortRef.current = null;
+    } else if (jobRef.current) {
+      api.cancel(jobRef.current).catch(() => {});
+      jobRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!confirmClear) return undefined;
+    if (!messages.length || busy) { setConfirmClear(false); return undefined; }
+    const timer = setTimeout(() => setConfirmClear(false), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmClear, messages.length, busy]);
 
   useEffect(() => writePref('ai.confirmAll', confirmAll), [confirmAll]);
   useEffect(() => {
@@ -288,7 +337,11 @@ export default function AIEditPanel() {
       if (result.confirm.need) { pushMsg({ ...base, status: 'proposed' }); return; }
       const r = commitPlan({ ops, assetsToAdd: result.assetsToAdd }, 'AI：' + shortLabel(text), id, result.ctx);
       pushMsg({ ...base, ...appliedPatch(r), memoryNote: '' });
-      if (r.ok && note) remember([{ text: note, kind: 'note', source: 'ai' }]);
+      if (r.ok && note) {
+        const memUndo = remember([{ text: note, kind: 'note', source: 'ai' }]);
+        const anchor = undoAnchors.get(id);
+        if (anchor && memUndo) anchor.memUndo = memUndo;
+      }
     } catch (e) {
       if (stale()) return;
       if (isCancelled(e)) { pushMsg({ id: uid('msg'), role: 'assistant', at: new Date().toISOString(), text: '已取消本次 AI 请求，时间线没有改动。' }); return; }
@@ -361,7 +414,11 @@ export default function AIEditPanel() {
     });
     patchMsg(msg.id, { ...appliedPatch(r), memoryNote: '' });
     if (!r.ok) { st.toast(`没有应用：${r.errors[0] || '这些修改现在都无法执行'}`, 'error'); return; }
-    if (msg.memoryNote) remember([{ text: msg.memoryNote, kind: 'note', source: 'ai' }]);
+    if (msg.memoryNote) {
+      const memUndo = remember([{ text: msg.memoryNote, kind: 'note', source: 'ai' }]);
+      const anchor = undoAnchors.get(msg.id);
+      if (anchor && memUndo) anchor.memUndo = memUndo;
+    }
     const done = r.result.passIndex.length;
     const late = r.result.diagnostics.length;
     st.toast(late ? `已应用 ${done} 项修改，另有 ${late} 项现在没法执行` : `已应用 ${done} 项修改`, late ? 'warn' : 'success');
@@ -375,24 +432,36 @@ export default function AIEditPanel() {
     const st = useStore.getState();
     const anchor = undoAnchors.get(msg.id);
     const top = st.past.length ? st.past[st.past.length - 1] : null;
-    if (!anchor || anchor !== top) {
+    if (!anchor || anchor.entry !== top) {
       st.toast('这一步之后还有其它修改，请用顶栏的撤销（Ctrl+Z）按顺序撤销', 'warn');
       return;
     }
-    const keep = { chats: st.project.chats, memory: st.project.memory };
+    const curMem = st.project.memory || { styleGuide: '', decisions: [], colorBaseline: null };
+    let nextMemory = curMem;
+    if (anchor.memUndo) {
+      const { addedIds, prevDecisions, compacted } = anchor.memUndo;
+      if (compacted) {
+        nextMemory = { ...curMem, decisions: prevDecisions };
+      } else if (addedIds && addedIds.length) {
+        const drop = new Set(addedIds);
+        nextMemory = { ...curMem, decisions: (curMem.decisions || []).filter((d) => !d || !drop.has(d.id)) };
+      }
+    }
+    const keepChats = st.project.chats;
     if (!st.undo()) return;
     undoAnchors.delete(msg.id);
     useStore.getState().update((p) => ({
       ...p,
-      memory: keep.memory,
-      chats: { ...keep.chats, editor: ((keep.chats && keep.chats.editor) || []).map((m) => (m.id === msg.id ? { ...m, undone: true } : m)) },
+      memory: nextMemory,
+      chats: { ...keepChats, editor: ((keepChats && keepChats.editor) || []).map((m) => (m.id === msg.id ? { ...m, undone: true } : m)) },
     }));
   }
 
-  function clearChat() {
+  function doClearChat() {
+    setConfirmClear(false);
     if (!messages.length) return;
-    if (!window.confirm('清空 AI 精修对话记录？（不影响时间线和撤销历史）')) return;
     useStore.getState().update((p) => ({ ...p, chats: { ...(p.chats || {}), editor: [] } }));
+    useStore.getState().toast('已清空 AI 精修对话记录（不影响时间线和撤销历史）');
   }
 
   const onKeyDown = (e) => {
@@ -412,7 +481,14 @@ export default function AIEditPanel() {
           <span className="ellipsis">{scope.label}</span>
         </div>
         <Chip kind={chip.kind} dot title={chip.title}>{chip.text}</Chip>
-        <Button size="sm" variant="ghost" icon="trash" title="清空对话" onClick={clearChat} disabled={!messages.length || !!busy} />
+        {confirmClear ? (
+          <span className="aie-actions">
+            <Button size="sm" variant="danger" onClick={doClearChat} title="仅清空对话记录，不影响时间线和撤销历史">确认清空</Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmClear(false)}>取消</Button>
+          </span>
+        ) : (
+          <Button size="sm" variant="ghost" icon="trash" title="清空对话（不影响时间线和撤销历史）" onClick={() => setConfirmClear(true)} disabled={!messages.length || !!busy} />
+        )}
       </div>
 
       <div className="aie-list" ref={listRef}>
@@ -427,7 +503,7 @@ export default function AIEditPanel() {
             key={m.id}
             msg={m}
             project={project}
-            canUndo={!!(undoAnchors.get(m.id) && undoAnchors.get(m.id) === topEntry)}
+            canUndo={!!(undoAnchors.get(m.id) && undoAnchors.get(m.id).entry === topEntry)}
             busy={!!busy}
             onApply={() => applyProposed(m)}
             onReject={() => rejectProposed(m)}

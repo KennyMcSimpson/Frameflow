@@ -33,13 +33,18 @@ module.exports = {
       for (const [k, v] of Object.entries(fields)) fd.append(k, v);
       fd.append('input_reference', new Blob([Buffer.from(d.base64, 'base64')], { type: d.mime }), 'reference.' + (d.mime.split('/')[1] || 'png'));
       let res;
-      try { res = await fetch(`${base(cfg)}/videos`, { method: 'POST', headers: auth(cfg), body: fd, signal }); } catch (e) {
+      let text;
+      try {
+        res = await fetch(`${base(cfg)}/videos`, { method: 'POST', headers: auth(cfg), body: fd, signal });
+        text = await res.text();
+      } catch (e) {
         if (signal && signal.aborted) throw cancelled();
-        throw new VideogenError(`网络连接失败：${e.message || e}`, 'NETWORK');
+        const err = new VideogenError(`网络连接失败：${e.message || e}`, 'NETWORK');
+        err.retryable = true;
+        throw err;
       }
-      const text = await res.text();
       try { r = JSON.parse(text); } catch { r = text; }
-      if (!res.ok) throw new VideogenError(httpMessage(res.status, r), 'HTTP', res.status);
+      if (!res.ok) throw new VideogenError(httpMessage(res.status, r), res.status === 401 || res.status === 403 ? 'AUTH' : 'HTTP', res.status);
     } else {
       r = await requestJson(fetch, `${base(cfg)}/videos`, { method: 'POST', headers: auth(cfg), body: fields, signal });
     }

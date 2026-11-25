@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { run } = require('./proc.cjs');
+const urlSafety = require('./urlSafety.cjs');
 
 // 模型 URL 与 SHA1 已于 2026-11-08 核实：来源 https://huggingface.co/ggerganov/whisper.cpp 模型表
 // （base 142 MiB / 147951465 字节，small 466 MiB；多语言版，非 .en/量化版）。HEAD 请求 resolve/main 链接返回 200。
@@ -26,6 +27,9 @@ const MODELS = {
 // 2026-11-08 核实：https://github.com/ggml-org/whisper.cpp/releases/tag/v1.7.6 资产 whisper-bin-x64.zip 存在（HEAD 200，3675974 字节）。
 // 最新版 v1.9.5 起 Windows 二进制改挂在 bNNNN nightly 标签，资产名不稳定，故固定使用 v1.7.6（含 whisper-cli.exe）。
 const WHISPER_BIN_ZIP = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.6/whisper-bin-x64.zip';
+// 2026-11-26 核实：取自 GitHub Releases API `repos/ggml-org/whisper.cpp/releases/tags/v1.7.6`
+// 资产 `whisper-bin-x64.zip`（3675974 字节，updated_at 2025-06-25T18:28:55Z）官方 digest 字段。
+const WHISPER_BIN_SHA256 = '0d2eca299c248f965bd0341bcb219db4b433c7f0c0ce2200d4df85765e8156a9';
 const BIN_NAMES = process.platform === 'win32' ? ['whisper-cli.exe', 'main.exe'] : ['whisper-cli', 'main'];
 
 function cancelledError() { const e = new Error('已取消'); e.code = 'CANCELLED'; return e; }
@@ -219,8 +223,13 @@ async function transcribeWhisper({ bin, model, wav, lang, signal, onProgress, ru
 }
 
 // ─────────────── OpenAI ───────────────
-async function transcribeOpenAI({ wav, key, baseUrl = 'https://api.openai.com/v1', model = 'whisper-1', lang = 'zh', signal, fetchImpl }) {
+const OPENAI_ASR_TIMEOUT_MS = 180 * 1000;
+const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
+const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
+
+async function transcribeOpenAI({ wav, key, baseUrl = 'https://api.openai.com/v1', model = 'whisper-1', lang = 'zh', signal, fetchImpl, timeoutMs = OPENAI_ASR_TIMEOUT_MS }) {
   const f = fetchImpl || globalThis.fetch;
+  if (signal && signal.aborted) throw cancelledError();
   const buf = fs.readFileSync(wav);
   if (buf.length > 25 * 1024 * 1024) throw new Error('音频超过 25MB，OpenAI 转写不支持，请安装本地模型');
   const form = new FormData();
@@ -231,13 +240,27 @@ async function transcribeOpenAI({ wav, key, baseUrl = 'https://api.openai.com/v1
   form.append('timestamp_granularities[]', 'word');
   if (lang && lang !== 'auto') form.append('language', lang);
   const url = String(baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '') + '/audio/transcriptions';
-  const res = await f(url, { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form, signal });
-  if (!res.ok) {
-    let msg = '';
-    try { msg = (await res.text()).slice(0, 300); } catch { /* */ }
-    throw new Error(`OpenAI 转写失败（${res.status}）${msg}`);
+  const limit = Number(timeoutMs) > 0 ? Number(timeoutMs) : OPENAI_ASR_TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(limit);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let res;
+  try {
+    res = await f(url, { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form, signal: combined });
+    if (!res.ok) {
+      let msg = '';
+      try { msg = (await res.text()).slice(0, 300); } catch { /* */ }
+      throw new Error(`OpenAI 转写失败（${res.status}）${msg}`);
+    }
+    return parseOpenAIVerbose(await res.json());
+  } catch (err) {
+    if (signal && signal.aborted) throw cancelledError();
+    if (timeout.aborted) {
+      const te = new Error(`OpenAI 转写超时（超过 ${Math.round(limit / 1000)} 秒），请稍后重试`);
+      te.code = 'TIMEOUT';
+      throw te;
+    }
+    throw err;
   }
-  return parseOpenAIVerbose(await res.json());
 }
 
 // ─────────────── 下载与校验 ───────────────
@@ -248,30 +271,164 @@ async function sha1File(file) {
   });
 }
 
-async function download(url, dest, { signal, onProgress, fetchImpl } = {}) {
+async function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    fs.createReadStream(file).on('data', (c) => h.update(c)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+  });
+}
+
+async function download(url, dest, { signal, onProgress, fetchImpl, timeoutMs = DOWNLOAD_TIMEOUT_MS, maxBytes = DOWNLOAD_MAX_BYTES, allowedOrigins = [], maxRedirects = 5, lookup } = {}) {
   const f = fetchImpl || globalThis.fetch;
-  const res = await f(url, { signal, redirect: 'follow' });
-  if (!res.ok || !res.body) throw new Error(`下载失败（${res.status}）：${url}`);
-  const total = Number(res.headers.get('content-length')) || 0;
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const part = dest + '.part';
-  const ws = fs.createWriteStream(part);
+  const isMockFetch = typeof fetchImpl === 'function' && fetchImpl !== globalThis.fetch;
+  const checkUrl = (isMockFetch && !lookup)
+    ? (u, o) => urlSafety.assertSafePublicUrl(u, o)
+    : (u, o) => urlSafety.assertSafePublicUrlAsync(u, { ...o, lookup });
+  if (signal && signal.aborted) throw cancelledError();
+  let curParsed = await checkUrl(url, { allowedOrigins });
+  let curUrl = curParsed.href;
+  const redirectLimit = Math.max(0, Number.isFinite(Number(maxRedirects)) ? Number(maxRedirects) : 5);
+  const limitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : DOWNLOAD_TIMEOUT_MS;
+  const maxSize = Number(maxBytes) > 0 ? Number(maxBytes) : 0;
+  const ac = new AbortController();
+  let timedOut = false;
+  let idleTimer = null;
+  const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
+  const armIdle = () => {
+    clearIdle();
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      ac.abort(new Error('下载超时'));
+    }, limitMs);
+    if (idleTimer.unref) idleTimer.unref();
+  };
+  const onAbort = () => ac.abort();
+  if (signal) signal.addEventListener('abort', onAbort, { once: true });
+
+  let part = null;
+  let ws = null;
+  let wsClosed = null;
+  let wsIsClosed = true;
   let got = 0;
   try {
+    let res;
+    for (let hop = 0; ; hop++) {
+      armIdle();
+      res = await f(curUrl, { signal: ac.signal, redirect: 'manual' });
+      if (res && res.url) {
+        await checkUrl(res.url, { allowedOrigins });
+      }
+      const status = Number(res && res.status) || 0;
+      const loc = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('location') : null;
+      if (status >= 300 && status < 400 && loc) {
+        try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+        if (hop >= redirectLimit) {
+          const err = new Error('下载重定向次数过多');
+          err.code = 'REDIRECT';
+          throw err;
+        }
+        let resolved;
+        try {
+          resolved = new URL(loc, curUrl).href;
+        } catch {
+          const err = new Error('下载重定向地址无效');
+          err.code = 'BAD_URL';
+          throw err;
+        }
+        curParsed = await checkUrl(resolved, { allowedOrigins });
+        curUrl = curParsed.href;
+        continue;
+      }
+      break;
+    }
+    if (!res.ok || !res.body) throw new Error(`下载失败（${res.status}）：${curUrl}`);
+    const total = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : 0) || 0;
+    if (maxSize && total > maxSize) throw new Error('下载文件超过大小限制');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    part = `${dest}.${crypto.randomBytes(4).toString('hex')}.part`;
+    ws = fs.createWriteStream(part);
+    wsIsClosed = false;
+    let writeErr = null;
+    ws.on('error', (err) => { writeErr = err; });
+    wsClosed = new Promise((resolve) => ws.once('close', () => { wsIsClosed = true; resolve(); }));
+
     for await (const chunk of res.body) {
+      armIdle();
       if (signal && signal.aborted) throw cancelledError();
+      if (writeErr) throw writeErr;
       got += chunk.length;
-      if (!ws.write(chunk)) await new Promise((r) => ws.once('drain', r));
+      if (maxSize && got > maxSize) throw new Error('下载文件超过大小限制');
+      if (!ws.write(chunk)) {
+        await new Promise((resolve, reject) => {
+          const cleanup = () => {
+            ws.off('drain', onDrain);
+            ws.off('error', onErr);
+            ws.off('close', onClose);
+          };
+          const onDrain = () => { cleanup(); resolve(); };
+          const onErr = (err) => { cleanup(); reject(err); };
+          const onClose = () => { cleanup(); reject(writeErr || new Error('写入流意外关闭')); };
+          ws.once('drain', onDrain);
+          ws.once('error', onErr);
+          ws.once('close', onClose);
+        });
+      }
       if (onProgress && total) onProgress(got / total, got, total);
     }
-    await new Promise((r, j) => ws.end((e) => (e ? j(e) : r())));
+    if (writeErr) throw writeErr;
+    await new Promise((resolve, reject) => {
+      const onErr = (err) => { ws.off('close', onClose); reject(err); };
+      const onClose = () => { ws.off('error', onErr); if (writeErr) reject(writeErr); else resolve(); };
+      ws.once('error', onErr);
+      ws.once('close', onClose);
+      ws.end();
+    });
+    ws = null;
+    clearIdle();
+    try {
+      fs.renameSync(part, dest);
+    } catch (renameErr) {
+      if (renameErr && (renameErr.code === 'EEXIST' || renameErr.code === 'EPERM')) {
+        try { fs.unlinkSync(dest); } catch { /* */ }
+        fs.renameSync(part, dest);
+      } else {
+        throw renameErr;
+      }
+    }
+    return { path: dest, size: got };
   } catch (e) {
-    ws.destroy();
-    try { fs.unlinkSync(part); } catch { /* */ }
+    clearIdle();
+    if (!ac.signal.aborted) ac.abort();
+    if (ws) {
+      try { ws.destroy(); } catch { /* */ }
+      if (!wsIsClosed && wsClosed) {
+        let closeTimer = null;
+        try {
+          await Promise.race([
+            wsClosed,
+            new Promise((r) => {
+              closeTimer = setTimeout(r, 2000);
+              if (closeTimer && typeof closeTimer.unref === 'function') closeTimer.unref();
+            }),
+          ]);
+        } finally {
+          if (closeTimer) clearTimeout(closeTimer);
+        }
+      }
+      ws = null;
+    }
+    if (part) { try { fs.unlinkSync(part); } catch { /* */ } }
+    if (signal && signal.aborted) throw cancelledError();
+    if (timedOut) {
+      const te = new Error('下载超时，请检查网络后重试');
+      te.code = 'TIMEOUT';
+      throw te;
+    }
     throw e;
+  } finally {
+    clearIdle();
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
-  fs.renameSync(part, dest);
-  return { path: dest, size: got };
 }
 
 async function verifyModel(file, name) {
@@ -283,10 +440,10 @@ async function verifyModel(file, name) {
 }
 
 module.exports = {
-  MODELS, WHISPER_BIN_ZIP, BIN_NAMES,
+  MODELS, WHISPER_BIN_ZIP, WHISPER_BIN_SHA256, BIN_NAMES,
   buildWavArgs, extractWav,
   cleanText, stripPunct, textLen, splitSentences,
   parseWhisperJson, parseOpenAIVerbose, tsToSec,
   modelsDir, findWhisperBin, findModel, buildWhisperArgs, transcribeWhisper,
-  transcribeOpenAI, download, sha1File, verifyModel,
+  transcribeOpenAI, download, sha1File, sha256File, verifyModel,
 };

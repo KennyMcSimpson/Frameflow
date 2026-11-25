@@ -6,6 +6,7 @@ import { pacingDurations, beatGridDurations, PACING_NAMES } from '../src/engine/
 import { projectBaseline, harmonizeOps, consistencyReport } from '../src/engine/consistency.js';
 import { createHistory } from '../src/engine/history.js';
 import { searchTechniques, techniqueToOps } from '../src/engine/techniques.js';
+import { BUILTIN_TECHNIQUES } from '../src/engine/builtinTechniques.js';
 import { projectSummary } from '../src/engine/summary.js';
 import { applyOps } from '../src/engine/ops.js';
 import {
@@ -204,13 +205,8 @@ test('techniqueToOps：目标统一为所选镜头，深拷贝，没有 apply �
   assert.equal(r.project.tracks.video[0].color.look, 'none');
 });
 
-test('内置技法卡（若已提供）：都能检索，可套用的操作都能应用', async () => {
-  let builtin;
-  try {
-    ({ BUILTIN_TECHNIQUES: builtin } = await import('../src/engine/builtinTechniques.js'));
-  } catch {
-    return; // E 组文件尚未提供
-  }
+test('内置技法卡：都能检索，可套用的操作都能应用', () => {
+  const builtin = BUILTIN_TECHNIQUES;
   assert.ok(Array.isArray(builtin) && builtin.length > 0);
   for (const t of builtin) assert.ok(TECHNIQUE_CATEGORIES.includes(t.category), t.id);
   assert.ok(searchTechniques(builtin, '转场').length > 0);

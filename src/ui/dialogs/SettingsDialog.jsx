@@ -235,10 +235,20 @@ export default function SettingsDialog({ onClose, initialTab }) {
   const settings = useStore((s) => s.settings);
   const appInfo = useStore((s) => s.appInfo);
   const aiStatus = useStore((s) => s.aiStatus);
+  const settingsDialog = useStore((s) => s.dialogs && s.dialogs.settings);
   const toast = useStore((s) => s.toast);
 
-  const init = TAB_ALIAS[initialTab] || initialTab;
-  const [tab, setTab] = useState(NAV.some((t) => t.value === init) ? init : 'general');
+  const resolveTab = (t) => {
+    if (typeof t !== 'string' || !t) return null;
+    const mapped = TAB_ALIAS[t] || t;
+    return NAV.some((n) => n.value === mapped) ? mapped : null;
+  };
+  const requestedTab = initialTab || (typeof settingsDialog === 'string' ? settingsDialog : undefined);
+  const [tab, setTab] = useState(() => resolveTab(requestedTab) || 'general');
+  useEffect(() => {
+    const next = resolveTab(requestedTab);
+    if (next) setTab(next);
+  }, [requestedTab]);
   const [draft, setDraft] = useState(() => toDraft(settings));
   const [baseline, setBaseline] = useState(() => JSON.stringify(toDraft(settings)));
   const [clear, setClear] = useState({});
@@ -250,6 +260,7 @@ export default function SettingsDialog({ onClose, initialTab }) {
   const [asr, setAsr] = useState(null);
   const [asrInstall, setAsrInstall] = useState(null);
   const [freeTest, setFreeTest] = useState(null);
+  const [consentBusy, setConsentBusy] = useState(false);
   const mounted = useRef(true);
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
@@ -351,18 +362,61 @@ export default function SettingsDialog({ onClose, initialTab }) {
   };
   /** 提前阅读并同意视频站使用须知（同意后设置会刷新，状态跟着变） */
   const readConsent = async () => {
-    try { await requestConsent(CONSENT_KEY); } catch (e) { toast('没能打开使用须知：' + ((e && e.message) || '未知原因'), 'error'); }
+    if (consentBusy) return;
+    setConsentBusy(true);
+    try {
+      await requestConsent(CONSENT_KEY);
+    } catch (e) {
+      toast('没能打开使用须知：' + ((e && e.message) || '未知原因'), 'error');
+    } finally {
+      if (mounted.current) setConsentBusy(false);
+    }
+  };
+  /** 撤回视频站使用须知的同意（优先走 web:consent，兼容 consent:revoke / settings:set） */
+  const revokeConsentAction = async () => {
+    if (consentBusy) return;
+    setConsentBusy(true);
+    try {
+      const channels = [
+        ['web:consent', { key: CONSENT_KEY, action: 'revoke', granted: false, revoke: true }],
+        ['consent:revoke', { key: CONSENT_KEY }],
+        ['settings:set', { consent: { [CONSENT_KEY]: { version: 0, at: new Date().toISOString() } } }],
+      ];
+      let done = false;
+      for (const [ch, payload] of channels) {
+        try {
+          await api.call(ch, payload);
+          done = true;
+          break;
+        } catch (e) {
+          if (!/No handler registered|未知的通道|unknown channel/i.test((e && e.message) || '')) throw e;
+        }
+      }
+      if (done) {
+        await useStore.getState().refreshSettings?.();
+        if (hasConsentLocal(CONSENT_KEY)) {
+          toast('当前版本暂不支持在此撤回同意状态', 'warn');
+        } else {
+          toast('已撤回视频站使用须知同意，下次使用时将重新确认', 'ok');
+        }
+      }
+    } catch (e) {
+      toast('撤回同意失败：' + ((e && e.message) || '未知原因'), 'error');
+    } finally {
+      if (mounted.current) setConsentBusy(false);
+    }
   };
 
   const installYtdlp = async () => {
     if (ytInstall) return;
+    const isUpdate = !!(ytdlp && ytdlp.installed);
     setYtInstall({ progress: 0, message: '正在连接…' });
     try {
-      const status = await useStore.getState().trackJob('web:ytdlpInstall', {}, ytdlp && ytdlp.installed ? '更新 yt-dlp' : '安装 yt-dlp', (p) => {
+      const status = await useStore.getState().trackJob('web:ytdlpInstall', { latest: isUpdate }, isUpdate ? '更新 yt-dlp' : '安装 yt-dlp', (p) => {
         if (mounted.current) setYtInstall({ progress: p.progress || 0, message: p.message || p.stage || '正在下载…' });
       });
       if (mounted.current && status) setYtdlp(status);
-      toast(ytdlp && ytdlp.installed ? 'yt-dlp 更新完成' : 'yt-dlp 安装完成', 'ok');
+      toast(isUpdate ? 'yt-dlp 更新完成' : 'yt-dlp 安装完成', 'ok');
       await refreshAppInfo();
     } catch (e) { if (!e.cancelled) toast('安装 yt-dlp 失败：' + e.message, 'error'); } finally { if (mounted.current) setYtInstall(null); }
   };
@@ -750,7 +804,7 @@ export default function SettingsDialog({ onClose, initialTab }) {
                 <h4>识别引擎 {!asr ? <Chip>检测中…</Chip> : asr.ready ? <Chip kind="ok" dot>可用</Chip> : asr.unavailable ? <Chip dot>暂不可用</Chip> : <Chip kind="warn" dot>需安装模型</Chip>}</h4>
                 {asr && asr.ready && (<><StatusLine label="引擎" value={asrEngineLabel} /><StatusLine label="模型" value={asr.model || '—'} mono /></>)}
                 {asrEngine === 'openai' && <div className="callout warn st-gap">现在识别字幕时，音频会上传到你填写的 OpenAI 接口。点下面的「安装模型」后改为在本机识别，不再上传。</div>}
-                {asr && !asr.ready && !asr.unavailable && <p className="sx-note" style={{ marginTop: 0 }}>首次使用需要下载中文识别模型（约 150MB），下载一次后可离线使用。</p>}
+                {asr && !asr.ready && !asr.unavailable && <p className="sx-note" style={{ marginTop: 0 }}>首次使用需要下载本机语音识别模型（small，约 466 MB），下载一次后可离线使用。</p>}
                 {asr && asr.unavailable && <p className="sx-note" style={{ marginTop: 0 }}>当前版本未包含语音识别组件{asr.error ? `（${asr.error}）` : ''}。</p>}
                 <div className="sx-actions">
                   <Button size="sm" icon={asrInstall ? undefined : 'download'} onClick={installAsr} disabled={!!asrInstall || !asr || asr.unavailable || (asr.ready && !asr.downloadable)}>
@@ -776,8 +830,8 @@ export default function SettingsDialog({ onClose, initialTab }) {
                 <Row title="图片默认时长" desc="图片放上时间线时的长度。">
                   <input className="input st-num" type="number" min={0.5} max={60} step={0.5} value={draft.edImageDuration} onChange={(e) => set({ edImageDuration: e.target.value })} /> 秒
                 </Row>
-                <Row title="转场默认时长">
-                  <input className="input st-num" type="number" min={0} max={5} step={0.1} value={draft.edTransitionDuration} onChange={(e) => set({ edTransitionDuration: e.target.value })} /> 秒
+                <Row title="转场默认时长" desc="转场面板添加转场时的默认时长（0.1–2 秒）。">
+                  <input className="input st-num" type="number" min={0.1} max={2} step={0.1} value={draft.edTransitionDuration} onChange={(e) => set({ edTransitionDuration: e.target.value })} /> 秒
                 </Row>
                 <Row title="预览质量" desc="电脑较慢时选「流畅」，预览更顺滑，不影响导出画质。">
                   <Segmented value={draft.edPreviewQuality} onChange={(v) => set({ edPreviewQuality: v })} options={[{ value: 'auto', label: '自动' }, { value: 'full', label: '高清' }, { value: 'half', label: '流畅' }]} />
@@ -832,6 +886,56 @@ export default function SettingsDialog({ onClose, initialTab }) {
             </>
           )}
 
+          {tab === 'privacy' && (
+            <>
+              <PaneHead icon={iconOr('shield', 'lock')} title="隐私与联网" desc="你的项目、素材和密钥默认保存在本机，不会自动上传。下面列出所有可能联网的功能及其发送的内容。" />
+              <div className="sx-card">
+                <h4>哪些功能会联网</h4>
+                <ul className="sx-net">
+                  {NET_USES.map((item) => (
+                    <li key={item.title}>
+                      <span className="sx-net-ico"><Icon name={item.icon} size={16} /></span>
+                      <div>
+                        <div className="sx-net-title">
+                          <span>{item.title}</span>
+                          <span className="sx-net-when">{item.when}</span>
+                        </div>
+                        <dl className="sx-net-kv">
+                          <dt>连接对象</dt><dd>{item.to}</dd>
+                          <dt>发送内容</dt><dd>{item.what}</dd>
+                        </dl>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="sx-card">
+                <h4>视频站使用须知 {consentOk ? <Chip kind="ok" dot>已同意</Chip> : <Chip dot>未同意</Chip>}</h4>
+                <div className="sx-consent">
+                  <div className="sx-row-text">
+                    <b>{consentOk ? `已于 ${consentDate || '此前'} 同意视频站使用须知` : '尚未同意视频站使用须知'}</b>
+                    <span>{consentOk ? '使用 B 站、YouTube 等视频站搜索和下载参考素材时不再重复询问；随时可以撤回。' : '首次搜索或下载视频站参考素材前，需要先阅读并同意使用须知。'}</span>
+                  </div>
+                  <div className="sx-row-ctl">
+                    {consentOk ? (
+                      <Button size="sm" variant="ghost" onClick={revokeConsentAction} disabled={consentBusy}>撤回同意</Button>
+                    ) : (
+                      <Button size="sm" onClick={readConsent} disabled={consentBusy}>阅读并同意</Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="sx-card">
+                <h4>隐私说明与开源许可</h4>
+                <p className="sx-note" style={{ marginTop: 0 }}>所有密钥均通过系统加密存储在本机，不会写进项目文件。你可以随时查看完整的隐私说明和第三方开源许可清单。</p>
+                <div className="sx-links">
+                  <Button size="sm" icon="external" onClick={() => openPath(privacyPath)} disabled={!privacyPath}>打开隐私说明</Button>
+                  <Button size="sm" icon="external" onClick={() => openPath(licensesPath)} disabled={!licensesPath}>查看第三方开源许可</Button>
+                </div>
+              </div>
+            </>
+          )}
+
           {tab === 'about' && (
             <>
               <PaneHead icon="info" title="关于" />
@@ -843,14 +947,14 @@ export default function SettingsDialog({ onClose, initialTab }) {
                     <p className="sx-note" style={{ margin: '4px 0 0' }}>AI 视频工作站 · 创作 / 精修 / 拆片库</p>
                     <div className="sx-actions" style={{ marginTop: 8 }}>
                       <span className="sx-badge">版本 {(appInfo && (appInfo.version || appInfo.appVersion)) || '—'}</span>
-                      {appInfo && appInfo.ffmpeg && <span className="sx-badge">FFmpeg 已就绪</span>}
+                      {appInfo && appInfo.ffmpeg && appInfo.ffmpeg.ok && <span className="sx-badge">FFmpeg 已就绪</span>}
                     </div>
                   </div>
                 </div>
               </div>
               <div className="sx-card">
                 <h4>素材与第三方服务</h4>
-                <p className="sx-note" style={{ marginTop: 0 }}>实拍素材来自 Pexels / Pixabay / Wikimedia Commons，遵循各自许可。AI 视频由你选择的服务商生成，费用与内容政策以服务商为准。</p>
+                <p className="sx-note" style={{ marginTop: 0 }}>实拍素材来自 Wikimedia Commons、Openverse、Internet Archive、NASA 影像库以及 Pexels、Pixabay，遵循各自许可。AI 视频由你选择的服务商生成，费用与内容政策以服务商为准。</p>
               </div>
             </>
           )}

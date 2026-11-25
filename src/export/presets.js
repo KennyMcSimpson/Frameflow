@@ -59,7 +59,7 @@ export function resolveExportOptions(presetId, settings = {}, overrides = {}) {
     w: even(Number(o.w) > 0 ? o.w : w),
     h: even(Number(o.h) > 0 ? o.h : h),
     fps: Math.min(120, Math.max(1, Number(o.fps) > 0 ? Number(o.fps) : p.fps || pfps)),
-    bitrate: Number(o.bitrate) >= 0 && o.bitrate !== undefined && o.bitrate !== '' ? Number(o.bitrate) : p.bitrate,
+    bitrate: o.bitrate != null && o.bitrate !== '' && Number.isFinite(Number(o.bitrate)) && Number(o.bitrate) >= 0 ? Number(o.bitrate) : p.bitrate,
     format,
     audioOnly,
     gif,

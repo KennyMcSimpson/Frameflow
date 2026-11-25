@@ -149,7 +149,7 @@ export default function MediaProjectTab({ query, fixedKind }) {
 
       {!assets.length || (fixedKind && !counts[fixedKind]) ? (
         <Empty icon={fixedKind === 'audio' ? 'music' : 'upload'} title={fixedKind === 'audio' ? '还没有音频' : '还没有素材'} action={<Button variant="secondary" icon="upload" onClick={doImport} disabled={importing}>导入本地素材</Button>}>
-          {fixedKind === 'audio' ? '导入本地音乐，或在上方「联网音乐」里搜索免版权配乐。' : '导入手机拍的视频、图片或音乐；也可以在「联网实拍」里搜索真人实拍素材。'}
+          {fixedKind === 'audio' ? '导入本地音乐，或在下方「联网音乐」里搜索免版权配乐。' : '导入手机拍的视频、图片或音乐；也可以在「实拍」里搜索真人实拍素材。'}
         </Empty>
       ) : !list.length ? (
         <Empty icon="search" title="没有匹配的素材">换个关键词，或切换筛选。</Empty>

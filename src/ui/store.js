@@ -8,6 +8,8 @@ import api from './api.js';
 import { applyOps, describeOp } from '../engine/ops.js';
 import { normalizeProject } from '../engine/model.js';
 import { migrateShotCaptions } from '../engine/firstcut.js';
+import { loadProject } from '../engine/migrations.js';
+import { applyShortcutSettings } from './shortcuts/customKeys.js';
 
 const HISTORY_LIMIT = 100;
 let saveTimer = null;
@@ -15,9 +17,35 @@ let toastSeq = 1;
 let uiPersistTimer = null;
 let saveRetry = 0;
 let saveRetryTimer = null;
+let inFlightSave = null;
+let inFlightProject = null;
+let appEventsBound = false;
 let lastApply = { key: null, at: 0 };
 const SAVE_BACKOFF = [2000, 5000, 15000];
 const MERGE_WINDOW = 600;
+
+/** 在 Node 测试环境下释放定时器引用，避免进程挂起等待 */
+function unref(t) {
+  if (t && typeof t.unref === 'function') t.unref();
+  return t;
+}
+
+function applyUiScale(settings) {
+  const raw = Number(settings && settings.ui && settings.ui.scale);
+  const scale = Number.isFinite(raw) && raw >= 0.75 && raw <= 1.5 ? raw : 1;
+  if (typeof window !== 'undefined' && window.ff && typeof window.ff.setZoomFactor === 'function') {
+    try { window.ff.setZoomFactor(scale); } catch {}
+  }
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.style.zoom = '';
+    document.documentElement.style.setProperty('--ui-scale', String(scale));
+  }
+}
+
+function applySettingsSideEffects(settings) {
+  try { applyShortcutSettings(settings); } catch {}
+  try { applyUiScale(settings); } catch {}
+}
 
 // ---- 不进撤销历史的数据 ----
 // 这些字段由 update() 写入（AI 对话、项目名、风格指南与记忆、分镜参考结果、素材的离线标记和色彩统计、
@@ -94,20 +122,22 @@ function liveSelection(sel, project) {
   const tracks = (project && project.tracks) || {};
   const has = (list, id) => Array.isArray(list) && list.some((x) => x && x.id === id);
   const clipIds = (s.clipIds || []).filter((id) => has(tracks.video, id));
-  let { textId, audioId, kind, id } = s;
+  let { textId, audioId, shotId, kind, id } = s;
   if (textId && !has(tracks.text, textId)) textId = null;
   if (audioId && !has(tracks.audio, audioId)) audioId = null;
+  if (shotId && !has(project && project.storyboard, shotId)) shotId = null;
   if (id) {
     const alive = kind === 'text' || kind === 'caption' ? has(tracks.text, id)
       : kind === 'audio' ? has(tracks.audio, id)
         : kind === 'overlay' ? has(project && project.overlays, id)
           : kind === 'marker' ? has(project && project.markers, id)
-            : true;
+            : kind === 'shot' ? has(project && project.storyboard, id)
+              : true;
     if (!alive) { id = null; kind = null; }
   }
   if (kind === 'clip' && !clipIds.length) kind = null;
-  const same = clipIds.length === (s.clipIds || []).length && textId === s.textId && audioId === s.audioId && kind === s.kind && id === s.id;
-  return same ? s : { ...s, clipIds, textId, audioId, kind, id };
+  const same = clipIds.length === (s.clipIds || []).length && textId === s.textId && audioId === s.audioId && shotId === s.shotId && kind === s.kind && id === s.id;
+  return same ? s : { ...s, clipIds, textId, audioId, shotId, kind, id };
 }
 
 /** 从 settings.ui 读取界面持久化字段（容错：字段缺省或类型不对时回落默认值） */
@@ -136,7 +166,7 @@ export const useStore = create((set, get) => ({
   settings: null,
   aiStatus: null,
   projectList: [],
-  dialogs: { settings: false, export: false, help: false, newProject: false },
+  dialogs: { settings: false, export: false, help: false, newProject: false, shortcuts: false },
   toasts: [],
   // 界面持久化（PLAN-v3 §6，写入 settings.ui）
   onboarding: { ...DEFAULT_ONBOARDING },
@@ -167,20 +197,62 @@ export const useStore = create((set, get) => ({
         api.call('settings:get').catch(() => null),
         api.call('project:list').catch(() => []),
       ]);
+      applySettingsSideEffects(settings);
       set({ appInfo, settings, projectList, ...readUi(settings), ready: true });
       get().refreshAI();
+      const lastId = settings && settings.ui && settings.ui.lastProjectId;
+      if (settings && settings.general && settings.general.openLastProject && lastId && !get().project
+        && Array.isArray(projectList) && projectList.some((p) => p && p.id === lastId)) {
+        get().openProject(lastId).catch(() => {});
+      }
     } catch (e) {
       set({ ready: true });
       get().toast('初始化失败：' + e.message, 'error');
     }
-    api.onFlush(() => get().saveNow());
+    if (!appEventsBound) {
+      appEventsBound = true;
+      api.onFlush(() => get().saveNow());
+      if (typeof api.onAppEvent === 'function') {
+        api.onAppEvent('app:openFile', async (payload) => {
+          const filePath = payload && payload.path;
+          if (!filePath) return;
+          try {
+            if (get().project && get().saveState === 'dirty') await get().saveNow();
+            const imported = await api.call('project:importJson', { path: filePath });
+            if (!imported) throw new Error('文件里没有可用的项目数据');
+            await get().refreshProjects();
+            const exists = imported.id && get().projectList.some((p) => p && p.id === imported.id);
+            if (exists) await get().openProject(imported.id);
+            else {
+              await get().newProject({ project: imported, name: imported.name });
+              const paths = Object.values(imported.assets || {}).map((a) => a && a.path).filter(Boolean);
+              if (paths.length) await api.call('media:register', { paths }).catch(() => {});
+            }
+            get().toast(`已打开项目「${imported.name || '未命名项目'}」`, 'ok');
+          } catch (e) {
+            get().toast('打开项目文件失败：' + ((e && e.message) || String(e)), 'error', 6000);
+          }
+        });
+        api.onAppEvent('app:crashRecovered', (info) => {
+          const isRenderer = info && info.kind === 'renderer';
+          const msg = isRenderer
+            ? '界面刚从意外退出中恢复，已保留最近一次自动保存的进度'
+            : '上次镜流没有正常退出，已恢复到最近一次自动保存的进度';
+          get().toast(msg, 'warn', 7000, { key: 'crash-recovered' });
+        });
+      }
+    }
   },
 
   async refreshAI() {
     try { set({ aiStatus: await api.call('ai:status') }); } catch { set({ aiStatus: { provider: 'local', ready: false, detail: '无法读取 AI 状态' } }); }
   },
   async refreshSettings() {
-    try { set({ settings: await api.call('settings:get') }); } catch {}
+    try {
+      const settings = await api.call('settings:get');
+      applySettingsSideEffects(settings);
+      set({ settings });
+    } catch {}
   },
   async refreshProjects() {
     try { set({ projectList: await api.call('project:list') }); } catch {}
@@ -189,20 +261,43 @@ export const useStore = create((set, get) => ({
   // ================= 项目打开/新建 =================
   async openProject(id) {
     const raw = await api.call('project:load', { id });
-    const project = migrateShotCaptions(normalizeProject(raw));
+    const loaded = loadProject(raw);
+    const project = migrateShotCaptions(loaded.project);
+    const migrated = loaded.migrated || project !== loaded.project;
+    const repairs = Array.isArray(loaded.repairs) ? loaded.repairs : [];
     const paths = Object.values(project.assets).map((a) => a.path).filter(Boolean);
     if (paths.length) await api.call('media:register', { paths }).catch(() => {});
-    set({ project, past: [], future: [], selection: { ...EMPTY_SEL }, range: null, focus: null, playhead: 0, playing: false, saveState: 'saved', mode: project.tracks.video.length ? 'refine' : 'create' });
-    api.call('settings:set', { ui: { lastProjectId: id } }).catch(() => {});
+    const lastProjectId = project.id || id;
+    const curSettings = get().settings;
+    const nextSettings = { ...(curSettings || {}), ui: { ...((curSettings && curSettings.ui) || {}), lastProjectId } };
+    set({ project, settings: nextSettings, past: [], future: [], selection: { ...EMPTY_SEL }, range: null, focus: null, playhead: 0, playing: false, saveState: 'saved', mode: project.tracks.video.length ? 'refine' : 'create' });
+    if (migrated) get().scheduleSave();
+    if (repairs.length) {
+      const preview = repairs.slice(0, 2).join('；') + (repairs.length > 2 ? ` 等 ${repairs.length} 项` : '');
+      get().toast(`已自动修复项目中的异常数据：${preview}`, 'warn', 6000);
+    }
+    api.call('settings:set', { ui: { lastProjectId } }).catch(() => {});
     return project;
   },
 
-  async newProject({ name, aspect, project: seed } = {}) {
+  async newProject({ name, aspect, fps, project: seed } = {}) {
     const created = await api.call('project:create', { name: name || '未命名项目', project: seed ? { ...seed, name: name || seed.name } : undefined, aspect });
-    const project = normalizeProject({ ...created, settings: { ...(created.settings || {}), aspect: aspect || (created.settings && created.settings.aspect) } });
-    set({ project, past: [], future: [], selection: { ...EMPTY_SEL }, range: null, focus: null, playhead: 0, playing: false, mode: project.tracks.video.length ? 'refine' : 'create' });
+    const validFps = Number.isFinite(Number(fps)) && Number(fps) >= 12 && Number(fps) <= 60 ? Number(fps) : undefined;
+    const project = normalizeProject({
+      ...created,
+      settings: {
+        ...(created.settings || {}),
+        aspect: aspect || (created.settings && created.settings.aspect),
+        ...(validFps ? { fps: validFps } : {}),
+      },
+    });
+    const lastProjectId = project.id;
+    const curSettings = get().settings;
+    const nextSettings = { ...(curSettings || {}), ui: { ...((curSettings && curSettings.ui) || {}), lastProjectId } };
+    set({ project, settings: nextSettings, past: [], future: [], selection: { ...EMPTY_SEL }, range: null, focus: null, playhead: 0, playing: false, mode: project.tracks.video.length ? 'refine' : 'create' });
     get().scheduleSave(0);
     get().refreshProjects();
+    api.call('settings:set', { ui: { lastProjectId } }).catch(() => {});
     return project;
   },
 
@@ -332,49 +427,69 @@ export const useStore = create((set, get) => ({
   scheduleSave(delay = 800) {
     set({ saveState: 'dirty' });
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => get().saveNow(), delay);
+    const s = get().settings;
+    if (delay !== 0 && s && s.general && s.general.autosave === false) return;
+    saveTimer = unref(setTimeout(() => get().saveNow(), delay));
   },
 
-  /** 立即保存（契约 C14）。@returns {Promise<boolean>} 已写入磁盘或没有要保存的内容为 true，保存失败为 false（不抛错） */
+  /** 立即保存（契约 C14）。串行化并发保存，避免重叠写入竞态。@returns {Promise<boolean>} 已写入磁盘或没有要保存的内容为 true，保存失败为 false（不抛错） */
   async saveNow() {
     clearTimeout(saveTimer);
+    if (inFlightSave) {
+      const cur = get().project;
+      if (!cur) return true;
+      if (inFlightProject === cur) return inFlightSave;
+      await inFlightSave.catch(() => false);
+      return get().saveNow();
+    }
     const { project } = get();
     if (!project) return true;
     clearTimeout(saveRetryTimer);
     set({ saveState: 'saving' });
-    try {
-      await api.call('project:save', { project });
-      if (saveRetry > 0) get().toast('已重新保存成功', 'ok', 1800);
-      saveRetry = 0;
-      if (get().project === project || get().project?.id === project.id) set({ saveState: get().project === project ? 'saved' : 'dirty', lastSavedAt: Date.now() });
-      return true;
-    } catch (e) {
-      // 保存期间工程已被关掉或换成别的工程：不再改状态，也不安排重试
-      if (!get().project || get().project.id !== project.id) return false;
-      set({ saveState: 'error' });
-      // 退避重试：2s / 5s / 15s，之后停止自动重试，等待用户 Ctrl+S
-      if (saveRetry < SAVE_BACKOFF.length) {
-        const wait = SAVE_BACKOFF[saveRetry];
-        saveRetry += 1;
-        get().toast(`保存失败：${e.message}。${Math.round(wait / 1000)} 秒后自动重试（第 ${saveRetry}/${SAVE_BACKOFF.length} 次）`, 'warn', Math.min(wait, 5000));
-        saveRetryTimer = setTimeout(() => { if (get().project) get().saveNow(); }, wait);
-      } else {
+    inFlightProject = project;
+    const run = (async () => {
+      try {
+        await api.call('project:save', { project });
+        if (saveRetry > 0) get().toast('已重新保存成功', 'ok', 1800);
         saveRetry = 0;
-        get().toast('多次保存失败：' + e.message + '。修改仍在内存中，请检查磁盘空间后按 Ctrl+S 重试', 'error', 8000);
+        if (get().project === project || get().project?.id === project.id) set({ saveState: get().project === project ? 'saved' : 'dirty', lastSavedAt: Date.now() });
+        return true;
+      } catch (e) {
+        // 保存期间工程已被关掉或换成别的工程：不再改状态，也不安排重试
+        if (!get().project || get().project.id !== project.id) return false;
+        set({ saveState: 'error' });
+        // 退避重试：2s / 5s / 15s，之后停止自动重试，等待用户 Ctrl+S
+        if (saveRetry < SAVE_BACKOFF.length) {
+          const wait = SAVE_BACKOFF[saveRetry];
+          saveRetry += 1;
+          get().toast(`保存失败：${e.message}。${Math.round(wait / 1000)} 秒后自动重试（第 ${saveRetry}/${SAVE_BACKOFF.length} 次）`, 'warn', Math.min(wait, 5000));
+          saveRetryTimer = unref(setTimeout(() => { if (get().project) get().saveNow(); }, wait));
+        } else {
+          saveRetry = 0;
+          get().toast('多次保存失败：' + e.message + '。修改仍在内存中，请检查磁盘空间后按 Ctrl+S 重试', 'error', 8000);
+        }
+        return false;
+      } finally {
+        if (inFlightSave === run) {
+          inFlightSave = null;
+          inFlightProject = null;
+        }
       }
-      return false;
-    }
+    })();
+    inFlightSave = run;
+    return run;
   },
 
   // ================= 界面持久化（settings.ui） =================
   persistUi(delay = 400) {
     clearTimeout(uiPersistTimer);
-    uiPersistTimer = setTimeout(() => {
+    uiPersistTimer = unref(setTimeout(() => {
       const { onboarding, layout, drawer, settings } = get();
-      const ui = { ...((settings && settings.ui) || {}), onboarding, layout, drawer };
+      const uiPatch = { onboarding, layout, drawer };
+      const ui = { ...((settings && settings.ui) || {}), ...uiPatch };
       set({ settings: { ...(settings || {}), ui } });
-      api.call('settings:set', { ui }).catch(() => {});
-    }, delay);
+      api.call('settings:set', { ui: uiPatch }).catch(() => {});
+    }, delay));
   },
   setOnboarding(mode, done = true) {
     set({ onboarding: { ...get().onboarding, [mode]: !!done } });
@@ -430,7 +545,7 @@ export const useStore = create((set, get) => ({
     const action = opts && opts.action && typeof opts.action.run === 'function' && opts.action.label ? opts.action : undefined;
     const rest = key ? get().toasts.filter((t) => t.key !== key) : get().toasts;
     set({ toasts: [...rest, { id, message, kind, key, action }].slice(-5) });
-    setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), ms || (kind === 'error' ? 5000 : 2800));
+    unref(setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), ms || (kind === 'error' ? 5000 : 2800)));
   },
 
   /** 跟踪一个后台任务（任务面板显示）。返回 api.job 的结果 */
@@ -450,7 +565,7 @@ export const useStore = create((set, get) => ({
       if (jid) set({ jobs: { ...get().jobs, [jid]: { ...get().jobs[jid], status: e.cancelled ? 'cancelled' : 'error', message: e.message } } });
       throw e;
     } finally {
-      if (jid) setTimeout(() => { const j = { ...get().jobs }; delete j[jid]; set({ jobs: j }); }, 6000);
+      if (jid) unref(setTimeout(() => { const j = { ...get().jobs }; delete j[jid]; set({ jobs: j }); }, 6000));
     }
   },
 }));

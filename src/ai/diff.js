@@ -27,6 +27,9 @@ function list(project, kind) {
 function overlays(project) {
   return project && Array.isArray(project.overlays) ? project.overlays : [];
 }
+function markers(project) {
+  return project && Array.isArray(project.markers) ? project.markers : [];
+}
 function r1(n) { return Math.round((Number(n) || 0) * 10) / 10; }
 function short(s, max = 16) {
   const t = typeof s === 'string' ? s.replace(/\s+/g, ' ').trim() : '';
@@ -59,6 +62,7 @@ const CLIP_GROUPS = [
 const TEXT_GROUPS = [['文字内容', ['text']], ['出现时间', ['start', 'duration']]];
 const AUDIO_GROUPS = [['时间', ['start', 'in', 'out']], ['音量', ['volume', 'mute', 'fadeIn', 'fadeOut', 'duck']]];
 const OVERLAY_GROUPS = [['时间', ['start', 'in', 'out', 'speed']], ['位置大小', ['transform', 'x', 'y', 'scale', 'rotation']]];
+const MARKER_GROUPS = [['名称', ['label']], ['时间', ['t']], ['颜色', ['color']]];
 const IGNORE = new Set(['id', 'updatedAt']);
 
 /** 两个对象之间变化的类别（未归类的字段算「其他设置」） */
@@ -138,6 +142,7 @@ export function diffProject(before, after) {
     const asset = after && after.assets ? after.assets[o.assetId] : null;
     return short((asset && asset.name) || '', 16);
   });
+  const mrks = diffItems(markers(before), markers(after), MARKER_GROUPS, (m) => short(m.label || '', 16));
 
   const bAssets = (before && before.assets) || {};
   const assetsAdded = Object.values((after && after.assets) || {})
@@ -152,7 +157,7 @@ export function diffProject(before, after) {
   const durationAfter = safeDuration(after);
   const nothing = (d) => !d.added.length && !d.removed.length && !d.changed.length;
   const empty = !added.length && !removed.length && !changed.length && !reordered
-    && nothing(texts) && nothing(audio) && nothing(ovs) && !assetsAdded.length && !aspect
+    && nothing(texts) && nothing(audio) && nothing(ovs) && nothing(mrks) && !assetsAdded.length && !aspect
     && Math.abs(durationAfter - durationBefore) < 0.01;
 
   return {
@@ -160,6 +165,7 @@ export function diffProject(before, after) {
     texts,
     audio,
     overlays: ovs,
+    markers: mrks,
     assetsAdded,
     aspect,
     durationBefore,
@@ -175,6 +181,7 @@ export function diffProject(before, after) {
 // summarizeDiff
 // ---------------------------------------------------------------------------
 function itemLine(label, d) {
+  if (!d) return '';
   const parts = [];
   if (d.added.length) parts.push(`新增 ${d.added.length} 条`);
   if (d.changed.length) parts.push(`修改 ${d.changed.length} 条`);
@@ -202,6 +209,7 @@ export function summarizeDiff(diff) {
   const t = itemLine('文字', diff.texts); if (t) lines.push(t);
   const a = itemLine('音乐和声音', diff.audio); if (a) lines.push(a);
   const o = itemLine('画中画', diff.overlays); if (o) lines.push(o);
+  const m = itemLine('标记', diff.markers); if (m) lines.push(m);
   if (diff.assetsAdded.length) lines.push(`从素材库加入：${diff.assetsAdded.slice(0, 3).map((x) => x.name || '素材').join('、')}${diff.assetsAdded.length > 3 ? ' 等' : ''}`);
   if (diff.aspect) lines.push(`画幅：${diff.aspect.from} → ${diff.aspect.to}`);
   if (Math.abs(diff.durationDelta) >= 0.05) {
@@ -249,7 +257,7 @@ export function needsConfirm({ ops = [], before, after, diff } = {}) {
     }
   }
   const colorAll = list_.some((op) => COLOR_TYPES.has(op.type) && op.type !== 'harmonize' && targetsAll(op, clipCount))
-    || (d && clipCount > 2 && d.clips.changed.filter((c) => c.fields.includes('调色')).length >= clipCount);
+    || (!list_.some((o) => o && o.type === 'harmonize') && d && clipCount > 2 && d.clips.changed.filter((c) => c.fields.includes('调色')).length >= clipCount);
   if (colorAll) reasons.push('会改动全片的调色');
   const transitionAll = list_.some((op) => op.type === 'setTransitionAll' || (op.type === 'setTransition' && targetsAll(op, clipCount)));
   if (transitionAll) reasons.push('会改动全片的转场');

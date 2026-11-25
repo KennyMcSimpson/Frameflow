@@ -3,7 +3,7 @@
 // scope='global' 的快捷键（撤销/重做/保存/导出/设置）由外壳 App.jsx 处理，这里不重复处理。
 import { useEffect } from 'react';
 import { useStore } from '../../store.js';
-import { SHORTCUTS, buildKeymap, matchShortcut } from '../../shortcuts/registry.js';
+import { keymapFor, matchShortcut } from '../../shortcuts/customKeys.js';
 import { togglePlay, play, pause, stepFrames, stepSeconds, goStart, goEnd, getLayout, seek, shuttle, setRate, useShuttle } from './usePlayback.js';
 import {
   splitAtPlayhead, selectAllClips, rippleDeleteSelection, trimLeftAtPlayhead, trimRightAtPlayhead,
@@ -81,8 +81,6 @@ const HANDLERS = {
   },
 };
 
-const KEYMAP = buildKeymap(SHORTCUTS, 'refine');
-
 export default function useShortcuts(active = true) {
   useEffect(() => {
     if (!active) return undefined;
@@ -91,7 +89,7 @@ export default function useShortcuts(active = true) {
       if (isTypingTarget(e.target)) return;
       const st = useStore.getState();
       if (st.mode !== 'refine' || !st.project) return;
-      const def = matchShortcut(e, KEYMAP);
+      const def = matchShortcut(e, keymapFor('refine'));
       if (!def) return;
       if (anyDialogOpen(st)) return;
       if (e.repeat && !def.repeat) { e.preventDefault(); return; }

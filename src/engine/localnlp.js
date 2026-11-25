@@ -1043,10 +1043,14 @@ function runMoveRules(c) {
     const desc = c.tokens.length ? tokensToDescriptor(c.tokens) : null;
     if (!desc || desc.kind !== 'index' || desc.indices.length !== 2) { c.fail('要说明交换哪两段，例如「交换第1段和第3段」'); return; }
     const [a, b] = desc.indices;
-    c.emitGlobal(pos, `交换第${a}镜和第${b}镜`, [
-      { type: 'move', target: indexTarget([a]), toIndex: b },
-      { type: 'move', target: indexTarget([b]), toIndex: a },
-    ]);
+    // 无 project 时 stabilizeIndices 不会把第二条转成 ids：先将 a 移到 b 后，原第 b 镜顺移到 b-1
+    const swapOps = b === a + 1
+      ? [{ type: 'move', target: indexTarget([a]), toIndex: b }]
+      : [
+        { type: 'move', target: indexTarget([a]), toIndex: b },
+        { type: 'move', target: indexTarget([env.project ? b : b - 1]), toIndex: a },
+      ];
+    c.emitGlobal(pos, `交换第${a}镜和第${b}镜`, swapOps);
   });
 }
 

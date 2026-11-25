@@ -69,8 +69,21 @@ async function waitTask(p, taskId, cfg, deps, { onStatus, pollOpts } = {}) {
 
 async function runTask(p, input, cfg, deps, opts = {}) {
   if (!isConfigured(p, cfg)) throw new util.VideogenError(`尚未配置 ${p.label} 的密钥，请在「设置 → AI 视频生成」填写`, 'NO_KEY');
-  if (!String(input.prompt || '').trim() && !input.image) throw new util.VideogenError('请填写画面描述', 'BAD_INPUT');
-  if (input.image && !p.caps.image && !(p.caps.imageUrlOnly && /^https?:/.test(input.image))) input = { ...input, image: undefined };
+  const hasPrompt = !!String(input.prompt || '').trim();
+  let droppedLocalImage = false;
+  if (input.image && !p.caps.image && !(p.caps.imageUrlOnly && /^https?:/.test(input.image))) {
+    droppedLocalImage = true;
+    input = { ...input, image: undefined };
+  }
+  if (!hasPrompt && !input.image) {
+    if (droppedLocalImage && p.caps.imageUrlOnly) {
+      throw new util.VideogenError(`${p.label} 仅支持公网图片链接作为参考图，不支持本地图片；请填写画面描述或改用支持本地参考图的服务`, 'BAD_INPUT');
+    }
+    if (droppedLocalImage) {
+      throw new util.VideogenError(`${p.label} 不支持参考图，请填写画面描述`, 'BAD_INPUT');
+    }
+    throw new util.VideogenError('请填写画面描述', 'BAD_INPUT');
+  }
   const { taskId } = await p.submit(input, cfg, deps);
   if (opts.onSubmitted) opts.onSubmitted(taskId);
   try {

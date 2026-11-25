@@ -78,7 +78,7 @@ export function licenseIdFromText(text) {
   // 链接形式：creativecommons.org/licenses/by-sa/4.0/、/publicdomain/zero/1.0/
   if (/creativecommons\.org\/publicdomain\/zero/.test(t)) return 'cc0';
   if (/creativecommons\.org\/publicdomain\/mark/.test(t)) return 'pdm';
-  const url = t.match(/creativecommons\.org\/licenses\/((?:by)(?:-(?:nc|nd|sa))*)\//);
+  const url = t.match(/creativecommons\.org\/licenses\/((?:by)(?:-(?:nc|nd|sa))*)(?:\/|$|\s|\?|#)/);
   if (url) return ccId(url[1]);
   // 视频站下载的默认说明
   if (/仅供(学习|参考)|仅限学习|learning only|reference only/.test(t)) return 'reference';
@@ -213,8 +213,16 @@ export function isAiAsset(asset) {
   if (!asset) return false;
   if (asset.ai || asset.kind === 'generated-image') return true;
   const s = asset.source;
-  if (s === 'videogen') return true;
-  return !!(s && typeof s === 'object' && str(s.kind).toLowerCase() === 'ai');
+  if (typeof s === 'string') {
+    const k = s.toLowerCase();
+    if (k === 'videogen' || k === 'ai') return true;
+  } else if (s && typeof s === 'object') {
+    const k = str(s.kind).toLowerCase();
+    const t = str(s.type).toLowerCase();
+    if (k === 'ai' || t === 'ai' || k === 'videogen' || t === 'videogen') return true;
+  }
+  if (asset.meta && typeof asset.meta === 'object' && asset.meta.videogen) return true;
+  return false;
 }
 
 export function isReferenceAsset(asset) {
@@ -263,7 +271,10 @@ function assetTitle(asset) {
 export function usedAssetIds(project) {
   const ids = new Set();
   const t = (project && project.tracks) || {};
-  for (const c of t.video || []) if (c && c.assetId) ids.add(c.assetId);
+  for (const c of t.video || []) {
+    if (c && c.assetId) ids.add(c.assetId);
+    if (c && c.canvas && c.canvas.type === 'image' && typeof c.canvas.value === 'string' && c.canvas.value) ids.add(c.canvas.value);
+  }
   for (const c of t.audio || []) if (c && c.assetId) ids.add(c.assetId);
   for (const o of (project && project.overlays) || []) if (o && o.assetId) ids.add(o.assetId);
   return ids;

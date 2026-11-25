@@ -1,4 +1,4 @@
-import test from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,16 +7,35 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const asr = require('../electron/lib/asr.cjs');
 
+const tmpDirs = [];
+function makeTmpDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+after(() => {
+  for (const dir of tmpDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+  tmpDirs.length = 0;
+});
+
 test('wav 抽取命令行', async () => {
   const args = asr.buildWavArgs('in.mp4', 'out.wav', { start: 2, duration: 5 });
   assert.deepEqual(args.slice(-14), ['-i', 'in.mp4', '-t', '5', '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-f', 'wav', 'out.wav']);
   assert.ok(args.includes('-ss') && args.join(' ').includes('-ac 1 -ar 16000'));
   assert.equal(args[args.length - 1], 'out.wav');
-  let called;
-  const out = path.join(os.tmpdir(), 'ff_asr_test', 'a.wav');
-  await asr.extractWav('ffmpeg', 'x.mp4', out, { run: async (b, a) => { called = [b, a]; return { code: 0 }; } });
-  assert.equal(called[0], 'ffmpeg');
-  await assert.rejects(asr.extractWav('ffmpeg', 'x.mp4', out, { run: async () => ({ code: 1, stderr: 'boom' }) }), /boom/);
+  const dir = makeTmpDir('ff-asr-wav-');
+  try {
+    let called;
+    const out = path.join(dir, 'a.wav');
+    await asr.extractWav('ffmpeg', 'x.mp4', out, { run: async (b, a) => { called = [b, a]; return { code: 0 }; } });
+    assert.equal(called[0], 'ffmpeg');
+    await assert.rejects(asr.extractWav('ffmpeg', 'x.mp4', out, { run: async () => ({ code: 1, stderr: 'boom' }) }), /boom/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('解析 whisper.cpp JSON', () => {
@@ -50,32 +69,45 @@ test('中文断句与去标点', () => {
 });
 
 test('whisper 转写（mock 子进程）', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-'));
-  let args;
-  const segs = await asr.transcribeWhisper({ bin: 'whisper-cli', model: 'm.bin', wav: path.join(dir, 'a.wav'), lang: 'zh', tmpDir: dir,
-    run: async (b, a, o) => { args = a; o.onStderr('progress = 50%'); const of = a[a.indexOf('-of') + 1];
-      fs.writeFileSync(of + '.json', JSON.stringify({ transcription: [{ offsets: { from: 0, to: 1000 }, text: '测试' }] })); return { code: 0 }; } });
-  assert.ok(args.includes('-oj') && args.includes('-l'));
-  assert.deepEqual(segs, [{ start: 0, end: 1, text: '测试' }]);
+  const dir = makeTmpDir('ff-asr-wh-');
+  try {
+    let args;
+    const segs = await asr.transcribeWhisper({ bin: 'whisper-cli', model: 'm.bin', wav: path.join(dir, 'a.wav'), lang: 'zh', tmpDir: dir,
+      run: async (b, a, o) => { args = a; o.onStderr('progress = 50%'); const of = a[a.indexOf('-of') + 1];
+        fs.writeFileSync(of + '.json', JSON.stringify({ transcription: [{ offsets: { from: 0, to: 1000 }, text: '测试' }] })); return { code: 0 }; } });
+    assert.ok(args.includes('-oj') && args.includes('-l'));
+    assert.deepEqual(segs, [{ start: 0, end: 1, text: '测试' }]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('OpenAI 转写（mock fetch）', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-'));
-  const wav = path.join(dir, 'a.wav'); fs.writeFileSync(wav, Buffer.alloc(100));
-  let url;
-  const segs = await asr.transcribeOpenAI({ wav, key: 'k', fetchImpl: async (u, o) => { url = u; assert.ok(o.body instanceof FormData);
-    return { ok: true, json: async () => ({ segments: [{ start: 0, end: 1, text: '嗨' }] }) }; } });
-  assert.match(url, /audio\/transcriptions$/);
-  assert.equal(segs[0].text, '嗨');
+  const dir = makeTmpDir('ff-asr-oai-');
+  try {
+    const wav = path.join(dir, 'a.wav');
+    fs.writeFileSync(wav, Buffer.alloc(100));
+    let url;
+    const segs = await asr.transcribeOpenAI({ wav, key: 'k', fetchImpl: async (u, o) => { url = u; assert.ok(o.body instanceof FormData);
+      return { ok: true, json: async () => ({ segments: [{ start: 0, end: 1, text: '嗨' }] }) }; } });
+    assert.match(url, /audio\/transcriptions$/);
+    assert.equal(segs[0].text, '嗨');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('findModel / findWhisperBin', () => {
-  const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-ud-'));
-  assert.equal(asr.findModel(ud), null);
-  fs.mkdirSync(path.join(ud, 'models'));
-  fs.writeFileSync(path.join(ud, 'models', 'ggml-base.bin'), Buffer.alloc(2 * 1024 * 1024));
-  assert.equal(asr.findModel(ud).name, 'base');
-  fs.mkdirSync(path.join(ud, 'bin', 'whisper', 'Release'), { recursive: true });
-  fs.writeFileSync(path.join(ud, 'bin', 'whisper', 'Release', asr.BIN_NAMES[0]), '');
-  assert.ok(asr.findWhisperBin(ud));
+  const ud = makeTmpDir('ff-asr-ud-');
+  try {
+    assert.equal(asr.findModel(ud), null);
+    fs.mkdirSync(path.join(ud, 'models'));
+    fs.writeFileSync(path.join(ud, 'models', 'ggml-base.bin'), Buffer.alloc(2 * 1024 * 1024));
+    assert.equal(asr.findModel(ud).name, 'base');
+    fs.mkdirSync(path.join(ud, 'bin', 'whisper', 'Release'), { recursive: true });
+    fs.writeFileSync(path.join(ud, 'bin', 'whisper', 'Release', asr.BIN_NAMES[0]), '');
+    assert.ok(asr.findWhisperBin(ud));
+  } finally {
+    fs.rmSync(ud, { recursive: true, force: true });
+  }
 });

@@ -19,6 +19,7 @@ import {
 } from '../../../ai/director.js';
 import { localDirectorReply, localStoryboard } from '../../../ai/localDirector.js';
 import { addAssets, importFilesDialog } from '../../assetActions.js';
+import { withConsent, isConsentDeclined } from '../../consent.js';
 import { getUI, setUI, patchChat, patchBoard, patchBatch, setKeyed, patchKeyed, askConfirm } from './createState.js';
 import {
   normalizeShot, normalizeShots, withShotPatch, withReferences, linkPreviz, moveShotBy, moveShotTo, duplicateShot,
@@ -173,11 +174,13 @@ async function runDirector(text, messageId, { forceLocal = false } = {}) {
     if (forceLocal) {
       out = replyLocally();
     } else {
+      const techniques = pickTechniques(`${text} ${(brief && brief.style) || ''} ${(brief && brief.title) || ''}`);
+      const validTechniqueIds = allTechniques().map((t) => t.id);
       const request = buildDirectorRequest({
         brief,
         messages: history,
         userText: text,
-        techniques: pickTechniques(`${text} ${(brief && brief.style) || ''} ${(brief && brief.title) || ''}`),
+        techniques,
         assets: assetDigest(project),
       });
       const r = await runAI({ ...request, timeoutMs: DIRECTOR_TIMEOUT_MS }, {
@@ -189,7 +192,7 @@ async function runDirector(text, messageId, { forceLocal = false } = {}) {
         // 优先显示阶段文字（契约 C9 的 phase），旧实现只有 message
         onProgress: (p) => { const stage = p && (p.phase || p.message); if (current() && stage) patchChat({ stage }); },
       });
-      out = { parsed: parseDirectorResponse(r.data), provider: r.provider };
+      out = { parsed: parseDirectorResponse(r.data, { brief, validTechniqueIds }), provider: r.provider };
     }
   } catch (e) {
     if (!current()) return;
@@ -265,10 +268,12 @@ export async function generateStoryboard() {
     let provider = 'local';
     try {
       const messages = directorHistory(project);
+      const techniques = pickTechniques(`${brief.title} ${brief.style} ${brief.goal} ${brief.mood}`);
+      const validTechniqueIds = allTechniques().map((t) => t.id);
       const request = buildStoryboardRequest({
         brief,
         messages,
-        techniques: pickTechniques(`${brief.title} ${brief.style} ${brief.goal} ${brief.mood}`),
+        techniques,
         assets: assetDigest(project),
         project,
       });
@@ -279,7 +284,7 @@ export async function generateStoryboard() {
           if (getUI().board.cancelling) api.cancel(jobId).catch(() => {});
         },
       });
-      result = parseStoryboardResponse(r.data);
+      result = parseStoryboardResponse(r.data, { brief, validTechniqueIds });
       provider = r.provider;
     } catch (e) {
       if (!noAI(e)) throw e;
@@ -738,8 +743,17 @@ async function runShotVideo(project, shot, provider) {
       `AI 视频：第 ${shot.index} 镜`,
       (p) => {
         if (p.jobId) videogenJobs.set(shotId, p.jobId);
-        patchKeyed('shotBusy', shotId, { jobId: p.jobId, label: p.message || `AI 视频生成中 ${Math.round((p.progress || 0) * 100)}%` });
-        if (sameProject(projectId)) setVideoTask(projectId, shotId, { provider: provider.id, taskId: p.taskId || (p.data && p.data.taskId) || null, state: 'running', progress: p.progress || 0, error: null });
+        patchKeyed('shotBusy', shotId, {
+          jobId: p.jobId,
+          progress: typeof p.progress === 'number' ? p.progress : null,
+          label: p.message || `AI 视频生成中 ${Math.round((p.progress || 0) * 100)}%`,
+        });
+        if (sameProject(projectId)) {
+          const curShot = findShot(shotId);
+          const prevTaskId = curShot && curShot.aiVideoTask && curShot.aiVideoTask.taskId;
+          const taskId = (p.meta && p.meta.taskId) || p.taskId || (p.data && p.data.taskId) || prevTaskId || null;
+          setVideoTask(projectId, shotId, { provider: provider.id, taskId, state: 'running', progress: p.progress || 0, error: null });
+        }
       },
     );
     if (!out || !out.asset) throw new Error('生成完成但没有拿到视频');
@@ -788,7 +802,8 @@ export function retryShotVideo(shotId) {
 export function cancelShotVideo(shotId) {
   const jobId = videogenJobs.get(shotId) || (getUI().shotBusy[shotId] && getUI().shotBusy[shotId].jobId);
   if (!jobId) return;
-  patchKeyed('shotBusy', shotId, { cancelling: true, label: '正在取消…' });
+  const cur = getUI().shotBusy[shotId];
+  setKeyed('shotBusy', shotId, { ...(cur || { kind: 'videogen', jobId }), cancelling: true, label: '正在取消…' });
   api.cancel(jobId).catch(() => {});
 }
 
@@ -848,19 +863,79 @@ export async function resumeVideoTasks() {
     .map((s) => ({ shotId: s.id, provider: s.aiVideoTask.provider, taskId: s.aiVideoTask.taskId }));
   if (!tasks.length) return;
   const projectId = project.id;
+  const settled = new Set();
   if (resumeUnsub) resumeUnsub();
   resumeUnsub = api.onJobs ? api.onJobs((type, data) => {
     const result = data && data.result;
-    const shotId = (result && result.shotId) || (data && data.shotId);
-    if (!shotId || !tasks.some((t) => t.shotId === shotId)) return;
+    const meta = data && data.meta;
+    if (meta && meta.projectId && meta.projectId !== projectId) return;
+    const shotId = (result && result.shotId) || (meta && meta.shotId) || (data && data.shotId);
+    if (!shotId) return;
     const task = tasks.find((t) => t.shotId === shotId);
-    if (type === 'done' && result && result.asset) finishVideo(projectId, shotId, result.asset, task.provider, task.taskId);
-    else if (type === 'error' && sameProject(projectId)) setVideoTask(projectId, shotId, { ...task, state: 'error', progress: 0, error: (data && data.message) || '生成失败' });
-    else if (type === 'progress' && sameProject(projectId)) setVideoTask(projectId, shotId, { ...task, state: 'running', progress: (data && data.progress) || 0, error: null });
+    if (!task) return;
+    const taskId = (meta && meta.taskId) || (data && data.taskId) || (data && data.data && data.data.taskId) || task.taskId;
+    if (type === 'done') {
+      settled.add(shotId);
+      videogenJobs.delete(shotId);
+      if (sameProject(projectId)) setKeyed('shotBusy', shotId, null);
+      if (result && result.asset) finishVideo(projectId, shotId, result.asset, task.provider, result.taskId || taskId);
+    } else if (type === 'error') {
+      settled.add(shotId);
+      videogenJobs.delete(shotId);
+      if (sameProject(projectId)) {
+        setKeyed('shotBusy', shotId, null);
+        const cancelled = !!(data && data.cancelled);
+        const errMsg = (data && (data.error || data.message)) || '生成失败';
+        setVideoTask(projectId, shotId, {
+          provider: task.provider,
+          taskId: cancelled ? null : taskId,
+          state: cancelled ? 'cancelled' : 'error',
+          progress: 0,
+          error: cancelled ? null : errMsg,
+        });
+      }
+    } else if (type === 'progress') {
+      if (data && data.jobId && !settled.has(shotId)) videogenJobs.set(shotId, data.jobId);
+      if (sameProject(projectId)) {
+        const prog = (data && data.progress) || 0;
+        const curBusy = getUI().shotBusy[shotId];
+        const jobId = (data && data.jobId) || (curBusy && curBusy.jobId) || videogenJobs.get(shotId) || null;
+        setKeyed('shotBusy', shotId, {
+          kind: 'videogen',
+          jobId,
+          progress: typeof (data && data.progress) === 'number' ? data.progress : (curBusy ? curBusy.progress : null),
+          cancelling: !!(curBusy && curBusy.cancelling),
+          label: curBusy && curBusy.cancelling ? '正在取消…' : ((data && data.message) || `AI 视频生成中 ${Math.round(prog * 100)}%`),
+        });
+        setVideoTask(projectId, shotId, { provider: task.provider, taskId, state: 'running', progress: prog, error: null });
+      }
+    }
   }) : null;
   try {
-    await api.videogen.resume({ projectId, tasks });
-    toast(`正在继续查询 ${tasks.length} 段 AI 视频的生成结果`, 'info');
+    const resumed = await api.videogen.resume({ projectId, tasks });
+    let startedCount = 0;
+    for (const r of Array.isArray(resumed) ? resumed : []) {
+      if (!r || !r.shotId || settled.has(r.shotId)) continue;
+      const task = tasks.find((t) => t.shotId === r.shotId);
+      if (r.jobId) {
+        startedCount += 1;
+        videogenJobs.set(r.shotId, r.jobId);
+        if (sameProject(projectId)) {
+          const curBusy = getUI().shotBusy[r.shotId];
+          setKeyed('shotBusy', r.shotId, {
+            kind: 'videogen',
+            jobId: r.jobId,
+            progress: curBusy ? curBusy.progress : null,
+            cancelling: !!(curBusy && curBusy.cancelling),
+            label: (curBusy && curBusy.label) || '正在恢复 AI 视频任务…',
+          });
+        }
+      } else if (r.error && task && sameProject(projectId)) {
+        setVideoTask(projectId, r.shotId, { provider: task.provider, taskId: task.taskId, state: 'error', progress: 0, error: r.error });
+      }
+    }
+    if (startedCount) toast(`正在继续查询 ${startedCount} 段 AI 视频的生成结果`, 'info');
+    else if (!Array.isArray(resumed)) toast(`正在继续查询 ${tasks.length} 段 AI 视频的生成结果`, 'info');
   } catch (e) {
     toast(`AI 视频任务恢复失败：${e.message}`, 'error');
   }
@@ -895,12 +970,19 @@ async function searchShot(shot, customQuery) {
     return { results: [], errors: [{ source: '搜索', error: '这一镜还没有搜索词，请先填写标题或主体' }], sources, query: '' };
   }
   const parts = await Promise.all(plan.map((step) => (
-    withTimeout(api.call('web:search', { query: step.query, sources: step.sources, kind: 'video', limit: 6 }), SEARCH_TIMEOUT_MS, '联网搜索超时，请检查网络后重试')
-      .catch((e) => ({ results: [], errors: step.sources.map((source) => ({ source, error: e.message })) }))
+    withConsent(
+      () => withTimeout(api.call('web:search', { query: step.query, sources: step.sources, kind: 'video', limit: 6 }), SEARCH_TIMEOUT_MS, '联网搜索超时，请检查网络后重试'),
+      'videoSites',
+    ).catch((e) => (
+      isConsentDeclined(e)
+        ? { results: [], errors: [], declined: true }
+        : { results: [], errors: step.sources.map((source) => ({ source, error: e.message })) }
+    ))
   )));
   return {
     results: mergeResults(parts.map((p) => p.results)),
     errors: parts.flatMap((p) => p.errors || []),
+    declined: parts.some((p) => p.declined),
     sources,
     query: plan.map((step) => step.query).join(' / '),
   };
@@ -942,6 +1024,7 @@ export async function findAllReferences() {
     patchBatch({ done: i, label: `第 ${shot.index} 镜：${shot.title}` });
     const out = await searchShot(shot);
     if (!batchAlive(token)) return;
+    if (out.declined) { patchBatch({ cancelled: true }); break; }
     processed += 1;
     if (out.results.length) { saveReferences(project.id, shot.id, out.results); found += 1; } else empty += 1;
     setKeyed('refStatus', shot.id, { loading: false, errors: out.errors, query: out.query, sources: out.sources });
@@ -968,12 +1051,12 @@ export async function downloadReference(result) {
   const projectId = project.id;
   setKeyed('downloads', key, { status: 'running', progress: 0, jobId: null, assetId: null, error: '' });
   try {
-    const out = await S().trackJob(
+    const out = await withConsent(() => S().trackJob(
       'web:download',
       { result, target: 'project', projectId, maxSeconds: maxDownloadSeconds(), withSubs: false },
       `下载素材：${result.title}`,
       (p) => patchKeyed('downloads', key, { progress: p.progress || 0, jobId: p.jobId }),
-    );
+    ), 'videoSites');
     if (!sameProject(projectId)) return;
     if (!out || !out.asset) throw new Error('下载完成但没有拿到素材');
     addAssets([out.asset], '下载参考到素材');
@@ -981,7 +1064,7 @@ export async function downloadReference(result) {
     toast(`已下载到素材箱：${result.title}`, 'ok');
   } catch (e) {
     if (!sameProject(projectId)) return;
-    if (e.cancelled) { setKeyed('downloads', key, null); return; }
+    if (e.cancelled || isConsentDeclined(e)) { setKeyed('downloads', key, null); return; }
     patchKeyed('downloads', key, { status: 'error', error: e.message });
     toast(`下载失败：${e.message}`, 'error');
   }
@@ -999,16 +1082,16 @@ export async function analyzeReference(result) {
   if (cur && cur.status === 'running') return;
   setKeyed('analyzing', key, { status: 'running', progress: 0, jobId: null, error: '' });
   try {
-    await S().trackJob(
+    await withConsent(() => S().trackJob(
       'analysis:start',
       { url: result.downloadUrl || result.url, title: result.title, category: guessCategory(result), useAI: true },
       `拆片学习：${result.title}`,
       (p) => patchKeyed('analyzing', key, { progress: p.progress || 0, jobId: p.jobId }),
-    );
+    ), 'videoSites');
     patchKeyed('analyzing', key, { status: 'done', progress: 1 });
     toast(`拆片完成，可到拆片库查看：${result.title}`, 'ok');
   } catch (e) {
-    if (e.cancelled) { setKeyed('analyzing', key, null); return; }
+    if (e.cancelled || isConsentDeclined(e)) { setKeyed('analyzing', key, null); return; }
     patchKeyed('analyzing', key, { status: 'error', error: e.message });
     toast(`拆片失败：${e.message}`, 'error');
   }
@@ -1033,17 +1116,20 @@ export async function generateShotImage(shotId) {
   const projectId = project.id;
   setKeyed('shotBusy', shotId, { kind: 'image', label: '正在生成 AI 画面…', jobId: null, cancelling: false });
   try {
-    const size = imageSizeForAspect(project.settings.aspect);
+    const aspect = project.settings.aspect;
+    const size = imageSizeForAspect(aspect);
+    const prompt = buildImagePrompt(shot, project.brief);
     const out = await S().trackJob(
       'ai:image',
-      { prompt: buildImagePrompt(shot, project.brief), size, projectId },
+      { prompt, aspect, size, projectId },
       `AI 画面：第 ${shot.index} 镜`,
       (p) => patchKeyed('shotBusy', shotId, { jobId: p.jobId }),
     );
     if (!sameProject(projectId)) return;
     if (!out || !out.path) throw new Error('图片服务没有返回文件');
-    const [width, height] = size.split('x').map(Number);
-    const prompt = buildImagePrompt(shot, project.brief);
+    const [fallbackW, fallbackH] = size.split('x').map(Number);
+    const width = Number(out.width) > 0 ? Number(out.width) : fallbackW;
+    const height = Number(out.height) > 0 ? Number(out.height) : fallbackH;
     const aiProvider = (out && (out.provider || out.engine)) || '';
     const asset = createAsset({
       kind: 'generated-image',
@@ -1086,14 +1172,17 @@ export async function refineShot(shotId, instruction) {
   const projectId = project.id;
   setKeyed('shotBusy', shotId, { kind: 'refine', label: 'AI 正在修改此镜…', jobId: null, cancelling: false });
   try {
-    const request = buildShotRefineRequest({ brief: baseBrief(project), shot, instruction: text });
+    const brief = baseBrief(project);
+    const techniques = pickTechniques(`${text} ${shot.title || ''} ${shot.subject || ''} ${brief.style || ''}`);
+    const validTechniqueIds = allTechniques().map((t) => t.id);
+    const request = buildShotRefineRequest({ brief, shot, instruction: text, techniques });
     const r = await runAI({ ...request, timeoutMs: REFINE_TIMEOUT_MS }, {
       onStart: (jobId) => patchKeyed('shotBusy', shotId, { jobId }),
     });
     if (!sameProject(projectId)) return;
     const latest = findShot(shotId);
     if (!latest) { toast('这一镜已被删除，AI 的修改没有应用'); return; }
-    const refined = parseShotRefineResponse(r.data, shot);
+    const refined = parseShotRefineResponse(r.data, shot, { validTechniqueIds });
     // AI 只改内容，素材与预演资产的关联以当前分镜为准
     const next = normalizeShot({ ...refined, id: shotId, assetId: latest.assetId, previzAssetId: latest.previzAssetId, footageAssetId: latest.footageAssetId || null, footageTried: latest.footageTried }, latest.index);
     // AI 视频的关联同样以当前分镜为准（normalizeShot 可能不认识这些新字段）

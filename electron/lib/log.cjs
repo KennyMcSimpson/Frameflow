@@ -35,6 +35,7 @@ let queued = 0;
 let dropped = 0;
 let timer = null;
 let writing = false;
+let inflight = null; // 正在异步写入的批次 { data, flushedSync }，崩溃/flushSync 时可同步补落盘
 let consoleTaken = false;
 let exitHooked = false;
 let inLog = false; // 防止 console 接管后递归
@@ -49,14 +50,20 @@ const RULES = [
   [/(data:[a-z]+\/[a-z0-9.+-]+;base64,)[A-Za-z0-9+/=]{48,}/gi, '$1…'],
   // OpenAI / Anthropic / OpenRouter 风格的 Key
   [/\b(sk-[A-Za-z0-9]{0,4})[A-Za-z0-9_-]{12,}/g, '$1***'],
+  // Google / Gemini API Key
+  [/\b(AIza)[0-9A-Za-z_-]{35,}/g, '$1***'],
   // Bearer / Basic 凭据
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, '$1 ***'],
+  // fal.ai 等服务的 Key <token> 凭据（区分大小写避免误伤普通英文）
+  [/\b(Key)\s+[A-Za-z0-9._~+/:=-]{6,}/g, '$1 ***'],
+  // URL userinfo 密码：https://user:password@host/path、socks5://user:pass@proxy:1080、ws(s)://...
+  [/((?:https?|socks[45][ah]?|wss?):\/\/[^/\s:@?#"'`]+:)[^\s/?#"'`]+@/gi, '$1***@'],
   // 请求头：Authorization: xxx、X-Api-Key: xxx、Cookie: xxx（带引号的值交给下面两条）
   [/\b((?:x-)?(?:api-?key|goog-api-key|authorization|cookie)\s*:[ \t]*)(?![\s'"`]|\*\*\*)[^\r\n,;"'}]+/gi, '$1***'],
-  // JSON 字段："arkKey":"xxx"、"access_token": "xxx"
-  [new RegExp(`("[A-Za-z0-9_-]*(?:${KEY_NAMES})"\\s*:\\s*")(?!\\*\\*\\*")[^"]+"`, 'gi'), '$1***"'],
-  // util.inspect 输出的对象：{ apiKey: 'xxx' }
-  [new RegExp(`(\\b[A-Za-z0-9_$]*(?:${KEY_NAMES})\\s*:\\s*)(?:'[^'\\r\\n]*'|"[^"\\r\\n]*"|\`[^\`\\r\\n]*\`)`, 'gi'), "$1'***'"],
+  // JSON 字段："arkKey":"xxx"、"access_token": "xxx"（支持值内转义引号 \"）
+  [new RegExp(`("[A-Za-z0-9_-]*(?:${KEY_NAMES})"\\s*:\\s*")(?!\\*\\*\\*")(?:\\\\.|[^"\\\\\\r\\n])*"`, 'gi'), '$1***"'],
+  // util.inspect 输出的对象：{ apiKey: 'xxx', 'x-goog-api-key': 'xxx', "x-api-key": 'xxx' }（支持值内转义引号）
+  [new RegExp(`((?:^|[^A-Za-z0-9_$'"])(?:'[A-Za-z0-9_$-]*(?:${KEY_NAMES})'|"[A-Za-z0-9_$-]*(?:${KEY_NAMES})"|[A-Za-z0-9_$-]*(?:${KEY_NAMES}))\\s*:\\s*)(?!['"\`]\\*\\*\\*['"\`])(?:'(?:\\\\.|[^'\\\\\\r\\n])*'|"(?:\\\\.|[^"\\\\\\r\\n])*"|\`(?:\\\\.|[^\`\\\\\\r\\n])*\`)`, 'gi'), "$1'***'"],
   // 查询串 / 表单 / 命令行：key=xxx、access_token=xxx、X-Amz-Signature=xxx
   [new RegExp(`((?:^|[?&\\s;,])[A-Za-z0-9_-]*(?:${KEY_NAMES}|sig)=)(?!\\*\\*\\*)[^&\\s"';,]{3,}`, 'gi'), '$1***'],
 ];
@@ -151,21 +158,40 @@ function schedule() {
 function flushAsync() {
   timer = null;
   if (!dir || writing || !queue.length) return;
-  const data = takeQueue();
+  const batch = { data: takeQueue(), flushedSync: false };
+  inflight = batch;
   writing = true;
-  const bytes = Buffer.byteLength(data);
-  if (!ensureDir()) { writing = false; return; }
-  rotateIfNeeded(bytes);
-  fs.appendFile(filePath(), data, 'utf8', () => {
+  const targetDir = dir;
+  const targetFile = filePath();
+  const bytes = Buffer.byteLength(batch.data);
+  if (!ensureDir()) {
+    if (inflight === batch) inflight = null;
     writing = false;
-    if (queue.length) schedule();
+    return;
+  }
+  rotateIfNeeded(bytes);
+  fs.appendFile(targetFile, batch.data, 'utf8', () => {
+    if (inflight === batch) {
+      inflight = null;
+      writing = false;
+      if (queue.length && dir === targetDir) schedule();
+    }
   });
 }
 
-/** 同步写出队列里剩余的日志（退出、致命错误时调用） */
+/** 同步写出队列里剩余的日志（退出、致命错误时调用）；若有异步写入正在进行，一并同步落盘避免丢失 */
 function flushSync() {
-  if (!dir || !queue.length) return;
-  const data = takeQueue();
+  if (timer) { clearTimeout(timer); timer = null; }
+  if (!dir) return;
+  let data = '';
+  if (inflight && !inflight.flushedSync) {
+    inflight.flushedSync = true;
+    data += inflight.data;
+  }
+  if (queue.length || dropped) {
+    data += takeQueue();
+  }
+  if (!data) return;
   try {
     if (!ensureDir()) return;
     rotateIfNeeded(Buffer.byteLength(data));
@@ -240,15 +266,20 @@ function init(opts = {}) {
 function logDir() { return dir; }
 function logFile() { return filePath(); }
 
-/** 接管 console：原样输出到控制台，同时写一份到日志文件。重复调用无副作用。 */
+/** 接管 console：脱敏后输出到控制台，同时写一份到日志文件。重复调用无副作用。 */
 function takeOverConsole() {
   if (consoleTaken) return;
   consoleTaken = true;
   const wrap = (name, level) => {
     const orig = raw[name];
     console[name] = (...a) => {
-      orig(...a);
-      write(level, a, { echo: false });
+      if (inLog) return;
+      inLog = true;
+      try {
+        const text = formatArgs(a);
+        orig(text);
+        enqueue(level, text);
+      } catch {} finally { inLog = false; }
     };
   };
   wrap('log', 'info');
@@ -265,6 +296,7 @@ function _reset() {
   queue = [];
   queued = 0;
   dropped = 0;
+  inflight = null;
   writing = false;
   dir = null;
   echoLevel = LEVELS.warn;

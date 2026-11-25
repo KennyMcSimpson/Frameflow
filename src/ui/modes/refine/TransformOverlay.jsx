@@ -5,6 +5,7 @@ import React, { useRef } from 'react';
 import { create } from 'zustand';
 import useStore from '../../store.js';
 import { getLayout } from './usePlayback.js';
+import { overlayDuration } from '../../../engine/timeline.js';
 import { useLiveEdit, runOps } from './InspCommon.jsx';
 import { makeEditors } from './InspVideo.jsx';
 import { stickerSize } from '../../../render/compositor.js';
@@ -21,7 +22,11 @@ function activeTarget(project, sel, t) {
   if (!project) return null;
   if (sel.kind === 'overlay' && (sel.id || sel.overlayId)) {
     const o = (project.overlays || []).find((x) => x.id === (sel.id || sel.overlayId));
-    if (o) return { target: 'overlay', item: o };
+    if (o) {
+      const start = Number(o.start) || 0;
+      const end = start + overlayDuration(o);
+      if (t >= start - 1e-3 && t <= end + 1e-3) return { target: 'overlay', item: o };
+    }
   }
   const ids = sel.clipIds || [];
   if (ids.length !== 1) return null;

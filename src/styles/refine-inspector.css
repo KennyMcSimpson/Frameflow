@@ -1,8 +1,9 @@
 /* ==========================================================================
-   绮句慨 路 灞炴€ч潰鏉匡紙鎸夐€変腑瀵硅薄椹卞姩锛変笌鎾斁鍣?鈥斺€?W9
-   璇存槑锛氭湰鏂囦欢鍦?refine-side.css / refine.css 涔嬪墠鍔犺浇锛屾墍鏈夎鍒欏姞涓€灞備綔鐢ㄥ煙鎻愰珮浼樺厛绾с€?   ========================================================================== */
+   精修 · 属性面板（按选中对象驱动）与播放器 —— W9
+   说明：本文件在 refine-side.css / refine.css 之前加载，所有规则加一层作用域提高优先级。
+   ========================================================================== */
 
-/* ---------------- 灞炴€ч潰鏉垮澹?---------------- */
+/* ---------------- 属性面板外壳 ---------------- */
 .rf-insp { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: var(--bg-1); scrollbar-gutter: stable; }
 .rf-insp .insp { display: flex; flex-direction: column; min-height: 0; padding-bottom: 16px; }
 
@@ -19,7 +20,7 @@
 .rf-insp .insp-head-icon.text { background: color-mix(in srgb, var(--track-text) 35%, var(--bg-3)); color: var(--text-0); }
 .rf-insp .insp-head-icon.audio { background: color-mix(in srgb, var(--track-audio) 35%, var(--bg-3)); color: var(--text-0); }
 
-/* 瀛愰〉鍒囨崲锛氬垎娈靛紡锛岀矘鍦ㄥご閮ㄤ笅鏂?*/
+/* 子页切换：分段式，粘在头部下方 */
 .rf-insp .insp-pages {
   position: sticky; top: 6px; z-index: 4; display: flex; gap: 2px; margin: 0 12px 6px; padding: 3px;
   border-radius: 10px; background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line);
@@ -35,7 +36,7 @@
 .rf-insp .insp-page-body { display: flex; flex-direction: column; animation: insp-in .16s var(--ease-out, ease-out); }
 @keyframes insp-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
-/* 鍒嗙粍 */
+/* 分组 */
 .rf-insp .insp-sec { margin: 0 8px; border-bottom: 1px solid var(--line); }
 .rf-insp .insp-sec:last-child { border-bottom: 0; }
 .rf-insp .insp-sec-head { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 4px; border-radius: 6px; color: var(--text-1); cursor: pointer; user-select: none; }
@@ -45,7 +46,7 @@
 .rf-insp .insp-sec-actions .btn { height: 22px; padding: 0 8px; font-size: 11px; color: var(--text-2); }
 .rf-insp .insp-sec-body { display: flex; flex-direction: column; gap: 6px; padding: 2px 4px 14px; }
 
-/* 鍙傛暟琛岋細婊戞潌 + 閲嶇疆 + 鍏抽敭甯?*/
+/* 参数行：滑杆 + 重置 + 关键帧 */
 .rf-insp .insp-param { display: block; min-width: 0; }
 .rf-insp .insp-param.animated .slider-head .label { color: var(--accent); }
 .rf-insp .insp-param > .grow { min-width: 0; }
@@ -90,7 +91,7 @@
 .rf-insp .insp-sec-body .insp-note { margin: 0; }
 .rf-insp .insp-locked { display: flex; align-items: center; gap: 6px; margin: 0 12px 8px; padding: 7px 9px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); font-size: 11px; }
 
-/* 鍗＄墖寮忛€夐」 */
+/* 卡片式选项 */
 .rf-insp .insp-choices { display: grid; gap: 6px; }
 .rf-insp .insp-choice {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; min-height: 34px; padding: 6px 4px;
@@ -109,7 +110,7 @@
 .rf-insp .insp-curve.on path { stroke: var(--accent); }
 .rf-insp .insp-swatch { display: block; width: 100%; height: 26px; border-radius: 5px; }
 
-/* 鍒嗘寮€鍏?*/
+/* 分段开关 */
 .rf-insp .insp-seg { display: flex; padding: 2px; border-radius: 8px; background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); }
 .rf-insp .insp-seg button { flex: 1; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font-size: 12px; cursor: pointer; }
 .rf-insp .insp-seg button:hover { color: var(--text-0); }
@@ -123,7 +124,7 @@
 .rf-insp .insp-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; color: var(--text-3); font-size: 11px; }
 .rf-insp .insp-kv > :nth-child(even) { color: var(--text-1); text-align: right; }
 
-/* 涓€閿浛鎹㈠疄鎷?/ 琛屽姩鍗＄墖 */
+/* 一键替换实拍 / 行动卡片 */
 .rf-insp .insp-replace {
   display: flex; align-items: center; gap: 8px; margin: 0 12px 10px; padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: 10px;
   background: transparent; color: var(--text-1); font-size: 12px; cursor: pointer; text-align: left;
@@ -149,7 +150,7 @@
 .rf-insp .insp-guide b { color: var(--text-0); }
 .rf-insp .insp-guide p { margin: 4px 0 8px; color: var(--text-2); font-size: 11px; line-height: 1.6; }
 
-/* 瀛楀箷閫愬彞鍒楄〃 */
+/* 字幕逐句列表 */
 .rf-insp .cap-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .rf-insp .cap-item { position: relative; display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 6px; }
 .rf-insp .cap-item:hover, .rf-insp .cap-item.on { background: var(--bg-2); }
@@ -159,14 +160,14 @@
 .rf-insp .cap-text:hover { border-color: var(--line); }
 .rf-insp .cap-text:focus { border-color: var(--accent); background: var(--bg-1); }
 .rf-insp .cap-ops { display: none; gap: 1px; }
-.rf-insp .cap-item:hover .cap-ops { display: inline-flex; }
-.rf-insp .cap-item:hover .cap-dur { display: none; }
+.rf-insp .cap-item:hover .cap-ops, .rf-insp .cap-item:focus-within .cap-ops { display: inline-flex; }
+.rf-insp .cap-item:hover .cap-dur, .rf-insp .cap-item:focus-within .cap-dur { display: none; }
 .rf-insp .cap-ops button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-2); cursor: pointer; }
 .rf-insp .cap-ops button:hover { background: var(--bg-4, #2f3138); color: var(--text-0); }
 .rf-insp .cap-dur { color: var(--text-3); font-size: 10px; }
 .rf-insp .cap-style { margin: 4px 8px 0; }
 
-/* ---------------- 鎾斁鍣?---------------- */
+/* ---------------- 播放器 ---------------- */
 .pv { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--viewer, #0b0b0d); }
 .pv .pv-head { display: none; }
 .pv .pv-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--viewer, #0b0b0d); }
@@ -174,7 +175,7 @@
 .pv .pv-frame { position: relative; flex: none; box-shadow: 0 0 0 1px rgba(255,255,255,.05), 0 10px 40px rgba(0,0,0,.45); background: #000; }
 .pv .pv-canvas { display: block; cursor: pointer; }
 
-/* 宸︿笂瑙掓偓鍋滀俊鎭?*/
+/* 左上角悬停信息 */
 .pv .pv-hover-info {
   position: absolute; left: 10px; top: 10px; z-index: 4; display: inline-flex; align-items: center; gap: 6px; max-width: 60%;
   padding: 3px 8px 3px 3px; border-radius: 999px; background: rgba(10,10,12,.66); backdrop-filter: blur(6px);
@@ -185,7 +186,7 @@
 .pv .pv-shot-flag { padding: 0 5px; border-radius: 3px; background: rgba(255,176,32,.9); color: #1a1205; font-size: 10px; line-height: 15px; font-weight: 600; }
 .pv .pv-focus { position: absolute; right: 10px; top: 10px; z-index: 4; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: rgba(10,10,12,.66); color: var(--accent); font-size: 11px; pointer-events: none; }
 
-/* 鎺у埗鏉★細宸︽椂闂寸爜 路 涓挱鏀?路 鍙冲伐鍏?*/
+/* 控制条：左时间码 · 中播放 · 右工具 */
 .pv .pv-controls {
   flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; height: 44px; padding: 0 10px;
   border-top: 1px solid var(--line); background: var(--bg-1);
@@ -232,8 +233,8 @@
 .pv.fullscreen .pv-stage { background: #000; }
 .pv.fullscreen .pv-frame { box-shadow: none; }
 
-/* ---------------- 鐢婚潰鐩存帴鎿嶄綔灞?---------------- */
-.tfo { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+/* ---------------- 画面直接操作层 ---------------- */
+.tfo { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; }
 .tfo-box { position: absolute; box-sizing: border-box; border: 1px solid var(--accent); box-shadow: 0 0 0 1px rgba(0,0,0,.35); pointer-events: none; }
 .tfo-body { position: absolute; inset: 0; cursor: move; pointer-events: auto; }
 .tfo-h { position: absolute; width: 10px; height: 10px; margin: -5px; border: 1.5px solid var(--accent); border-radius: 2px; background: #fff; pointer-events: auto; }

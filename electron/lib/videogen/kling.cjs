@@ -65,7 +65,13 @@ module.exports = {
   },
 
   async poll(taskId, cfg, { fetch, signal }) {
-    const [kind, id] = String(taskId).includes(':') ? String(taskId).split(':') : ['text2video', taskId];
+    const s = String(taskId == null ? '' : taskId);
+    const idx = s.indexOf(':');
+    const kind = idx >= 0 ? s.slice(0, idx) : 'text2video';
+    const id = idx >= 0 ? s.slice(idx + 1) : s;
+    if ((kind !== 'text2video' && kind !== 'image2video') || !id || !id.trim()) {
+      throw new VideogenError('非法的任务标识', 'BAD_TASK');
+    }
     return this.parseStatus(await requestJson(fetch, `${base(cfg)}/v1/videos/${kind}/${encodeURIComponent(id)}`, { headers: auth(cfg), signal }));
   },
 

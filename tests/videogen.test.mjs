@@ -132,14 +132,23 @@ test('runway：版本头、ratio 映射、失败抛错', async () => {
   assert.equal(vg.getProvider('runway').parseStatus({ status: 'THROTTLED' }).state, 'queued');
 });
 
-test('veo：predictLongRunning、operation 轮询、下载带 key 头', async () => {
+test('veo：predictLongRunning、operation 轮询、同源下载带 key 头且跨域不泄 key', async () => {
+  const sameOriginUrl = 'https://generativelanguage.googleapis.com/v1beta/files/v?alt=media';
   const f = fakeFetch([
     ['POST', /models\/veo-3\.1-fast-generate-preview:predictLongRunning$/, () => ({ json: { name: 'models/veo/operations/op1' } })],
-    ['GET', /operations\/op1$/, () => ({ json: { done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://g/v?alt=media' } }] } } } })],
+    ['GET', /operations\/op1$/, () => ({ json: { done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: sameOriginUrl } }] } } } })],
   ]);
   const r = await run('veo', { prompt: 'x', image: 'data:image/png;base64,QQ==', negative: '卡通' }, { key: 'G' }, f);
-  assert.equal(r.result.url, 'https://g/v?alt=media');
+  assert.equal(r.result.url, sameOriginUrl);
   assert.equal(r.result.headers['x-goog-api-key'], 'G');
+  // 跨域结果 URL 不得附带 x-goog-api-key，防止密钥外泄
+  const fCross = fakeFetch([
+    ['POST', /models\/veo-3\.1-fast-generate-preview:predictLongRunning$/, () => ({ json: { name: 'models/veo/operations/op2' } })],
+    ['GET', /operations\/op2$/, () => ({ json: { done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://cdn.example.com/v.mp4' } }] } } } })],
+  ]);
+  const rCross = await run('veo', { prompt: 'x' }, { key: 'G' }, fCross);
+  assert.equal(rCross.result.url, 'https://cdn.example.com/v.mp4');
+  assert.equal(rCross.result.headers, undefined);
   assert.deepEqual(f.calls[0].body.instances[0].image, { bytesBase64Encoded: 'QQ==', mimeType: 'image/png' });
   assert.equal(f.calls[0].body.parameters.negativePrompt, '卡通');
   assert.equal(vg.getProvider('veo').parseStatus({ done: false }).state, 'running');

@@ -11,8 +11,10 @@ import {
 } from '../src/ai/director.js';
 import { localDirectorReply, localStoryboard, localAnalyzeTechniques, extractDuration, extractBriefPatch, detectTopic, LOCAL_TOPICS } from '../src/ai/localDirector.js';
 import { buildAnalyzeRequest, mergeAnalyzeResponse } from '../src/ai/analyze.js';
+import { buildEditRequest, parseEditResponse } from '../src/ai/editor.js';
 import { runAI, runWithFallback, NoAIError, isNoAI, isCancelled } from '../src/ai/client.js';
 import api from '../src/ui/api.js';
+import { applyOps } from '../src/engine/ops.js';
 import { BUILTIN_TECHNIQUES, BUILTIN_TECHNIQUE_MAP } from '../src/engine/builtinTechniques.js';
 import {
   SHOT_SIZES, ANGLES, SHOT_MOVEMENTS, TRANSITIONS, LOOKS, PREVIZ_SETTINGS, PREVIZ_SUBJECTS, PREVIZ_ACTIONS, TECHNIQUE_CATEGORIES,
@@ -135,10 +137,7 @@ test('flattenOp 与 normalizeAiOp 往返一致（所有内置技法）', () => {
   }
 });
 
-test('规范化后的 AI 操作能通过 ops.applyOps（ops.js 存在时）', async (t) => {
-  let ops = null;
-  try { ops = await import('../src/engine/ops.js'); } catch { ops = null; }
-  if (!ops || typeof ops.applyOps !== 'function') { t.skip('ops.js 尚不可用'); return; }
+test('规范化后的 AI 操作能通过 ops.applyOps', () => {
   const p = makeProject(3);
   const list = normalizeAiOps([
     flat({ type: 'setLook', targetMode: 'all', look: 'cinematic', lookStrength: 0.8 }),
@@ -149,7 +148,7 @@ test('规范化后的 AI 操作能通过 ops.applyOps（ops.js 存在时）', as
     flat({ type: 'applyPacing', targetMode: 'all', pacing: 'fast' }),
   ]);
   assert.equal(list.length, 6);
-  const r = ops.applyOps(p, list, { selectedClipIds: [] });
+  const r = applyOps(p, list, { selectedClipIds: [] });
   assert.ok(r.ok, `应用失败：${r.errors.join('；')}`);
 });
 
@@ -431,10 +430,7 @@ test('localAnalyzeTechniques：缺字段/空数据不编造', () => {
   cards.forEach((c) => assertValidTechnique(c, neutral));
 });
 
-test('本地技法卡的 apply.ops 能通过 ops.applyOps（ops.js 存在时）', async (t) => {
-  let ops = null;
-  try { ops = await import('../src/engine/ops.js'); } catch { ops = null; }
-  if (!ops || typeof ops.applyOps !== 'function') { t.skip('ops.js 尚不可用'); return; }
+test('本地技法卡的 apply.ops 能通过 ops.applyOps', () => {
   const p = makeProject(3);
   const variants = [
     makeAnalysis({ n: 16, shotLen: 1.2, motion: 0.7, color: { saturation: 0.62, warmth: 0.15, contrast: 0.7 } }),
@@ -445,7 +441,7 @@ test('本地技法卡的 apply.ops 能通过 ops.applyOps（ops.js 存在时）'
   for (const a of variants) {
     for (const card of localAnalyzeTechniques(a)) {
       if (!card.apply) continue;
-      const r = ops.applyOps(p, card.apply.ops, { selectedClipIds: ['clp_1', 'clp_2'] });
+      const r = applyOps(p, card.apply.ops, { selectedClipIds: ['clp_1', 'clp_2'] });
       if (!r.ok) failures.push(`${card.title}：${r.errors.join('；')}`);
     }
   }
@@ -497,7 +493,7 @@ test('mergeAnalyzeResponse：合入镜头标注与技法卡', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 编辑（editor.js 依赖 D 组 summary.js，缺失时跳过）
+// 编辑
 // ---------------------------------------------------------------------------
 function makeProject(n) {
   const p = createProject({ name: '精修测试' });
@@ -507,34 +503,23 @@ function makeProject(n) {
   return p;
 }
 
-async function loadEditor(t) {
-  try {
-    return await import('../src/ai/editor.js');
-  } catch (e) {
-    t.skip(`editor.js 依赖暂不可用：${e.message}`);
-    return null;
-  }
-}
-
-test('buildEditRequest：包含时间线、选中与锁定信息', async (t) => {
-  const ed = await loadEditor(t); if (!ed) return;
+test('buildEditRequest：包含时间线、选中与锁定信息', () => {
   const p = makeProject(3);
   p.tracks.video[2].locked = true;
-  const req = ed.buildEditRequest({ project: p, command: '整体调成电影感', selection: ['clp_2'], techniques: BUILTIN_TECHNIQUES });
+  const req = buildEditRequest({ project: p, command: '整体调成电影感', selection: ['clp_2'], techniques: BUILTIN_TECHNIQUES });
   assert.equal(req.task, 'edit');
   assert.equal(req.schema, EDIT_SCHEMA);
   assert.ok(req.prompt.includes('整体调成电影感'));
   assert.ok(req.prompt.includes('clp_2'));
   assert.ok(req.prompt.includes('锁定'));
-  const empty = ed.buildEditRequest({ project: createProject({}), command: '' });
+  const empty = buildEditRequest({ project: createProject({}), command: '' });
   assert.equal(typeof empty.prompt, 'string');
 });
 
-test('parseEditResponse：过滤越界编号、锁定镜头、未知素材', async (t) => {
-  const ed = await loadEditor(t); if (!ed) return;
+test('parseEditResponse：过滤越界编号、锁定镜头、未知素材', () => {
   const p = makeProject(3);
   p.tracks.video[1].locked = true;
-  const r = ed.parseEditResponse({
+  const r = parseEditResponse({
     reply: '已调整',
     ops: [
       flat({ type: 'setLook', targetMode: 'all', look: 'cinematic', lookStrength: 1 }),
@@ -548,13 +533,13 @@ test('parseEditResponse：过滤越界编号、锁定镜头、未知素材', asy
     memoryNote: '用户喜欢电影感',
   }, p, { libraryAssets: [{ id: 'lib_9', name: '库素材', kind: 'video', duration: 5 }], selection: [] });
   assert.deepEqual(r.ops.map((o) => o.type), ['setLook', 'insertAsset']);
-  assert.deepEqual(r.ops[0].target, { mode: 'index', indices: [1, 3], ids: [] }, '锁定的第 2 镜被剔除');
+  assert.deepEqual(r.ops[0].target, { mode: 'ids', indices: [], ids: [p.tracks.video[0].id, p.tracks.video[2].id] }, '锁定的第 2 镜被剔除，且使用稳定片段 id 防止批内结构变更漂移');
   assert.equal(r.assetsToAdd.length, 1);
   assert.equal(r.materialRequests.length, 1);
   assert.equal(r.memoryNote, '用户喜欢电影感');
   assert.ok(r.warnings.length >= 3);
   assert.ok(r.reply.includes('锁定'));
-  const bad = ed.parseEditResponse(null, null);
+  const bad = parseEditResponse(null, null);
   assert.deepEqual(bad.ops, []);
   assert.ok(bad.reply.length > 0);
 });

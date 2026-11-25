@@ -8,7 +8,7 @@
 // 显卡编码中途出错时自动改用 CPU 重新导出一次。
 
 import api from '../ui/api.js';
-import { layoutVideo, projectDuration } from '../engine/timeline.js';
+import { layoutVideo, projectDuration, trackFlags } from '../engine/timeline.js';
 import { isCaptionText } from '../engine/model.js';
 import { renderFrame, releaseRenderCache } from '../render/compositor.js';
 import { createMediaPool } from '../render/mediaPool.js';
@@ -62,8 +62,13 @@ function usedPaths(project, layout) {
   const assets = project.assets || {};
   const paths = new Set();
   for (const item of layout) {
-    const a = assets[item.clip && item.clip.assetId];
+    const clip = item.clip;
+    const a = assets[clip && clip.assetId];
     if (a && a.path) paths.add(a.path);
+    if (clip && clip.canvas && clip.canvas.type === 'image' && clip.canvas.value) {
+      const bg = assets[clip.canvas.value];
+      if (bg && bg.path) paths.add(bg.path);
+    }
   }
   const audio = (project.tracks && project.tracks.audio) || [];
   for (const clip of audio) {
@@ -258,7 +263,10 @@ export async function exportProject({ project, outPath, width, height, fps, qual
     } catch (err) {
       // 显卡编码中途出错（驱动问题、同时编码路数超限等）：自动改用 CPU 重新导出一次
       if (!err || err.code !== 'HW_ENCODER_FAILED' || err.cancelled || aborted() || hwaccel === 'off') throw err;
-      sendCancel();
+      if (jobId && !cancelSent) {
+        cancelSent = true;
+        await api.call('export:cancel', { jobId }).catch(() => {});
+      }
       notice = HW_FALLBACK_NOTICE;
       result = await runPass('off', lastEncoder);
     }
@@ -305,6 +313,7 @@ export async function exportProject({ project, outPath, width, height, fps, qual
 
 /** 项目里的字幕文字：语音识别的（group:'caption'）和初剪按镜头文案生成的（source:'shot-caption'） */
 export function captionTexts(project) {
+  if (trackFlags(project, 'text').hidden) return [];
   const texts = (project && project.tracks && Array.isArray(project.tracks.text)) ? project.tracks.text : [];
   return texts.filter((t) => isCaptionText(t) && String(t.text || '').trim());
 }
@@ -361,5 +370,6 @@ export async function exportFrame({ project, t = 0, outPath, width, height } = {
     throw new Error(readable(err));
   } finally {
     pool.dispose();
+    releaseRenderCache();
   }
 }

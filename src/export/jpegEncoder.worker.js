@@ -1,7 +1,8 @@
 const canvas = new OffscreenCanvas(1, 1);
 const context = canvas.getContext('bitmaprenderer');
+let queue = Promise.resolve();
 
-self.onmessage = async ({ data: { id, bitmap, quality } }) => {
+async function encodeFrame({ id, bitmap, quality }) {
   try {
     if (!context) throw new Error('无法创建画面编码画布');
     if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
@@ -15,4 +16,8 @@ self.onmessage = async ({ data: { id, bitmap, quality } }) => {
   } finally {
     bitmap.close();
   }
+}
+
+self.onmessage = ({ data }) => {
+  queue = queue.then(() => encodeFrame(data));
 };

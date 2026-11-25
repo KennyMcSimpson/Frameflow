@@ -114,13 +114,32 @@ export function allKeyTimes(keys) {
   return times.sort((a, b) => a - b);
 }
 
-/** 关键帧整体平移（分割/修剪入点后保持画面不跳），丢弃落到 [0,maxT] 外的帧。 */
-export function shiftKeys(keys, dt, maxT = Infinity) {
+/** 关键帧整体平移（分割/修剪入点后保持画面不跳），丢弃落到 [0,maxT] 外的帧；给定有限时长或显式开启 bake 时在边界烘焙插值帧。 */
+export function shiftKeys(keys, dt, maxT = Infinity, { bake = Number.isFinite(maxT) } = {}) {
   if (!keys || typeof keys !== 'object') return {};
+  const shift = finite(dt);
+  const lo = -shift;
+  const hi = Number.isFinite(maxT) ? lo + maxT : Infinity;
   const out = {};
   for (const p of Object.keys(keys)) {
-    const l = listOf(keys, p).map((k) => ({ ...k, t: Math.round((k.t + dt) * 1000) / 1000 })).filter((k) => k.t >= -KEY_EPS && k.t <= maxT + KEY_EPS);
-    if (l.length) out[p] = l.map((k) => ({ ...k, t: Math.max(0, k.t) }));
+    const orig = listOf(keys, p);
+    if (!orig.length) continue;
+    const l = orig
+      .map((k) => ({ ...k, t: Math.round((k.t + shift) * 1000) / 1000 }))
+      .filter((k) => k.t >= -KEY_EPS && k.t <= maxT + KEY_EPS)
+      .map((k) => ({ ...k, t: Math.min(maxT, Math.max(0, k.t)) }));
+    if (bake) {
+      if (orig.some((k) => k.t < lo - KEY_EPS) && !l.some((k) => k.t <= KEY_EPS)) {
+        let prev = null;
+        for (const k of orig) if (k.t < lo - KEY_EPS) prev = k;
+        const ease = prev && EASES.includes(prev.ease) ? prev.ease : 'linear';
+        l.unshift({ t: 0, v: valueAt(keys, p, lo), ease });
+      }
+      if (Number.isFinite(hi) && maxT > KEY_EPS && orig.some((k) => k.t > hi + KEY_EPS) && !l.some((k) => Math.abs(k.t - maxT) <= KEY_EPS)) {
+        l.push({ t: Math.round(maxT * 1000) / 1000, v: valueAt(keys, p, hi), ease: 'linear' });
+      }
+    }
+    if (l.length) out[p] = l;
   }
   return out;
 }

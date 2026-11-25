@@ -1,16 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-// 只抽取纯函数，避免加载 zustand/store
-const src = readFileSync(new URL('../src/ui/modes/refine/usePlayback.js', import.meta.url), 'utf8');
-const body = src.slice(src.indexOf('export const SHUTTLE_STEPS'), src.indexOf('let shuttleRaf')).replace(/export const useShuttle[^\n]*\n/, '').replace(/export /g, '');
-const { nextShuttleRate, shuttleBadge } = new Function(body + '; return { nextShuttleRate, shuttleBadge };')();
+import { SHUTTLE_STEPS, nextShuttleRate, shuttleBadge } from '../src/ui/modes/refine/shuttle.js';
+
 test('J/K/L 穿梭状态机', () => {
+  assert.deepEqual(SHUTTLE_STEPS, [1, 2, 4]);
   let r = 0; const seq = (k) => (r = nextShuttleRate(r, k));
   assert.equal(seq('L'), 1); assert.equal(seq('L'), 2); assert.equal(seq('L'), 4); assert.equal(seq('L'), 4);
   assert.equal(seq('J'), -1); assert.equal(seq('J'), -2); assert.equal(seq('J'), -4); assert.equal(seq('J'), -4);
   assert.equal(seq('K'), 0); assert.equal(seq('J'), -1); assert.equal(seq('L'), 1);
 });
+
 test('预览左上角倍速角标：倒放 / 快进显示，正常播放与停止不显示', () => {
   const back1 = shuttleBadge(-1, false);
   assert.equal(back1.dir, 'back'); assert.equal(back1.rate, 1); assert.equal(back1.text, '◀ 1×');

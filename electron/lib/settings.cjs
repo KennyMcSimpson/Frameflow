@@ -24,6 +24,10 @@ const DEFAULTS = {
   ui: { lastProjectId: '', onboarded: false, scale: 1 },
   general: { autosave: true, openLastProject: true },
   editing: { aspect: '16:9', fps: 30, imageDuration: 3, transitionDuration: 0.5, previewQuality: 'auto' },
+  shortcuts: { overrides: {} },
+  media: { encoder: 'auto' },
+  asr: { model: 'small', whisperDir: '' },
+  consent: {},
   // AI 真人视频生成。密钥不落在这里：settings.set({videogen:{keys:{arkKey:'…'}}}) 会转存到加密的 secrets，
   // get() 返回 videogen.hasKeys 标记。overrides[providerId] = {baseUrl, model}
   videogen: { provider: 'mock', overrides: {} },
@@ -39,12 +43,43 @@ const LEGACY_SOURCES = ['commons', 'pexels', 'pixabay', 'bilibili', 'youtube'];
 // jimengAk/jimengSk 是火山引擎即梦AI视觉服务的 AccessKey/SecretKey（arkKey 同时给即梦出图用）
 const VIDEOGEN_SECRETS = ['arkKey', 'klingAk', 'klingSk', 'minimaxKey', 'runwayKey', 'geminiKey', 'soraKey', 'lumaKey', 'falKey', 'jimengAk', 'jimengSk'];
 
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const SECRET_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+function isValidSecretName(name) {
+  return typeof name === 'string' && !UNSAFE_KEYS.has(name) && SECRET_NAME_RE.test(name);
+}
+
+function sanitizeSecrets(raw) {
+  const out = Object.create(null);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (!isValidSecretName(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function deepClone(v) {
+  try {
+    if (typeof structuredClone === 'function') return structuredClone(v);
+  } catch {}
+  return JSON.parse(JSON.stringify(v));
+}
+
 function deepMerge(base, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch === undefined ? base : patch;
   const out = Array.isArray(base) ? [...base] : { ...(base || {}) };
   for (const [k, v] of Object.entries(patch)) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && base && typeof base[k] === 'object' && !Array.isArray(base[k])) out[k] = deepMerge(base[k], v);
-    else if (v !== undefined) out[k] = v;
+    if (UNSAFE_KEYS.has(k)) continue;
+    const baseVal = base && Object.prototype.hasOwnProperty.call(base, k) ? base[k] : undefined;
+    if (v && typeof v === 'object' && !Array.isArray(v) && baseVal && typeof baseVal === 'object' && !Array.isArray(baseVal)) {
+      out[k] = deepMerge(baseVal, v);
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = deepMerge({}, v);
+    } else if (v !== undefined) {
+      out[k] = Array.isArray(v) ? deepClone(v) : v;
+    }
   }
   return out;
 }
@@ -97,26 +132,33 @@ function loadJsonWithRecovery(file, label) {
 }
 
 /** 原子写：临时文件写完并刷盘后再改名替换；改名一直失败就退回直接覆盖写 */
-function writeFileAtomic(file, text) {
+function writeFileAtomic(file, text, opts = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  const mode = opts && opts.mode;
   const tmp = file + '.tmp';
-  const fd = fs.openSync(tmp, 'w');
+  const fd = mode !== undefined ? fs.openSync(tmp, 'w', mode) : fs.openSync(tmp, 'w');
   try {
     fs.writeSync(fd, text);
     try { fs.fsyncSync(fd); } catch {}
+    if (mode !== undefined) { try { fs.fchmodSync(fd, mode); } catch {} }
   } finally {
     fs.closeSync(fd);
   }
   let lastErr = null;
   for (let i = 0; i < 6; i++) {
-    try { fs.renameSync(tmp, file); return; } catch (e) {
+    try {
+      fs.renameSync(tmp, file);
+      if (mode !== undefined) { try { fs.chmodSync(file, mode); } catch {} }
+      return;
+    } catch (e) {
       lastErr = e;
       if (!RETRY_CODES.has(e && e.code)) break;
       if (i < 5) sleepSync(20 * (i + 1));
     }
   }
   try {
-    fs.writeFileSync(file, text);
+    fs.writeFileSync(file, text, mode !== undefined ? { mode } : undefined);
+    if (mode !== undefined) { try { fs.chmodSync(file, mode); } catch {} }
     log.warn('[settings] 改名替换失败，已直接覆盖写入', path.basename(file), lastErr && lastErr.code);
   } finally {
     try { fs.unlinkSync(tmp); } catch {}
@@ -136,12 +178,12 @@ function createSettings(opts = {}) {
   const file = path.join(dir, 'settings.json');
   const secretsFile = path.join(dir, 'secrets.json');
   const loaded = loadJsonWithRecovery(file, '设置');
-  let data = loaded.value ? deepMerge(DEFAULTS, loaded.value) : DEFAULTS;
+  let data = loaded.value ? deepMerge(DEFAULTS, loaded.value) : deepClone(DEFAULTS);
   // 老版本的默认来源顺序原样存着（用户没改过）：换成新的默认顺序，免 key 的来源在前
   const ps = data.web && data.web.preferredSources;
   if (Array.isArray(ps) && ps.join(',') === LEGACY_SOURCES.join(',')) data = deepMerge(data, { web: { preferredSources: [...DEFAULTS.web.preferredSources] } });
   const loadedSecrets = loadJsonWithRecovery(secretsFile, '密钥');
-  let secrets = loadedSecrets.value || {};
+  let secrets = sanitizeSecrets(loadedSecrets.value);
 
   // 本次启动后第一次覆盖前，把完好的旧文件复制成 .bak
   let settingsBackedUp = !loaded.healthy;
@@ -163,21 +205,27 @@ function createSettings(opts = {}) {
   }
   function persistSecrets() {
     try {
-      if (!secretsBackedUp) { secretsBackedUp = true; backupOnce(secretsFile); }
-      writeFileAtomic(secretsFile, JSON.stringify(secrets));
+      if (!secretsBackedUp) {
+        secretsBackedUp = true;
+        backupOnce(secretsFile);
+        try { fs.chmodSync(secretsFile + '.bak', 0o600); } catch {}
+      }
+      writeFileAtomic(secretsFile, JSON.stringify(sanitizeSecrets(secrets)), { mode: 0o600 });
     } catch (e) {
       log.error('[settings] 保存密钥失败', e && e.code);
       throw saveError('密钥', e);
     }
   }
 
-  const own = (name) => typeof name === 'string' && Object.prototype.hasOwnProperty.call(secrets, name);
+  const own = (name) => typeof name === 'string' && !UNSAFE_KEYS.has(name) && Object.prototype.hasOwnProperty.call(secrets, name);
 
   const api = {
     get() {
       const hasKeys = {};
       for (const k of VIDEOGEN_SECRETS) hasKeys[k] = !!secrets[k];
-      return { ...data, videogen: { ...(data.videogen || {}), hasKeys } };
+      const snap = deepClone(data);
+      snap.videogen = { ...(snap.videogen || {}), hasKeys };
+      return snap;
     },
     set(patch) {
       patch = patch && typeof patch === 'object' ? { ...patch } : {};
@@ -208,14 +256,19 @@ function createSettings(opts = {}) {
       } catch { return ''; }
     },
     setSecret(name, value) {
-      if (typeof name !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) throw new Error('密钥名称不合法');
+      if (!isValidSecretName(name)) throw new Error('密钥名称不合法');
       if (!value) { delete secrets[name]; persistSecrets(); return; }
-      if (safeStorage.isEncryptionAvailable()) secrets[name] = { enc: true, data: safeStorage.encryptString(String(value)).toString('base64') };
-      else secrets[name] = { enc: false, data: Buffer.from(String(value)).toString('base64') };
+      if (safeStorage && typeof safeStorage.isEncryptionAvailable === 'function' && safeStorage.isEncryptionAvailable()) {
+        secrets[name] = { enc: true, data: safeStorage.encryptString(String(value)).toString('base64') };
+      } else {
+        log.warn('[settings] safeStorage 加密不可用，密钥将降级以 base64 存入 secrets.json（已尝试设置 0600 权限）', name);
+        secrets[name] = { enc: false, data: Buffer.from(String(value)).toString('base64') };
+      }
       persistSecrets();
     },
     hasSecret(name) { return own(name) && !!secrets[name]; },
     DEFAULTS,
+    VIDEOGEN_SECRETS,
   };
   return api;
 }

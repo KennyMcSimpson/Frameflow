@@ -306,9 +306,13 @@ async function sceneFx(testImg) {
   await save('sheet-fx', sheet(cells, 4, 400, 225, '特效（测试图 / 预演）与边界情况'));
 }
 
-async function sceneVideo(clockPath) {
+async function sceneVideo(clockPath, clockUrl) {
   // 真实视频精确取帧：testsrc2 左上角有时间码与帧号，导出模式必须一帧不差
-  const pool = createMediaPool({ mediaUrl: (p) => `file:///${p.replace(/\\/g, '/')}` });
+  const pool = createMediaPool({
+    mediaUrl: (p) => (p === clockPath && clockUrl
+      ? clockUrl
+      : `file:///${encodeURI(String(p).replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F')}`),
+  });
   const p = projectWith(1280, 720);
   p.settings.fps = 30;
   const a = createAsset({ id: 'v', kind: 'video', path: clockPath, duration: 4, width: 1280, height: 720, fps: 30, hasAudio: false });
@@ -344,7 +348,7 @@ async function main() {
     ['transitions', () => sceneTransitions(testImg)],
     ['text', () => sceneText()],
     ['fx', () => sceneFx(testImg)],
-    ['video', () => sceneVideo(cfg.assets.clock)],
+    ['video', () => sceneVideo(cfg.assets.clock, cfg.assets.clockUrl)],
   ];
   let ok = true;
   for (const [name, fn] of steps) {

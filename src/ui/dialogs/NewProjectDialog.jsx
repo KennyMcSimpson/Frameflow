@@ -1,7 +1,7 @@
 // 新建项目：名称 + 画幅选择（附适用平台说明）+ 画面素材来源说明（真人实拍优先，PLAN-v3 §7）。
 import React, { useEffect, useRef, useState } from 'react';
 import useStore from '../store.js';
-import { Modal, Button, Field, Spinner, Icon } from '../components/ui.jsx';
+import { Modal, Button, Field, Segmented, Spinner, Icon } from '../components/ui.jsx';
 
 export const ASPECT_CHOICES = [
   { value: '16:9', title: '横屏 16:9', size: '1920 × 1080', platforms: 'B站、YouTube、西瓜视频', note: '电脑和电视观看的标准画幅，适合教程、Vlog、宣传片。' },
@@ -29,12 +29,22 @@ function defaultName() {
   return `新项目 ${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+const FPS_CHOICES = [24, 25, 30, 50, 60];
+
 export default function NewProjectDialog({ onClose }) {
+  const settings = useStore((s) => s.settings);
   const newProject = useStore((s) => s.newProject);
   const toast = useStore((s) => s.toast);
   const setMode = useStore((s) => s.setMode);
   const [name, setName] = useState(defaultName);
-  const [aspect, setAspect] = useState('16:9');
+  const [aspect, setAspect] = useState(() => {
+    const a = settings && settings.editing && settings.editing.aspect;
+    return ASPECT_CHOICES.some((c) => c.value === a) ? a : '16:9';
+  });
+  const [fps, setFps] = useState(() => {
+    const f = Number(settings && settings.editing && settings.editing.fps);
+    return Number.isFinite(f) && f >= 12 && f <= 60 ? f : 30;
+  });
   const [busy, setBusy] = useState(false);
   const inputRef = useRef(null);
 
@@ -48,7 +58,7 @@ export default function NewProjectDialog({ onClose }) {
     busyRef.current = true;
     setBusy(true);
     try {
-      await newProject({ name: n, aspect: asp });
+      await newProject({ name: n, aspect: asp, fps });
       setMode('create');
       // 没连接 AI 时不要说「和 AI 导演聊聊」：给出能马上做的事，并提供连接入口
       const ai = useStore.getState().aiStatus;
@@ -125,6 +135,14 @@ export default function NewProjectDialog({ onClose }) {
       <div className="callout np-note">
         <b>{current.title}</b>：{current.note} 常用于 {current.platforms}。
       </div>
+      <Field label="帧率">
+        <Segmented
+          value={fps}
+          onChange={setFps}
+          options={FPS_CHOICES.map((f) => ({ value: f, label: `${f} fps` }))}
+          label="帧率"
+        />
+      </Field>
       <div className="np-source">
         <div className="np-source-head"><Icon name="camera" size={15} /><b>画面从哪里来？</b></div>
         <ol className="np-source-list">

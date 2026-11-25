@@ -9,7 +9,7 @@ import { createMediaPool, slewToClock } from '../../../render/mediaPool.js';
 import { readDroppedAssets, insertAssets, addAudioTrack, importFilesDialog, DND_ASSET } from '../../assetActions.js';
 import {
   getLayout, getDuration, currentIndex, loopBounds, usePlaybackPrefs, playRate,
-  togglePlay, stepFrames, goStart, goEnd, useShuttle, shuttleBadge,
+  togglePlay, stepFrames, goStart, goEnd, useShuttle, shuttleBadge, stopShuttle,
 } from './usePlayback.js';
 import { shotRangeLabel } from './timelineUtils.js';
 import { itemsInRange } from '../../../engine/timeline.js';
@@ -19,6 +19,12 @@ const MAX_RENDER_W = 1920;
 const STAGE_PAD = 16;
 const FOLLOW_MS = 3000;   // 暂停时改变后持续补画的时长（等视频加载 / seek 完成）
 const IDLE_REDRAW_MS = 300;
+
+export function previewQualityScale(quality) {
+  if (quality === 'low' || quality === 'half') return 0.5;
+  if (quality === 'medium') return 0.75;
+  return 1; // 'high' | 'full' | 'auto'
+}
 
 /**
  * 暂停在 0 秒且首段带「从黑淡入」时，预览显示淡入完成后的首帧，避免一打开就是黑屏
@@ -52,8 +58,11 @@ function drawMessage(ctx, w, h, text) {
 export default function Preview() {
   const project = useStore((s) => s.project);
   const playing = useStore((s) => s.playing);
+  const reverseShuttling = useShuttle((s) => s.rate < 0);
+  const isPlaying = playing || reverseShuttling;
   const focus = useStore((s) => s.focus);
   const setMode = useStore((s) => s.setMode);
+  const previewQuality = useStore((s) => s.settings?.editing?.previewQuality || 'auto');
   const loop = usePlaybackPrefs((s) => s.loop);
   const volume = usePlaybackPrefs((s) => s.volume);
   const muted = usePlaybackPrefs((s) => s.muted);
@@ -61,6 +70,7 @@ export default function Preview() {
   const rootRef = useRef(null);
   const stageRef = useRef(null);
   const canvasRef = useRef(null);
+  const clickTimerRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0, rw: 0, rh: 0 });
   const [disp, setDisp] = useState({ w: 0, h: 0 });
   const [fullscreen, setFullscreen] = useState(false);
@@ -70,7 +80,7 @@ export default function Preview() {
   const settings = (project && project.settings) || { width: 1920, height: 1080, aspect: '16:9' };
   const aspectRatio = settings.width > 0 && settings.height > 0 ? settings.width / settings.height : 16 / 9;
   const aspectLabel = (ASPECTS[settings.aspect] && ASPECTS[settings.aspect].label) || settings.aspect || '';
-  const isEmpty = !project || ((project.tracks.video || []).length === 0 && (project.tracks.text || []).length === 0);
+  const isEmpty = !project || ((project.tracks.video || []).length === 0 && (project.tracks.text || []).length === 0 && (project.overlays || []).length === 0);
 
   // ---------- 尺寸适配 ----------
   const fit = useCallback(() => {
@@ -84,7 +94,8 @@ export default function Preview() {
     let h = w / aspectRatio;
     w = Math.floor(w); h = Math.floor(h);
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const rw = Math.max(2, Math.min(MAX_RENDER_W, Math.round(w * dpr)));
+    const qScale = previewQualityScale(previewQuality);
+    const rw = Math.max(2, Math.min(MAX_RENDER_W, Math.round(w * dpr * qScale)));
     const rh = Math.max(2, Math.round(rw / aspectRatio));
     const cur = sizeRef.current;
     if (cur.w === w && cur.h === h && cur.rw === rw && cur.rh === rh) return;
@@ -92,7 +103,7 @@ export default function Preview() {
     canvas.width = rw;
     canvas.height = rh;
     setDisp({ w, h });
-  }, [aspectRatio]);
+  }, [aspectRatio, previewQuality]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -196,7 +207,21 @@ export default function Preview() {
 
     return () => {
       cancelAnimationFrame(raf);
+      stopShuttle();
       if (pool) { try { pool.dispose(); } catch (e) { console.error('[preview] 释放媒体池失败', e); } }
+    };
+  }, []);
+
+  // ---------- 切换模式 / 卸载时清理穿梭与单击定时器 ----------
+  useEffect(() => {
+    const unsub = useStore.subscribe((s, prev) => {
+      if (s.mode !== prev.mode && s.mode !== 'refine') stopShuttle();
+    });
+    return () => {
+      unsub();
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = 0;
+      stopShuttle();
     };
   }, []);
 
@@ -214,6 +239,26 @@ export default function Preview() {
       useStore.getState().toast('无法切换全屏：' + (e && e.message ? e.message : '系统拒绝'), 'error');
     }
   }, []);
+
+  const onCanvasClick = useCallback((e) => {
+    if (e.detail > 1) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = 0;
+      return;
+    }
+    clearTimeout(clickTimerRef.current);
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = 0;
+      togglePlay();
+    }, 200);
+  }, []);
+
+  const onStageDoubleClick = useCallback((e) => {
+    if (e.target && e.target.closest && e.target.closest('button, input, select, textarea, .tfo')) return;
+    clearTimeout(clickTimerRef.current);
+    clickTimerRef.current = 0;
+    toggleFullscreen();
+  }, [toggleFullscreen]);
 
   // ---------- 拖放素材到预览 ----------
   const onDragOver = (e) => {
@@ -246,14 +291,14 @@ export default function Preview() {
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
-        onDoubleClick={toggleFullscreen}
+        onDoubleClick={onStageDoubleClick}
       >
         <div className="pv-frame" style={{ width: disp.w || 0, height: disp.h || 0, visibility: isEmpty ? 'hidden' : 'visible' }}>
           <canvas
             ref={canvasRef}
             className="pv-canvas"
             style={{ width: disp.w || 0, height: disp.h || 0 }}
-            onClick={() => togglePlay()}
+            onClick={onCanvasClick}
             title="单击播放/暂停，双击全屏"
           />
           {!isEmpty && <TransformOverlay width={disp.w} height={disp.h} />}
@@ -287,8 +332,8 @@ export default function Preview() {
         <div className="pv-ctl-center">
           <Button variant="ghost" size="sm" icon="skipBack" title="跳到开头（Home）" onClick={goStart} disabled={!project} />
           <Button variant="ghost" size="sm" icon="chevronLeft" title="上一帧（←）" onClick={() => stepFrames(-1)} disabled={!project} />
-          <button type="button" className={'pv-play' + (playing ? ' on' : '')} title={playing ? '暂停（空格）' : '播放（空格）'} aria-label={playing ? '暂停' : '播放'} onClick={() => togglePlay()} disabled={!project}>
-            <Icon name={playing ? 'pause' : 'play'} size={16} />
+          <button type="button" className={'pv-play' + (isPlaying ? ' on' : '')} title={isPlaying ? '暂停（空格）' : '播放（空格）'} aria-label={isPlaying ? '暂停' : '播放'} onClick={() => togglePlay()} disabled={!project}>
+            <Icon name={isPlaying ? 'pause' : 'play'} size={16} />
           </button>
           <Button variant="ghost" size="sm" icon="chevronRight" title="下一帧（→）" onClick={() => stepFrames(1)} disabled={!project} />
           <Button variant="ghost" size="sm" icon="skipFwd" title="跳到结尾（End）" onClick={goEnd} disabled={!project} />

@@ -1,8 +1,20 @@
 'use strict';
 // 路径与二进制定位。被所有主进程模块共享。
-const { app } = require('electron');
+let app = null;
+if (process.versions && process.versions.electron) {
+  try { ({ app } = require('electron')); } catch { app = null; }
+}
 const path = require('node:path');
 const fs = require('node:fs');
+
+function resolveApp() {
+  if (app) return app;
+  try {
+    const e = require('electron');
+    if (e && typeof e === 'object' && e.app) { app = e.app; return app; }
+  } catch {}
+  return null;
+}
 
 function unpacked(p) {
   return p ? p.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1') : p;
@@ -84,14 +96,15 @@ function warnMissing(name) {
 }
 
 function createPaths(settingsStore) {
-  const userData = app.getPath('userData');
-  const defaultRoot = path.join(app.getPath('documents'), 'Frameflow');
+  const electronApp = resolveApp();
+  const userData = electronApp.getPath('userData');
+  const defaultRoot = path.join(electronApp.getPath('documents'), 'Frameflow');
 
   // 随包资源目录列表（打包时只看 resources；开发时再看项目 build/）
   const resourceCandidates = (rel, devRel) => {
     const list = [];
     if (process.resourcesPath) list.push(path.join(process.resourcesPath, rel));
-    if (!app.isPackaged) list.push(path.join(PROJECT_ROOT, 'build', devRel));
+    if (!electronApp.isPackaged) list.push(path.join(PROJECT_ROOT, 'build', devRel));
     return list;
   };
 
@@ -103,9 +116,16 @@ function createPaths(settingsStore) {
 
   const paths = {
     userData,
+    get dataRootRaw() {
+      let custom = '';
+      try { custom = (settingsStore && settingsStore.get().dataRoot) || ''; } catch {}
+      return custom || defaultRoot;
+    },
+    tryDataRoot() {
+      try { return paths.dataRootRaw || null; } catch { return null; }
+    },
     get dataRoot() {
-      const custom = settingsStore && settingsStore.get().dataRoot;
-      return ensureDir(custom || defaultRoot);
+      return ensureDir(paths.dataRootRaw);
     },
     get projects() { return ensureDir(path.join(paths.dataRoot, 'projects')); },
     projectDir(id) {
@@ -123,7 +143,8 @@ function createPaths(settingsStore) {
     get cache() { return ensureDir(path.join(paths.dataRoot, 'cache')); },
     get thumbs() { return ensureDir(path.join(paths.cache, 'thumbs')); },
     get waveforms() { return ensureDir(path.join(paths.cache, 'waveforms')); },
-    get tmp() { return ensureDir(path.join(app.getPath('temp'), 'frameflow')); },
+    get tmpRaw() { return path.join(electronApp.getPath('temp'), 'frameflow'); },
+    get tmp() { return ensureDir(paths.tmpRaw); },
     get bin() { return ensureDir(path.join(userData, 'bin')); },
 
     get ffmpeg() {

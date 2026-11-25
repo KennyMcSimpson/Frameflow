@@ -3,9 +3,21 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const log = require('../lib/log.cjs');
+const { isUncPath } = require('../lib/urlSafety.cjs');
 
 const SECRET_KEYS = { openaiKey: 'hasOpenaiKey', pexelsKey: 'hasPexelsKey', pixabayKey: 'hasPixabayKey' };
 const DERIVED_KEYS = new Set([...Object.values(SECRET_KEYS), 'resolvedDataRoot', 'defaultDataRoot']);
+const FALLBACK_VIDEOGEN_SECRETS = [
+  'arkKey', 'klingAk', 'klingSk', 'minimaxKey', 'runwayKey', 'geminiKey',
+  'soraKey', 'lumaKey', 'falKey', 'jimengAk', 'jimengSk',
+];
+const MEDIA_EXT = new Set([
+  '.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi', '.ts', '.mts', '.m2ts', '.wmv', '.flv', '.3gp',
+  '.mp3', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.flac', '.wma', '.aiff', '.aif',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
+  '.vtt', '.srt', '.ass', '.ssa', '.lrc',
+]);
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const MAX_PROJECT_BYTES = 200 * 1024 * 1024;
 const MAX_THUMB_BYTES = 12 * 1024 * 1024;
@@ -150,12 +162,170 @@ module.exports = function register({ handle, ctx }) {
   const prevOf = (id) => path.join(dirOf(id), 'project.prev.json');
   const thumbOf = (id) => path.join(dirOf(id), 'thumb.jpg');
 
+  function normPath(p) {
+    const abs = path.resolve(p);
+    return process.platform === 'win32' ? abs.toLowerCase() : abs;
+  }
+
+  function resolveRealPathSafe(p) {
+    if (typeof p !== 'string' || !p || isUncPath(p)) return null;
+    const abs = path.resolve(p);
+    if (isUncPath(abs)) return null;
+    try {
+      const real = fs.realpathSync(abs);
+      return isUncPath(real) ? null : real;
+    } catch (e) {
+      if (!e || e.code !== 'ENOENT') return null;
+    }
+    try {
+      if (fs.lstatSync(abs).isSymbolicLink()) return null;
+    } catch {}
+    const parts = [];
+    let cur = abs;
+    while (true) {
+      const parent = path.dirname(cur);
+      if (parent === cur) return isUncPath(abs) ? null : abs;
+      parts.unshift(path.basename(cur));
+      cur = parent;
+      if (isUncPath(cur)) return null;
+      try {
+        const realParent = fs.realpathSync(cur);
+        if (isUncPath(realParent)) return null;
+        const joined = path.join(realParent, ...parts);
+        return isUncPath(joined) ? null : joined;
+      } catch (e) {
+        if (!e || e.code !== 'ENOENT') return null;
+      }
+    }
+  }
+
+  function isInsideDir(dir, target) {
+    if (!dir || !target) return false;
+    const d = dir.endsWith(path.sep) ? dir : dir + path.sep;
+    return target === dir || target.startsWith(d);
+  }
+
+  function getUserDataDir() {
+    let ud = '';
+    try { ud = (paths && paths.userData) || ''; } catch {}
+    if (!ud) {
+      try {
+        const e = require('electron');
+        if (e && e.app) ud = e.app.getPath('userData') || '';
+      } catch {}
+    }
+    return ud;
+  }
+
+  function isUserDataOrInside(abs, real) {
+    const ud = getUserDataDir();
+    if (!ud || isUncPath(ud)) return false;
+    const udNorms = new Set([normPath(ud)]);
+    const rud = resolveRealPathSafe(ud);
+    if (rud) udNorms.add(normPath(rud));
+    const targets = new Set();
+    if (abs) targets.add(normPath(abs));
+    if (real) targets.add(normPath(real));
+    for (const udDir of udNorms) {
+      for (const t of targets) {
+        if (isInsideDir(udDir, t)) return true;
+      }
+    }
+    return false;
+  }
+
+  function isBlockedUserDataMedia(p) {
+    if (typeof p !== 'string' || !p || isUncPath(p)) return true;
+    const abs = path.resolve(p);
+    if (isUncPath(abs)) return true;
+    const real = resolveRealPathSafe(abs);
+    if (!real) return true;
+
+    const blockedDirs = [];
+    try { const ld = log.logDir && log.logDir(); if (ld) blockedDirs.push(ld); } catch {}
+
+    const ud = getUserDataDir();
+    if (ud) blockedDirs.push(path.join(ud, 'logs'));
+
+    const targets = new Set([normPath(abs), normPath(real)]);
+    for (const bd of blockedDirs) {
+      const bdSet = new Set([normPath(bd)]);
+      const rbd = resolveRealPathSafe(bd);
+      if (rbd) bdSet.add(normPath(rbd));
+      for (const d of bdSet) {
+        for (const t of targets) if (isInsideDir(d, t)) return true;
+      }
+    }
+
+    if (!ud) return false;
+    const udNorms = new Set([normPath(ud)]);
+    const rud = resolveRealPathSafe(ud);
+    if (rud) udNorms.add(normPath(rud));
+
+    let dr = '';
+    try {
+      if (paths) {
+        if (paths.dataRootRaw !== undefined) dr = paths.dataRootRaw || '';
+        else if (typeof paths.tryDataRoot === 'function') dr = paths.tryDataRoot() || '';
+        else if (typeof paths.dataRoot === 'string') dr = paths.dataRoot;
+      }
+    } catch {}
+    const drNorms = new Set();
+    if (dr) {
+      drNorms.add(normPath(dr));
+      const rdr = resolveRealPathSafe(dr);
+      if (rdr) drNorms.add(normPath(rdr));
+    }
+
+    for (const udDir of udNorms) {
+      for (const t of targets) {
+        if (!isInsideDir(udDir, t)) continue;
+        let insideDataRoot = false;
+        for (const drDir of drNorms) {
+          if (drDir !== udDir && isInsideDir(drDir, t)) { insideDataRoot = true; break; }
+        }
+        if (!insideDataRoot) return true;
+        const rel = t.slice(udDir.length).replace(/^[\\/]+/, '');
+        const base = path.basename(t);
+        if (
+          /^(secrets|settings)(\.|$)/i.test(base)
+          || base === 'running.lock'
+          || base === 'encoders.json'
+          || /\.log$/i.test(base)
+          || /^logs([\\/]|$)/i.test(rel)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function isSafeMediaPath(p) {
+    if (typeof p !== 'string' || !p) return false;
+    if (isUncPath(p) || !path.isAbsolute(p)) return false;
+    const abs = path.resolve(p);
+    if (isUncPath(abs)) return false;
+    if (typeof ctx.isSafeMediaPath === 'function') return !!ctx.isSafeMediaPath(p);
+    if (!MEDIA_EXT.has(path.extname(p).toLowerCase()) || !MEDIA_EXT.has(path.extname(abs).toLowerCase())) return false;
+    const real = resolveRealPathSafe(abs);
+    if (!real || isUncPath(real) || !MEDIA_EXT.has(path.extname(real).toLowerCase())) return false;
+    if (isBlockedUserDataMedia(abs) || isBlockedUserDataMedia(real)) return false;
+    try {
+      if (!fs.statSync(real).isFile()) return false;
+    } catch (e) {
+      if (!e || e.code !== 'ENOENT') return false;
+      try { if (fs.lstatSync(abs).isSymbolicLink()) return false; } catch {}
+    }
+    return true;
+  }
+
   function registerProjectMedia(project) {
     const assets = project && project.assets && typeof project.assets === 'object' ? Object.values(project.assets) : [];
     for (const a of assets) {
       if (!a || typeof a !== 'object') continue;
       for (const p of [a.path, a.originalPath, a.thumb]) {
-        if (typeof p === 'string' && p && path.isAbsolute(p)) ctx.registerMediaPath(p);
+        if (isSafeMediaPath(p)) ctx.registerMediaPath(p);
       }
     }
   }
@@ -205,15 +375,30 @@ module.exports = function register({ handle, ctx }) {
     }
     for (const k of Object.keys(patch)) if (DERIVED_KEYS.has(k)) delete patch[k];
     const allowed = new Set(Object.keys(settings.DEFAULTS || {}));
+    if (allowed.size) {
+      allowed.add('videogenProvider');
+      const vgSecrets = Array.isArray(settings.VIDEOGEN_SECRETS) ? settings.VIDEOGEN_SECRETS : FALLBACK_VIDEOGEN_SECRETS;
+      for (const k of vgSecrets) allowed.add(k);
+    }
     for (const k of Object.keys(patch)) if (allowed.size && !allowed.has(k)) delete patch[k];
 
     if ('dataRoot' in patch) {
       const v = patch.dataRoot;
       if (v == null || v === '') patch.dataRoot = '';
       else {
-        if (typeof v !== 'string' || !path.isAbsolute(v)) throw new Error('数据目录必须是完整的绝对路径');
+        if (typeof v !== 'string' || !v.trim()) throw new Error('数据目录必须是完整的绝对路径');
+        if (isUncPath(v)) throw new Error('出于安全考虑，数据目录不支持网络路径（UNC）');
+        if (!path.isAbsolute(v)) throw new Error('数据目录必须是完整的绝对路径');
         const abs = path.resolve(v);
+        if (isUncPath(abs)) throw new Error('出于安全考虑，数据目录不支持网络路径（UNC）');
+        const real = resolveRealPathSafe(abs);
+        if (!real || isUncPath(real)) throw new Error('数据目录路径无效或不安全');
+        if (isUserDataOrInside(abs, real)) throw new Error('数据目录不能设在应用内部数据目录（userData）内');
         await ensureWritableDir(abs);
+        const realAfter = resolveRealPathSafe(abs);
+        if (!realAfter || isUncPath(realAfter) || isUserDataOrInside(abs, realAfter)) {
+          throw new Error('数据目录不能设在应用内部数据目录（userData）内');
+        }
         patch.dataRoot = abs;
       }
       if (patch.dataRoot === '') {
@@ -445,8 +630,11 @@ module.exports = function register({ handle, ctx }) {
 
   handle('project:exportJson', async ({ project, path: out } = {}) => {
     if (!project || typeof project !== 'object') throw new Error('没有要导出的项目');
-    if (!out || typeof out !== 'string' || !path.isAbsolute(out)) throw new Error('请选择导出位置');
-    const target = /\.json$/i.test(out) ? out : `${out}.json`;
+    if (!out || typeof out !== 'string') throw new Error('请选择导出位置');
+    if (isUncPath(out)) throw new Error('出于安全考虑，不允许导出到网络路径（UNC）');
+    if (!path.isAbsolute(out)) throw new Error('请选择导出位置');
+    const target = path.resolve(/\.(ffproj|json)$/i.test(out) ? out : `${out}.ffproj`);
+    if (isUncPath(target)) throw new Error('出于安全考虑，不允许导出到网络路径（UNC）');
     const data = JSON.stringify({ ...project, exportedAt: nowIso(), exportedBy: 'Frameflow' }, null, 2);
     try { await atomicWrite(target, data); } catch (e) { throw fsError(e, '导出项目'); }
     return target;
@@ -454,8 +642,11 @@ module.exports = function register({ handle, ctx }) {
 
   handle('project:importJson', async ({ path: src } = {}) => {
     if (!src || typeof src !== 'string') throw new Error('请选择要导入的项目文件');
+    if (isUncPath(src)) throw new Error('出于安全考虑，不允许从网络路径（UNC）导入项目');
+    const resolvedSrc = path.resolve(src);
+    if (isUncPath(resolvedSrc)) throw new Error('出于安全考虑，不允许从网络路径（UNC）导入项目');
     let raw;
-    try { raw = await readJson(src); } catch (e) {
+    try { raw = await readJson(resolvedSrc); } catch (e) {
       if (e && e.code === 'ENOENT') throw new Error('项目文件不存在');
       if (e instanceof SyntaxError) throw new Error('项目文件内容已损坏（不是有效的 JSON）');
       throw new Error(`读取项目文件失败：${e.message}`);

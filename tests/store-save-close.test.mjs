@@ -1,7 +1,23 @@
 // 契约 C14：保存失败时不能悄悄关掉工程（内存里的工程是唯一副本）。
 // 伪造 window.ff，让 project:save 按需失败，直接驱动真实的 store。
-import test from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+
+const pendingTimers = new Set();
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  const t = realSetTimeout(() => {
+    pendingTimers.delete(t);
+    fn(...args);
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+};
+globalThis.clearTimeout = (t) => {
+  pendingTimers.delete(t);
+  return realClearTimeout(t);
+};
 
 let failSave = true;
 let saveCalls = 0;
@@ -23,6 +39,14 @@ globalThis.window = {
 
 const { default: useStore } = await import('../src/ui/store.js');
 const { createProject } = await import('../src/engine/model.js');
+
+after(async () => {
+  await useStore.getState().closeProject({ force: true });
+  for (const t of pendingTimers) realClearTimeout(t);
+  pendingTimers.clear();
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
+});
 
 const open = () => {
   const project = createProject({ name: '测试' });

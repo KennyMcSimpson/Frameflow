@@ -361,6 +361,10 @@ input[type="range"].pv-volume { width: 76px; }
   border: 1px solid var(--line-strong, rgba(255,255,255,.14)); box-shadow: var(--shadow-float, 0 6px 20px rgba(0,0,0,.4));
 }
 .tl-tbtn[data-kbd]:hover::after { content: attr(data-tip) "   " attr(data-kbd); }
+.tl-toolbar > .tl-tool-group:first-child > .tl-tbtn:first-child[data-tip]:hover::after { left: 0; transform: none; }
+.tl-toolbar > .grow ~ .tl-tool-group .tl-tbtn[data-tip]:hover::after,
+.tl-toolbar .tl-zoom .tl-tbtn[data-tip]:hover::after,
+.tl-toolbar > .tl-tool-group:last-child .tl-tbtn[data-tip]:hover::after { left: auto; right: 0; transform: none; }
 .tl-zoom-slider { width: 110px; margin: 0 4px; }
 .tl-ico { display: block; }
 
@@ -389,7 +393,7 @@ input[type="range"].pv-volume { width: 76px; }
 .tl-th.k-marker { padding-left: 10px; color: var(--text-2); }
 .tl-th.k-marker .tl-th-name { color: var(--text-2); font-size: var(--fs-11, 11px); }
 .tl-th.hidden .tl-th-name { color: var(--text-3, #666); text-decoration: line-through; }
-.tl-th-ruler { justify-content: space-between; padding: 0 8px; }
+.tl-th-ruler { position: sticky; top: 0; z-index: 6; background: var(--bg-1); justify-content: space-between; padding: 0 8px; }
 .tl-th-total { color: var(--text-2); font-size: var(--fs-11, 11px); }
 
 /* 轨道通用 */

@@ -13,7 +13,7 @@ import { SHOT_SIZE_LABELS, SHOT_MOVEMENT_LABELS, ANGLE_LABELS, PREVIZ_SETTINGS }
 
 import {
   TAU, rgbOf, toHex, mix, lighten, darken, rgba, luma, isHex, hashStr, hash01, rng,
-  lin, rad, rect, rrPath, rr, circle, ellipse, poly, line, glow, makeCanvas, scratch,
+  lin, rad, rect, rrPath, rr, circle, ellipse, poly, line, glow, scratch,
 } from './previz/util.js';
 import { drawLitFigure, PERSON_SKIN, PERSON_HAIR } from './previz/figure.js';
 import { paintTexture, atmosphere, godRays, bloom, lensFlare, grade } from './previz/post.js';

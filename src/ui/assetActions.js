@@ -1,7 +1,7 @@
 // 素材相关的共享动作：加入项目、放上时间线、拖放。所有模式共用。
 import useStore from './store.js';
-import { createAudioClip } from '../engine/model.js';
 import { applyOps } from '../engine/ops.js';
+import { trackFlags } from '../engine/timeline.js';
 import { assetRestriction } from '../engine/license.js';
 import api from './api.js';
 
@@ -64,6 +64,8 @@ export function insertAssets(assets, atIndex, label = '添加到时间线') {
   const st = useStore.getState();
   if (!st.project) return false;
   const before = new Set(st.project.tracks.video.map((c) => c.id));
+  const imgDurRaw = Number(st.settings && st.settings.editing && st.settings.editing.imageDuration);
+  const imgDur = Number.isFinite(imgDurRaw) && imgDurRaw >= 0.5 && imgDurRaw <= 60 ? imgDurRaw : null;
   // 走引擎的 insertAsset / addAudio：后面的镜头、跟随镜头的字幕和音频一起顺移（联动），
   // 轨道锁、镜头数与总时长上限也在这里统一检查。手工拼数组会绕过这些。
   const r = st.commit((p) => {
@@ -74,7 +76,8 @@ export function insertAssets(assets, atIndex, label = '添加到时间线') {
       if (a.kind === 'audio') {
         ops.push({ type: 'addAudio', audio: { assetId: a.id, start: 0, ...(a.duration > 0 ? {} : { out: 10 }) } });
       } else {
-        ops.push({ type: 'insertAsset', assetId: a.id, atIndex: idx });
+        const isImage = a.kind === 'image' || a.kind === 'generated-image';
+        ops.push({ type: 'insertAsset', assetId: a.id, atIndex: idx, ...(isImage && imgDur ? { duration: imgDur } : {}) });
         idx += 1;
       }
     }
@@ -92,17 +95,29 @@ export function insertAssets(assets, atIndex, label = '添加到时间线') {
   return true;
 }
 
-/** 音频素材放到音频轨指定时间 */
+/** 音频素材放到音频轨指定时间（走引擎 addAudio，统一遵守轨道锁与时长上限） */
 export function addAudioTrack(asset, start = 0, role = 'music') {
   if (!asset) return false;
   registerPaths([asset]);
-  const r = useStore.getState().commit((p) => ({
-    ...p,
-    assets: mergeAssets(p, [asset]),
-    tracks: { ...p.tracks, audio: [...p.tracks.audio, createAudioClip(asset, { start: Math.max(0, start), role })] },
-  }), '添加音频');
-  if (r.ok) warnRestrictedAssets([asset]);
-  return r.ok;
+  const st = useStore.getState();
+  if (!st.project) return false;
+  const audio = {
+    assetId: asset.id,
+    start: Math.max(0, Number(start) || 0),
+    ...(role ? { role } : {}),
+    ...(Number(asset.duration) > 0 ? {} : { out: 10 }),
+  };
+  const r = st.commit((p) => {
+    const res = applyOps({ ...p, assets: mergeAssets(p, [asset]) }, [{ type: 'addAudio', audio }], {});
+    if (!res.ok) throw new Error((res.errors || []).join('；') || '添加音频失败');
+    return res.project;
+  }, '添加音频');
+  if (!r.ok) {
+    st.toast(`未添加音频：${(r.errors || []).join('；') || '操作无效'}`, 'error');
+    return false;
+  }
+  warnRestrictedAssets([asset]);
+  return true;
 }
 
 export function setDragAssets(dataTransfer, assets) {
@@ -188,11 +203,16 @@ export async function checkOfflineAssets() {
   const st = useStore.getState();
   const p = st.project;
   if (!p) return 0;
+  const projectId = p.id;
+  const sameProject = () => { const cur = useStore.getState().project; return !!cur && cur.id === projectId; };
   const list = Object.values(p.assets || {}).filter((a) => a && a.path && ['video', 'image', 'audio'].includes(a.kind));
   const flags = await Promise.all(list.map(async (a) => [a.id, !(await readAssetMeta(a))]));
-  const changed = flags.filter(([id, off]) => !!(p.assets[id] && p.assets[id].offline) !== off);
+  if (!sameProject()) return 0;
+  const cur = useStore.getState().project;
+  const changed = flags.filter(([id, off]) => cur.assets[id] && !!cur.assets[id].offline !== off);
   if (changed.length) {
     useStore.getState().update((proj) => {
+      if (!proj || proj.id !== projectId) return proj;
       const assets = { ...proj.assets };
       for (const [id, off] of changed) if (assets[id]) assets[id] = { ...assets[id], offline: off || undefined };
       return { ...proj, assets };
@@ -233,18 +253,32 @@ export async function relinkAsset(asset) {
   return r.ok;
 }
 
-/** 放到画中画轨（播放头处）。依赖 W5 的 addOverlay op；不可用时退回主轨插入 */
+/** 放到画中画轨（播放头处）。原子地把素材加入项目并执行 addOverlay，仅占一步撤销历史。 */
 export function addAssetToOverlay(asset, { start, track = 1 } = {}) {
   const st = useStore.getState();
   if (!st.project || !asset) return false;
+  const tr = Number.isInteger(track) && track >= 1 ? track : 1;
+  if (trackFlags(st.project, 'overlay', tr).locked) {
+    st.toast('画中画轨已锁定', 'warn');
+    return false;
+  }
   registerPaths([asset]);
-  if (!st.project.assets[asset.id]) addAssets([asset], '导入素材');
-  const s = useStore.getState();
-  const at = Number.isFinite(start) ? start : s.playhead || 0;
-  const r = s.commit([{ type: 'addOverlay', assetId: asset.id, start: at, track }], '添加到画中画：' + (asset.name || ''), { silent: true });
-  if (r && r.ok) return true;
-  s.toast('当前版本暂不支持画中画轨，已添加到主轨', 'warn');
-  return insertAssets([asset], undefined, '添加到时间线：' + (asset.name || ''));
+  const at = Number.isFinite(start) ? start : st.playhead || 0;
+  const before = new Set((st.project.overlays || []).map((o) => o.id));
+  const r = st.commit((p) => {
+    const withAsset = p.assets[asset.id] ? p : { ...p, assets: mergeAssets(p, [asset]) };
+    const res = applyOps(withAsset, [{ type: 'addOverlay', assetId: asset.id, start: at, track: tr }], { playhead: at });
+    if (!res.ok) throw new Error((res.errors || []).join('；') || '添加画中画失败');
+    return res.project;
+  }, '添加到画中画：' + (asset.name || ''));
+  if (!r.ok) {
+    st.toast(`未添加到画中画：${(r.errors || []).join('；') || '操作无效'}`, 'error');
+    return false;
+  }
+  const added = (useStore.getState().project.overlays || []).find((o) => !before.has(o.id));
+  if (added && typeof st.selectItem === 'function') st.selectItem('overlay', added.id);
+  warnRestrictedAssets([asset]);
+  return true;
 }
 
 export async function importPaths(paths, { toTimeline = false } = {}) {

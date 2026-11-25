@@ -111,7 +111,8 @@ export function aiLabelLayout(width, height, t = 0, label = AI_LABEL_DEFAULT) {
   const W = Math.max(1, Number(width) || 1);
   const H = Math.max(1, Number(height) || 1);
   const minSide = Math.min(W, H);
-  const k = smooth((Number(t) - AI_LABEL_INTRO_SEC) / SHRINK_SEC); // 0 = 醒目标识，1 = 常驻角标
+  const tt = Number.isFinite(Number(t)) ? Number(t) : 0;
+  const k = smooth((tt - AI_LABEL_INTRO_SEC) / SHRINK_SEC); // 0 = 醒目标识，1 = 常驻角标
   const big = Math.ceil(minSide * INTRO_RATIO);
   const small = Math.min(big, Math.max(12, Math.round(H * BADGE_RATIO)));
   const fontPx = Math.round(lerp(big, small, k));

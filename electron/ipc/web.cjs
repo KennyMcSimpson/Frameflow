@@ -10,6 +10,7 @@ const yt = require('../lib/ytdlp.cjs');
 const consent = require('../lib/consent.cjs');
 const openverse = require('../lib/openverse.cjs');
 const bili = require('../lib/bilibili.cjs');
+const urlSafety = require('../lib/urlSafety.cjs');
 
 const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
 const ARCHIVE_API = 'https://archive.org';
@@ -982,7 +983,7 @@ function assetProvenance({ target, srcName, result, pageUrl, direct, author, tit
 /** 是否需要走 yt-dlp（视频站链接）：需要先同意使用须知 */
 function needsVideoSiteConsent(payload) {
   const result = payload && payload.result && typeof payload.result === 'object' ? payload.result : null;
-  return !(result && result.downloadUrl);
+  return !(result && String(result.downloadUrl || '').trim());
 }
 
 async function readSubtitles(file, maxSeconds) {
@@ -1007,10 +1008,10 @@ async function download(ctx, job, payload = {}) {
   const maxSeconds = payload.maxSeconds == null ? (settingsMax > 0 ? settingsMax : 180) : Math.max(0, Number(payload.maxSeconds) || 0);
   const withSubs = !!payload.withSubs;
   const pageUrl = String((result && result.url) || payload.url || '').trim();
-  const direct = result && result.downloadUrl ? String(result.downloadUrl) : '';
+  const direct = result && result.downloadUrl ? String(result.downloadUrl).trim() : '';
+  const allowedOrigins = (ctx && ctx.allowedOrigins) || [];
   if (!direct && !pageUrl) throw new Error('缺少要下载的网址');
-  if (!direct && !/^https?:\/\//i.test(pageUrl)) throw new Error('网址格式不正确，请粘贴以 http(s):// 开头的链接');
-  if (direct && !/^https?:\/\//i.test(direct)) throw new Error('下载地址无效');
+  urlSafety.assertSafePublicUrl(direct || pageUrl, { allowedOrigins });
 
   const outDir = target === 'library' ? paths.libraryMedia : path.join(paths.projectCache(payload.projectId), 'web');
   await fs.promises.mkdir(outDir, { recursive: true });
@@ -1047,6 +1048,7 @@ async function download(ctx, job, payload = {}) {
       job.progress('download', 0, `正在从 ${SOURCE_LABELS[srcName] || srcName} 下载…`);
       await yt.downloadUrlToFile(direct, dest, {
         signal: job.signal,
+        allowedOrigins,
         onProgress: (p, received, total) => job.progress('download', p * 0.8,
           total ? `正在下载 ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB` : `正在下载 ${(received / 1048576).toFixed(1)} MB`),
       });
@@ -1055,7 +1057,7 @@ async function download(ctx, job, payload = {}) {
     } else {
       job.progress('download', 0, '正在解析视频…');
       const dl = await yt.downloadVideo(paths, pageUrl, outDir, {
-        maxSeconds, withSubs, signal: job.signal, fileBase: base,
+        maxSeconds, withSubs, signal: job.signal, fileBase: base, allowedOrigins,
         onProgress: (p, msg) => job.progress('download', p * 0.8, msg),
       });
       file = dl.file;
@@ -1097,9 +1099,7 @@ async function download(ctx, job, payload = {}) {
     job.progress('done', 1, '下载完成');
     return { asset: saved, subtitles };
   } catch (e) {
-    if (job.signal.aborted || (e && e.code === 'CANCELLED')) {
-      for (const f of created) { try { fs.rmSync(f, { force: true }); } catch {} }
-    }
+    for (const f of created) { try { fs.rmSync(f, { force: true }); } catch {} }
     throw e;
   }
 }
@@ -1121,13 +1121,18 @@ module.exports = function register({ handle, ctx }) {
 
   // 视频站使用须知（契约 C4）
   handle('consent:grant', async (payload) => consent.grantConsent(ctx.settings, (payload && payload.key) || 'videoSites'));
+  handle('consent:revoke', async (payload) => consent.revokeConsent(ctx.settings, (payload && payload.key) || 'videoSites'));
   handle('consent:status', async () => consent.consentStatus(ctx.settings ? ctx.settings.get() : null));
 
   handle('web:download', async (payload) => {
     const title = (payload && payload.result && payload.result.title) || (payload && payload.url) || '网络素材';
     // 先做同步校验，让明显错误直接报出来
     if (payload && payload.target === 'project' && !payload.projectId) throw new Error('下载到项目需要先打开一个项目');
-    if (!(payload && ((payload.result && (payload.result.downloadUrl || payload.result.url)) || payload.url))) throw new Error('缺少要下载的网址');
+    const directUrl = payload && payload.result && payload.result.downloadUrl ? String(payload.result.downloadUrl).trim() : '';
+    const pageUrl = String((payload && payload.result && payload.result.url) || (payload && payload.url) || '').trim();
+    if (!directUrl && !pageUrl) throw new Error('缺少要下载的网址');
+    const allowedOrigins = (ctx && ctx.allowedOrigins) || [];
+    urlSafety.assertSafePublicUrl(directUrl || pageUrl, { allowedOrigins });
     // 视频站链接（走 yt-dlp）：未同意使用须知时在启动任务前拦截，错误码才能原样传回渲染端
     if (needsVideoSiteConsent(payload)) consent.requireConsent(ctx.settings ? ctx.settings.get() : null, 'videoSites');
     return jobs.start('web-download', (job) => download(ctx, job, payload), { title: String(title).slice(0, 80) });

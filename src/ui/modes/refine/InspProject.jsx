@@ -140,8 +140,18 @@ export default function InspProject() {
           onPick={(id) => {
             const pr = (PRESETS.EXPORT_PRESETS || FALLBACK_PRESETS).find((p) => p.id === id) || {};
             const aspect = pr.w && pr.h ? ratioKey(pr.w, pr.h) : null;
-            live.commit((p) => ({ ...p, exportPreset: id, settings: { ...p.settings, ...(pr.fps ? { fps: pr.fps } : {}) } }), '导出预设：' + (pr.label || id));
-            if (aspect && aspect !== useStore.getState().project.settings.aspect) live.commit([{ type: 'setProject', target: T_NONE, settings: { aspect } }], '修改画幅');
+            live.commit((p) => {
+              const aspectObj = aspect && ASPECTS[aspect] ? ASPECTS[aspect] : null;
+              return {
+                ...p,
+                exportPreset: id,
+                settings: {
+                  ...p.settings,
+                  ...(pr.fps ? { fps: pr.fps } : {}),
+                  ...(aspectObj ? { aspect, width: aspectObj.width, height: aspectObj.height } : {}),
+                },
+              };
+            }, '导出预设：' + (pr.label || id));
           }} />
         <div className="hint">选择发布平台后会同步画幅与帧率；导出时默认使用此预设。</div>
       </InspSection>

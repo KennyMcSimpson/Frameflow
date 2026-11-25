@@ -19,12 +19,13 @@ function round2(v) {
 /** 镜头在时间线上能达到的最长时长：视频受素材长度限制（保持入点），图片/预演不限。 */
 function maxDurationFor(clip, assets) {
   const asset = assets && clip ? assets[clip.assetId] : null;
-  if (!asset || asset.kind !== 'video' || !Number.isFinite(Number(asset.duration))) return Infinity;
+  const dur = asset ? Number(asset.duration) : NaN;
+  if (!asset || asset.kind !== 'video' || !Number.isFinite(dur) || dur <= 0) return Infinity;
   if (clip.still) return Infinity;
   // 曲线变速时用等效速度（源长度 / 时间线时长）
   const d = clipDuration(clip);
   const speed = clip.speedCurve && d > 0 ? (Number(clip.out) - Number(clip.in)) / d : Number(clip.speed) > 0 ? Number(clip.speed) : 1;
-  return Math.max(0, (Number(asset.duration) - (Number(clip.in) || 0)) / speed);
+  return Math.max(0, (dur - (Number(clip.in) || 0)) / speed);
 }
 
 function fit(duration, clip, assets) {

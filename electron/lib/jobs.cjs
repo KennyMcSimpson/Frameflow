@@ -48,7 +48,8 @@ function createJobs(send) {
         const cancelled = job.cancelled || (err && err.code === 'CANCELLED');
         if (cancelled) log.info(`[job ${kind}] 已取消`, jobId, elapsed());
         else log.error(`[job ${kind}] 失败`, jobId, elapsed(), err);
-        send('job:error', { jobId, kind, error: cancelled ? '已取消' : (err && err.message) || String(err), code: err && err.code, cancelled, meta });
+        const rawErr = (err && err.message) ? String(err.message) : String(err);
+        send('job:error', { jobId, kind, error: cancelled ? '已取消' : log.redact(rawErr), code: err && err.code, cancelled, meta });
       } finally {
         jobs.delete(jobId);
       }

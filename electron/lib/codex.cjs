@@ -15,29 +15,168 @@ const LOGIN_HINT = 'Codex 未登录：请在终端运行 codex login';
 
 // ───────────────────────── 工具函数 ─────────────────────────
 
+const CODEX_MODEL_RE = /^[A-Za-z0-9._:/-]{1,128}$/;
+const CODEX_BIN_RE = /^codex(\.exe|\.cmd|\.bat)?$/i;
+const CMD_FORBIDDEN_RE = /[\r\n\0"&|<>^!`%]/;
+const UNC_RE = /^[\\/]{2}/;
+
+function isUncPath(p) {
+  return typeof p === 'string' && (UNC_RE.test(p) || UNC_RE.test(p.trim()));
+}
+
 function isFile(p) {
-  try { return !!p && fs.statSync(p).isFile(); } catch { return false; }
+  try { return !!p && !isUncPath(p) && fs.statSync(p).isFile(); } catch { return false; }
+}
+
+function validateModel(model) {
+  if (model == null || model === '') return null;
+  const s = String(model).trim();
+  if (!s) return null;
+  if (!CODEX_MODEL_RE.test(s) || s.startsWith('-')) {
+    const e = new Error('Codex 模型名称无效：仅允许字母、数字及 . _ : / -（不超过 128 个字符）');
+    e.code = 'INVALID_MODEL';
+    throw e;
+  }
+  return s;
+}
+
+function isValidCodexPath(p, { allowTestBin = false } = {}) {
+  if (typeof p !== 'string') return false;
+  const s = p.trim();
+  if (!s) return false;
+  if (/[\r\n\0]/.test(s)) return false;
+  // 拒绝 UNC 及混用斜杠 UNC（\\、//、\/、/\）——在 path.resolve 与任何 fs.* 之前
+  if (isUncPath(p) || isUncPath(s)) return false;
+  const resolved = path.resolve(s);
+  if (isUncPath(resolved)) return false;
+  if (allowTestBin) {
+    try {
+      const real = fs.realpathSync(resolved);
+      if (isUncPath(real)) return false;
+    } catch (e) {
+      if (e && e.code !== 'ENOENT') return false;
+    }
+    return true;
+  }
+  if (!CODEX_BIN_RE.test(path.basename(s)) || !CODEX_BIN_RE.test(path.basename(resolved))) return false;
+  let exists = false;
+  try {
+    fs.lstatSync(resolved);
+    exists = true;
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') return false;
+  }
+  if (exists) {
+    let real;
+    try { real = fs.realpathSync(resolved); } catch { return false; }
+    if (isUncPath(real)) return false;
+    if (!CODEX_BIN_RE.test(path.basename(real))) {
+      if (!(/\.cmd$/i.test(resolved) && resolveCmdShim(real))) return false;
+    }
+  }
+  return true;
 }
 
 function needsShell(bin) {
   return IS_WIN && /\.(cmd|bat)$/i.test(String(bin || ''));
 }
 
-/** cmd.exe 参数转义（仅 .cmd/.bat 走 shell 时使用）。带 = 的参数（-c key=value）也加引号，批处理会把 = 当分隔符 */
-function quoteForCmd(arg) {
-  const s = String(arg);
-  if (s === '') return '""';
-  if (!/[\s"&|<>^%(),;!=]/.test(s)) return s;
-  return '"' + s.replace(/"/g, '""') + '"';
+function isValidNodeBin(p) {
+  if (typeof p !== 'string' || !p || isUncPath(p)) return false;
+  const resolved = path.resolve(p);
+  if (isUncPath(resolved) || !isFile(resolved)) return false;
+  try {
+    const real = fs.realpathSync(resolved);
+    if (isUncPath(real)) return false;
+    return /^node(?:js)?(\.exe)?$/i.test(path.basename(real));
+  } catch {
+    return false;
+  }
 }
 
-/** 杀掉进程树（Windows 用 taskkill /T /F，其他平台 SIGKILL） */
+function resolveNodeForShim(shimDir, explicitNode) {
+  if (explicitNode && /^node(\.exe)?$/i.test(path.basename(explicitNode)) && isValidNodeBin(explicitNode)) {
+    return explicitNode;
+  }
+  const localNode = path.join(shimDir, IS_WIN ? 'node.exe' : 'node');
+  if (isValidNodeBin(localNode)) return localNode;
+  if (!process.versions.electron && /^node(\.exe)?$/i.test(path.basename(process.execPath)) && isValidNodeBin(process.execPath)) {
+    return process.execPath;
+  }
+  for (const d of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(d, IS_WIN ? 'node.exe' : 'node');
+    if (isValidNodeBin(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * 识别标准 npm/node `.cmd` 包装脚本并解析出目标 `.js` 入口，直接用 node 以 `shell: false` 运行，
+ * 彻底绕开 cmd.exe 的命令行解析与注入面。无法识别时返回 null（回退到严格校验的 quoteForCmd）。
+ */
+function resolveCmdShim(bin) {
+  if (!IS_WIN || !/\.cmd$/i.test(String(bin || ''))) return null;
+  if (isUncPath(bin)) return null;
+  const resolvedBin = path.resolve(bin);
+  if (isUncPath(resolvedBin)) return null;
+  try {
+    const realBin = fs.realpathSync(resolvedBin);
+    if (isUncPath(realBin)) return null;
+    const st = fs.statSync(realBin);
+    if (!st.isFile() || st.size > 8192) return null;
+    const content = fs.readFileSync(realBin, 'utf8');
+    // 若包含除标准 npm shim（dp0/_prog/PATHEXT）以外的自定义 SET，不跳过批处理脚本
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (/^set\s+/i.test(line) && !/^set\s+(?:dp0=|"_prog=|pathext=)/i.test(line)) return null;
+    }
+    const shimDir = path.dirname(realBin);
+    let explicitNode = null;
+    let relScript = null;
+    const npmMatch = /"%_prog%"\s+"%(?:~)?dp0%[\\/]?([^"\r\n]+?\.(?:c?js|mjs))"\s+%\*/i.exec(content);
+    if (npmMatch) {
+      relScript = npmMatch[1];
+    } else {
+      const directMatch = /"([^"\r\n]*node(?:\.exe)?)"\s+"%(?:~)?dp0%[\\/]?([^"\r\n]+?\.(?:c?js|mjs))"\s+%\*/i.exec(content);
+      if (directMatch) {
+        explicitNode = directMatch[1];
+        relScript = directMatch[2];
+      }
+    }
+    if (!relScript || isUncPath(relScript)) return null;
+    const scriptPath = path.resolve(shimDir, relScript);
+    if (isUncPath(scriptPath) || !isFile(scriptPath)) return null;
+    const realScript = fs.realpathSync(scriptPath);
+    if (isUncPath(realScript) || !/\.(?:c?js|mjs)$/i.test(realScript) || !isFile(realScript)) return null;
+    const nodeBin = resolveNodeForShim(shimDir, explicitNode);
+    if (!nodeBin) return null;
+    return { bin: nodeBin, prefixArgs: [realScript] };
+  } catch {
+    return null;
+  }
+}
+
+/** cmd.exe 参数转义（仅 .cmd/.bat 无法直启而走 shell 时使用）。带 = 的参数（-c key=value）也加引号，批处理会把 = 当分隔符 */
+function quoteForCmd(arg) {
+  const s = String(arg);
+  if (/[\r\n\0]/.test(s)) throw new Error('命令行参数包含非法换行或空字符');
+  if (CMD_FORBIDDEN_RE.test(s)) throw new Error('命令行参数包含不允许的批处理特殊字符');
+  if (s === '') return '""';
+  if (!/[\s(),;=]/.test(s)) return s;
+  return `"${s}"`;
+}
+
+function taskkillPath() {
+  return path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'taskkill.exe');
+}
+
+/** 杀掉进程树（Windows 用 System32\\taskkill.exe /T /F，其他平台 SIGKILL） */
 function killTree(child) {
   if (!child || child.exitCode != null || child.signalCode != null) return;
   const pid = child.pid;
   if (IS_WIN && pid) {
     try {
-      const k = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      const k = spawn(taskkillPath(), ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       k.on('error', () => { try { child.kill('SIGKILL'); } catch {} });
     } catch {
       try { child.kill('SIGKILL'); } catch {}
@@ -56,10 +195,12 @@ function exec(bin, args, { input, timeoutMs, signal, cwd, env, onLine } = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      const shell = needsShell(bin);
-      // .cmd/.bat 只能经 cmd.exe 运行：自己逐个转义后拼成一整行（Node 不再建议 shell:true 时另传 args，DEP0190）
-      const cmd = shell ? [bin, ...args].map(quoteForCmd).join(' ') : bin;
-      const finalArgs = shell ? [] : args;
+      const shim = needsShell(bin) ? resolveCmdShim(bin) : null;
+      const shell = !shim && needsShell(bin);
+      // 优先把标准 npm/node .cmd shim 解析为直接执行 node <script>（shell: false）；
+      // 其余 .cmd/.bat 才经 cmd.exe 运行，并由 quoteForCmd 拒绝危险元字符后拼接
+      const cmd = shim ? shim.bin : (shell ? [bin, ...args].map(quoteForCmd).join(' ') : bin);
+      const finalArgs = shim ? [...shim.prefixArgs, ...args] : (shell ? [] : args);
       child = spawn(cmd, finalArgs, {
         cwd,
         env: { ...process.env, NO_COLOR: '1', ...(env || {}) },
@@ -190,7 +331,9 @@ function newestLocalAppDataCodex() {
 
 async function whereCodex() {
   try {
-    const r = await exec(IS_WIN ? 'where.exe' : 'which', ['codex'], { timeoutMs: PROBE_TIMEOUT_MS });
+    const winWhere = path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'where.exe');
+    const whereBin = IS_WIN ? (isFile(winWhere) ? winWhere : 'where.exe') : 'which';
+    const r = await exec(whereBin, ['codex'], { timeoutMs: PROBE_TIMEOUT_MS });
     if (r.code !== 0) return [];
     const list = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).filter(isFile);
     // 优先 .exe，其次 .cmd，最后其他（如无扩展名的 shell 脚本在 Windows 上不可直接执行）
@@ -205,7 +348,9 @@ async function candidatePaths(settings) {
   const s = readSettings(settings);
   const fromSettings = s && s.ai && typeof s.ai.codexPath === 'string' ? s.ai.codexPath.trim() : '';
   const out = [];
-  const push = (p) => { if (p && !out.some((x) => x.toLowerCase() === p.toLowerCase())) out.push(p); };
+  const push = (p) => {
+    if (p && isValidCodexPath(p) && !out.some((x) => x.toLowerCase() === p.toLowerCase())) out.push(p);
+  };
   if (fromSettings) push(fromSettings);
   if (process.env.CODEX_CLI_PATH) push(process.env.CODEX_CLI_PATH.trim());
   push(newestLocalAppDataCodex());
@@ -403,9 +548,10 @@ const JSON_FLAG_UNSUPPORTED = /unexpected argument '--json'|unrecognized (?:opti
 const EFFORT_UNSUPPORTED = /model_reasoning_effort|reasoning[._ ]effort|reasoning\.effort|unknown variant|unsupported[_ ]value[^\n]*(?:effort|reasoning)|(?:effort|reasoning)[^\n]*not supported/i;
 
 function buildCodexArgs({ tmpDir, schemaPath, outPath, model, images, json = false, effort = null }) {
+  const validModel = validateModel(model);
   const args = ['exec', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only', '--color', 'never', '-C', tmpDir];
   if (json) args.push('--json');
-  if (model) args.push('-m', String(model));
+  if (validModel) args.push('-m', validModel);
   if (effort && EFFORTS.includes(effort)) args.push('-c', `model_reasoning_effort=${effort}`);
   // -i 是多值参数：放在其他选项之前，避免把结尾的「-」（从 stdin 读提示词）当成图片
   for (const img of images || []) args.push('-i', img);
@@ -443,9 +589,11 @@ function codexFailure(code, diag) {
  *   onEvent 收到 parseCodexEvent 的结果，外加两种本地事件：{type:'ff.attempt', attempt, reason} 与 {type:'ff.done', usage, attempts}。
  * @returns {Promise<object>}
  */
-async function runCodex({ codexPath, model, system, prompt, schema, images, timeoutMs, signal, tmpRoot, effort, json = true, onEvent } = {}) {
+async function runCodex({ codexPath, model, system, prompt, schema, images, timeoutMs, signal, tmpRoot, effort, json = true, onEvent, _testBin = false } = {}) {
   if (!codexPath) throw new Error('未找到 Codex CLI：请安装 Codex，或在设置中填写 codex.exe 的路径');
+  if (!isValidCodexPath(codexPath, { allowTestBin: !!_testBin })) throw new Error('Codex 路径无效：必须指向本地的 codex 可执行文件');
   if (!isFile(codexPath)) throw new Error(`找不到 Codex 程序：${codexPath}`);
+  const validModel = validateModel(model);
   if (!schema || typeof schema !== 'object') throw new Error('AI 调用缺少输出结构（schema）');
   if (signal && signal.aborted) throw cancelledError();
   const limit = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
@@ -462,7 +610,7 @@ async function runCodex({ codexPath, model, system, prompt, schema, images, time
 
   const emit = (ev) => { if (onEvent) { try { onEvent(ev); } catch {} } };
   const capKey = String(codexPath).toLowerCase();
-  const effortKey = `${capKey}|${model || ''}`;
+  const effortKey = `${capKey}|${validModel || ''}`;
   let useJson = json !== false && !capability.noJson.has(capKey);
   let useEffort = effort && EFFORTS.includes(effort) && !capability.noEffort.has(effortKey) ? effort : null;
   let input = baseInput;
@@ -482,7 +630,7 @@ async function runCodex({ codexPath, model, system, prompt, schema, images, time
       }
       try { fs.rmSync(outPath, { force: true }); } catch {}
       attempts++;
-      const args = buildCodexArgs({ tmpDir, schemaPath, outPath, model, images: imgs, json: useJson, effort: useEffort });
+      const args = buildCodexArgs({ tmpDir, schemaPath, outPath, model: validModel, images: imgs, json: useJson, effort: useEffort });
       const eventErrors = [];
       let agentText = '';
       const onLine = useJson ? (line) => {
@@ -566,5 +714,6 @@ module.exports = {
   _internals: {
     parseJsonLoose, buildCodexArgs, killTree, exec, quoteForCmd, looksNotLoggedIn, clearDetectCache, candidatePaths, LOGIN_HINT,
     parseCodexEvent, normalizeUsage, addUsage, codexFailure, clearCapabilityCache, capability, JSON_FLAG_UNSUPPORTED, EFFORT_UNSUPPORTED,
+    validateModel, isValidCodexPath, resolveCmdShim, isUncPath,
   },
 };

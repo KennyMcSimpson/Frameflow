@@ -3,6 +3,8 @@ import React from 'react';
 import useStore from '../../store.js';
 import { Button, Icon, Switch, fmtTime } from '../../components/ui.jsx';
 import { InspSection, InspRow, NumField, Param, ChoiceGrid, patchItem, useEdit, usePage, runOp, T_IDS, FMT } from './InspCommon.jsx';
+import { clipDuration } from '../../../engine/timeline.js';
+import { makeFormat } from './inspValue.js';
 
 export const SPEED_CURVES = {
   montage: { label: '蒙太奇', hint: '快—慢—快交替，节奏感强', curve: [[0, 1], [0.25, 3], [0.5, 0.5], [0.75, 3], [1, 1]] },
@@ -18,6 +20,12 @@ const SPEED_MAX = 10;
 // 速度滑杆用对数刻度：0..1 ↔ 0.1..10
 const toPos = (v) => Math.log10(Math.max(SPEED_MIN, v)) / 2 + 0.5;
 const fromPos = (p) => Math.round(10 ** ((p - 0.5) * 2) * 100) / 100;
+const SPEED_FMT = makeFormat((p) => `${fromPos(p).toFixed(2)}×`, {
+  toEdit: fromPos,
+  fromEdit: (n) => (n > 0 ? Math.log10(n) / 2 + 0.5 : toPos(SPEED_MIN) - 1),
+  unit: '×',
+  digits: 2,
+});
 
 function CurvePreview({ pts, active }) {
   const y = (v) => 20 - (Math.log10(v) / 1.0 + 1) * 9; // 0.1→20, 1→11, 10→2
@@ -64,7 +72,7 @@ export default function InspSpeed({ clips, disabled }) {
     if (r && r.ok) st.toast('已在播放头处插入 2 秒定格画面', 'ok');
   };
 
-  const dur = (c) => (c.still ? Math.max(0.2, c.out - c.in) : srcLen / (c.speed || 1));
+  const dur = (c) => clipDuration(c);
 
   return (
     <>
@@ -74,15 +82,17 @@ export default function InspSpeed({ clips, disabled }) {
         {effMode === 'normal' ? (
           <>
             <Param label="倍速" min={0} max={1} step={0.005} value={toPos(c0.speed || 1)} resetValue={0.5} disabled={disabled}
-              format={(p) => `${fromPos(p).toFixed(2)}×`} {...bind((p) => setSpeed(fromPos(p)), '变速')} />
+              format={SPEED_FMT} {...bind((p) => setSpeed(fromPos(p)), '变速')} />
             <div className="insp-chips">
               {[0.25, 0.5, 1, 1.5, 2, 4].map((v) => (
                 <button key={v} type="button" disabled={disabled} className={'insp-chip' + (Math.abs((c0.speed || 1) - v) < 0.01 ? ' on' : '')} onClick={() => now(setSpeed(v), `${v}× 变速`)}>{v}×</button>
               ))}
             </div>
-            <InspRow label="时长" hint="改变速度会改变片段时长">
+            <InspRow label="时长" hint={c0.still ? '调整定格画面时长' : '改变速度会改变片段时长'}>
               <NumField value={dur(c0)} min={0.2} max={600} step={0.1} suffix="秒" disabled={disabled}
-                onCommit={(d) => now(setSpeed(Math.min(SPEED_MAX, Math.max(SPEED_MIN, srcLen / d))), '按时长变速')} />
+                onCommit={(d) => (c0.still
+                  ? now({ ops: [{ type: 'setDuration', target: T_IDS(ids), duration: d }], fb: each((c) => ({ ...c, duration: d })) }, '调整定格时长')
+                  : now(setSpeed(Math.min(SPEED_MAX, Math.max(SPEED_MIN, srcLen / d))), '按时长变速'))} />
             </InspRow>
           </>
         ) : (

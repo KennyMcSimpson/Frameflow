@@ -1,5 +1,5 @@
 'use strict';
-// 编码器探测与选择（_ff4_notes/CONTRACTS-w4.md C12）。纯 node 模块（不依赖 electron），便于单测。
+// 编码器探测与选择（契约 C12）。纯 node 模块（不依赖 electron），便于单测。
 //
 // 为什么要“真编码 1 帧”：ffmpeg -encoders 只说明“编译进来了”，不代表这台机器能用。
 // 实测 AMF 会出现“列出来但用不了”（缺 amfrt64.dll），没有对应显卡的 nvenc/qsv 同理。
@@ -65,7 +65,7 @@ function parseEncoderList(text) {
   const found = new Set();
   for (const line of String(text || '').split(/\r?\n/)) {
     const m = /^\s*V[A-Z.]{5}\s+(\S+)/.exec(line);
-    if (m) found.add(m[1]);
+    if (m && m[1] !== '=') found.add(m[1]);
   }
   return found;
 }

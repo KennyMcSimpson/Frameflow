@@ -181,7 +181,6 @@ function drawShoe(g, ax, ay, dir, side, base, L) {
 
 function torsoPath(g, T) {
   const { sw, ww, hw, cx, chest, back, f } = T;
-  const front = (x) => x;
   // 胸口向朝向侧鼓出，背部稍收
   const L = -1;
   const R = 1;
@@ -196,7 +195,6 @@ function torsoPath(g, T) {
   g.bezierCurveTo(cx + ww + off(R, 0.8), -0.67, cx + sw + 0.012 + off(R, 1), SH_Y + 0.1, cx + sw + 0.006, SH_Y + 0.03);
   g.bezierCurveTo(cx + sw - 0.02, SH_Y - 0.006, cx + 0.06, SH_Y - 0.004, cx + 0.03, NECK_Y + 0.02);
   g.closePath();
-  void front;
 }
 
 function pelvisPath(g, T) {
@@ -832,8 +830,9 @@ function paintFigure(g, pose, look, L, detail, fine) {
  * @returns {boolean} 是否画了
  */
 export function drawLitFigure(g, pose, look, e, opts = {}) {
+  const activePose = pose || (opts && opts.pose);
   const canvas = g.canvas;
-  if (!canvas || typeof g.getTransform !== 'function') return false;
+  if (!activePose || !canvas || typeof g.getTransform !== 'function') return false;
   const W = canvas.width;
   const Hc = canvas.height;
   const T = g.getTransform();
@@ -872,7 +871,7 @@ export function drawLitFigure(g, pose, look, e, opts = {}) {
   const F = scratch('fig', bw, bh);
   const fg = F.ctx;
   fg.setTransform(T.a, T.b, T.c, T.d, T.e - x0, T.f - y0);
-  paintFigure(fg, opts.pose, lk, L, detail, fine);
+  paintFigure(fg, activePose, lk, L, detail, fine);
 
   // ---- 像素空间整体光影 ----
   fg.save();

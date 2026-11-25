@@ -43,7 +43,11 @@ const ZH_EN = {
 };
 const ZH_KEYS = Object.keys(ZH_EN).sort((a, b) => b.length - a.length);
 
-const SIZE_HINT = { 'extreme-close': 'close up', close: 'close up', 'extreme-wide': 'aerial', wide: 'wide shot' };
+const SIZE_HINT = {
+  'extreme-close-up': 'close up', 'close-up': 'close up',
+  'extreme-close': 'close up', close: 'close up',
+  'extreme-wide': 'aerial', wide: 'wide shot',
+};
 const EN_STOP = new Set(['the', 'a', 'an', 'of', 'and', 'with', 'in', 'on', 'at', 'to', 'for', 'shot', 'video', 'footage', 'cinematic', 'scene', 'camera', 'slow', 'motion', 'b-roll', 'broll', '4k', 'hd']);
 
 const str = (v) => (typeof v === 'string' ? v.trim() : '');

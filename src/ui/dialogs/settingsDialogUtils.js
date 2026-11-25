@@ -119,7 +119,7 @@ export function validate(d) {
   const img = Number(d.edImageDuration);
   if (!(img >= 0.5 && img <= 60)) return { tab: 'editing', message: '图片默认时长需在 0.5–60 秒之间' };
   const tr = Number(d.edTransitionDuration);
-  if (!(tr >= 0 && tr <= 5)) return { tab: 'editing', message: '转场时长需在 0–5 秒之间' };
+  if (!(tr >= 0.1 && tr <= 2)) return { tab: 'editing', message: '转场时长需在 0.1–2 秒之间' };
   return null;
 }
 

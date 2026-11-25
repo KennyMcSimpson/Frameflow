@@ -7,9 +7,12 @@ import { layoutVideo, indexAtTime } from '../../../engine/timeline.js';
 
 // ---------------- 联网来源 ----------------
 export const WEB_SOURCES = [
+  { id: 'commons', label: 'Wikimedia Commons', short: 'Commons', kinds: ['video', 'image', 'audio'], needs: null, videoSite: false },
+  { id: 'openverse', label: 'Openverse（开放许可图片和音乐）', short: 'Openverse', kinds: ['image', 'audio'], needs: null, videoSite: false },
+  { id: 'archive', label: '互联网档案馆（公有领域老影像）', short: '档案馆', kinds: ['video'], needs: null, videoSite: false },
+  { id: 'nasa', label: 'NASA 影像库（公共领域的航天、地球影像）', short: 'NASA', kinds: ['video', 'image'], needs: null, videoSite: false },
   { id: 'pexels', label: 'Pexels', short: 'Pexels', kinds: ['video', 'image'], needs: 'pexels', videoSite: false },
   { id: 'pixabay', label: 'Pixabay', short: 'Pixabay', kinds: ['video', 'image'], needs: 'pixabay', videoSite: false },
-  { id: 'commons', label: 'Wikimedia Commons', short: 'Commons', kinds: ['video', 'image', 'audio'], needs: null, videoSite: false },
   { id: 'bilibili', label: 'B站', short: 'B站', kinds: ['video', 'audio'], needs: 'ytdlp', videoSite: true },
   { id: 'youtube', label: 'YouTube', short: 'YouTube', kinds: ['video', 'audio'], needs: 'ytdlp', videoSite: true },
 ];
@@ -56,15 +59,15 @@ export function sourceAvailability(sourceId, kind, { settings, ytdlpInstalled })
     const what = kind === 'audio' ? '音乐' : kind === 'image' ? '图片' : '视频';
     return { ok: false, reason: `${s.label} 不提供${what}`, fix: null };
   }
-  if (s.needs === 'pexels' && !(settings && settings.hasPexelsKey)) return { ok: false, reason: '需要在「设置 → 联网」填写 Pexels API Key（免费申请）', fix: 'settings' };
-  if (s.needs === 'pixabay' && !(settings && settings.hasPixabayKey)) return { ok: false, reason: '需要在「设置 → 联网」填写 Pixabay API Key（免费申请）', fix: 'settings' };
+  if (s.needs === 'pexels' && !(settings && settings.hasPexelsKey)) return { ok: false, reason: '需要在「设置 → 素材与联网」填写 Pexels API Key（免费申请）', fix: 'settings' };
+  if (s.needs === 'pixabay' && !(settings && settings.hasPixabayKey)) return { ok: false, reason: '需要在「设置 → 素材与联网」填写 Pixabay API Key（免费申请）', fix: 'settings' };
   if (s.needs === 'ytdlp' && !ytdlpInstalled) return { ok: false, reason: '需要先安装视频下载组件 yt-dlp', fix: 'ytdlp' };
   return { ok: true, reason: '', fix: null };
 }
 
 /** 免版权图库中当前可用的来源（给「缺少素材」自动搜索用） */
 export function stockSourcesFor(kind, settings) {
-  return ['commons', 'pexels', 'pixabay'].filter((id) => sourceAvailability(id, kind, { settings, ytdlpInstalled: false }).ok);
+  return ['commons', 'openverse', 'archive', 'nasa', 'pexels', 'pixabay'].filter((id) => sourceAvailability(id, kind, { settings, ytdlpInstalled: false }).ok);
 }
 
 // ---------------- 后台任务（同步到任务面板，并暴露 jobId 以便取消） ----------------

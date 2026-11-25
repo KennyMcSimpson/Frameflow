@@ -128,35 +128,35 @@ export function coverSize(srcW, srcH, dstW, dstH) {
 // ---------------- 关键帧（与 engine/keyframes.js 的 valueAt 同语义；本地实现保证渲染不依赖其加载顺序） ----------------
 
 function easeKey(kind, p) {
+  const x = clamp01(p);
   switch (kind) {
     case 'hold': return 0;
-    case 'easeIn': return p * p * p;
-    case 'easeOut': return 1 - (1 - p) ** 3;
-    case 'ease': return p < 0.5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2;
-    default: return p;
+    case 'easeIn': return x * x * x;
+    case 'easeOut': return 1 - (1 - x) ** 3;
+    case 'ease': return x * x * (3 - 2 * x);
+    default: return x;
   }
 }
 
 /** keys[path] 在片段本地时刻 t 的值；无关键帧时返回 base */
 export function keyValueAt(keys, path, t, base) {
-  const list = keys && Array.isArray(keys[path]) ? keys[path].filter((k) => k && Number.isFinite(Number(k.t))) : null;
+  const list = keys && Array.isArray(keys[path])
+    ? keys[path].filter((k) => k && k.t != null && k.t !== '' && Number.isFinite(Number(k.t)) && k.v != null && k.v !== '' && Number.isFinite(Number(k.v)))
+    : null;
   if (!list || !list.length) return base;
-  const arr = list.slice().sort((a, b) => a.t - b.t);
-  const time = Number(t) || 0;
-  if (time <= arr[0].t) return Number(arr[0].v);
+  const arr = list.slice().sort((a, b) => Number(a.t) - Number(b.t));
+  const time = Number.isFinite(Number(t)) ? Number(t) : 0;
+  if (time <= Number(arr[0].t)) return Number(arr[0].v);
   const last = arr[arr.length - 1];
-  if (time >= last.t) return Number(last.v);
-  for (let i = 0; i < arr.length - 1; i += 1) {
-    const a = arr[i];
-    const b = arr[i + 1];
-    if (time >= a.t && time <= b.t) {
-      const span = b.t - a.t;
-      const p = span > 0 ? (time - a.t) / span : 1;
-      const e = easeKey(a.ease || 'linear', p);
-      return Number(a.v) + (Number(b.v) - Number(a.v)) * e;
-    }
-  }
-  return base;
+  if (time >= Number(last.t)) return Number(last.v);
+  let i = 0;
+  while (i < arr.length - 1 && Number(arr[i + 1].t) <= time) i += 1;
+  const a = arr[i];
+  const b = arr[i + 1];
+  const span = Number(b.t) - Number(a.t);
+  if (span <= 0) return Number(b.v);
+  const e = easeKey(a.ease || 'linear', (time - Number(a.t)) / span);
+  return Number(a.v) + (Number(b.v) - Number(a.v)) * e;
 }
 
 /** 把片段的关键帧应用到 transform/opacity/color，返回新的属性快照（不修改原片段） */

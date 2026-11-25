@@ -4,19 +4,23 @@ import '../styles/shell.css';
 // PLAN-v3 §6：App 负责引入全部模块样式（新增的 css 文件自动包含）
 import.meta.glob('../styles/*.css', { eager: true });
 import useStore from './store.js';
+import api from './api.js';
 import { Button, Icon, ProgressBar } from './components/ui.jsx';
-import { DND_ASSET, importFilesDialog } from './assetActions.js';
+import { DND_ASSET, importFilesDialog, importPaths } from './assetActions.js';
 import TopBar, { Logo, goHome } from './components/TopBar.jsx';
 import StartPage from './components/StartPage.jsx';
 import Toasts from './components/Toasts.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import Coachmark from './components/Coachmark.jsx';
+import ConsentHost from './dialogs/ConsentDialog.jsx';
+import { comboFromEvent, firesInInput, isTypingTarget, keymapFor, shortcutById } from './shortcuts/customKeys.js';
 
 // 按需加载：三个模式与各对话框拆成独立 chunk，首屏只加载外壳
 const SettingsDialog = lazy(() => import('./dialogs/SettingsDialog.jsx'));
 const ExportDialog = lazy(() => import('./dialogs/ExportDialog.jsx'));
 const HelpDialog = lazy(() => import('./dialogs/HelpDialog.jsx'));
 const NewProjectDialog = lazy(() => import('./dialogs/NewProjectDialog.jsx'));
+const ShortcutsDialog = lazy(() => import('./dialogs/ShortcutsDialog.jsx'));
 const CreateMode = lazy(() => import('./modes/create/CreateMode.jsx'));
 const RefineMode = lazy(() => import('./modes/refine/RefineMode.jsx'));
 const LibraryMode = lazy(() => import('./modes/library/LibraryMode.jsx'));
@@ -33,14 +37,6 @@ function prefetchModes() {
 
 function ModeLoading() {
   return <div className="mode-loading"><span className="spinner" /><span>正在加载…</span></div>;
-}
-
-const MODE_KEYS = { 1: 'create', 2: 'refine', 3: 'library' };
-
-function isEditable(el) {
-  if (!el || !el.tagName) return false;
-  const tag = el.tagName.toLowerCase();
-  return tag === 'input' || tag === 'textarea' || tag === 'select' || !!el.isContentEditable;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,23 +139,33 @@ function Splash() {
 }
 
 // ---------------------------------------------------------------------------
-// 全局快捷键
+// 全局快捷键（走注册表 keymapFor('global')，支持自定义按键、e.code、输入法组合态与 ? 快捷键面板）
 // ---------------------------------------------------------------------------
+function anyDialogOpen(st) {
+  if (Object.values(st.dialogs || {}).some(Boolean)) return true;
+  return typeof document !== 'undefined' && !!document.querySelector('.modal-backdrop');
+}
+
 function useGlobalShortcuts() {
   useEffect(() => {
     const onKey = (e) => {
-      const st = useStore.getState();
-      const anyDialog = Object.values(st.dialogs).some(Boolean);
-      if (e.key === 'F1') {
-        e.preventDefault();
-        if (!anyDialog) st.openDialog('help');
-        return;
+      if (e.defaultPrevented || e.isComposing) return;
+      const combo = comboFromEvent(e);
+      if (!combo) return;
+      let def = keymapFor('global').get(combo) || null;
+      if (!def) {
+        // ?（以及自定义后的 help 快捷键）在所有模式下都能打开快捷键面板
+        const helpDef = shortcutById('help');
+        if (helpDef && Array.isArray(helpDef.keys) && helpDef.keys.includes(combo)) def = helpDef;
       }
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      const k = String(e.key).toLowerCase();
+      if (!def) return;
+      if (isTypingTarget(e.target) && !firesInInput(def, combo)) return;
 
-      // Ctrl+S 在输入框里也有效：打字时保存不会误伤内容
-      if (k === 's') {
+      const st = useStore.getState();
+      const anyDialog = anyDialogOpen(st);
+
+      // 保存（默认 Ctrl+S）在输入框里也有效：打字时保存不会误伤内容
+      if (def.id === 'save') {
         e.preventDefault();
         if (!st.project || e.repeat) return;
         st.saveNow().then(() => {
@@ -169,27 +175,53 @@ function useGlobalShortcuts() {
         return;
       }
 
-      if (isEditable(e.target) || anyDialog) return;
+      if (anyDialog) return;
+      if (e.repeat && !def.repeat) { e.preventDefault(); return; }
 
-      if (k === 'z' || k === 'y') {
-        if (!st.project) return;
-        e.preventDefault();
-        if (k === 'y' || e.shiftKey) st.redo(); else st.undo();
-        return;
-      }
-      if (k === 'e') {
-        e.preventDefault();
-        if (st.project) st.openDialog('export');
-        return;
-      }
-      if (k === ',') {
-        e.preventDefault();
-        st.openDialog('settings');
-        return;
-      }
-      if (MODE_KEYS[k] && st.project) {
-        e.preventDefault();
-        st.setMode(MODE_KEYS[k]);
+      switch (def.id) {
+        case 'helpCenter':
+          e.preventDefault();
+          st.openDialog('help');
+          break;
+        case 'help':
+          e.preventDefault();
+          st.openDialog('shortcuts');
+          break;
+        case 'undo':
+          if (!st.project) return;
+          e.preventDefault();
+          st.undo();
+          break;
+        case 'redo':
+          if (!st.project) return;
+          e.preventDefault();
+          st.redo();
+          break;
+        case 'export':
+          e.preventDefault();
+          if (st.project) st.openDialog('export');
+          break;
+        case 'settings':
+          e.preventDefault();
+          st.openDialog('settings');
+          break;
+        case 'modeCreate':
+          if (!st.project) return;
+          e.preventDefault();
+          st.setMode('create');
+          break;
+        case 'modeRefine':
+          if (!st.project) return;
+          e.preventDefault();
+          st.setMode('refine');
+          break;
+        case 'modeLibrary':
+          if (!st.project) return;
+          e.preventDefault();
+          st.setMode('library');
+          break;
+        default:
+          break;
       }
     };
     window.addEventListener('keydown', onKey);
@@ -198,7 +230,7 @@ function useGlobalShortcuts() {
 }
 
 // ---------------------------------------------------------------------------
-// 系统文件拖入：Electron 新版本渲染端读不到拖入文件的路径，改为引导到导入窗口
+// 系统文件拖入：优先通过 api.pathForFile 直接提取本机路径导入；取不到时再回退到导入窗口
 // ---------------------------------------------------------------------------
 function useExternalFileDrop() {
   const [dragging, setDragging] = useState(false);
@@ -232,7 +264,13 @@ function useExternalFileDrop() {
         st.toast('请先新建或打开一个项目，再导入素材', 'warn');
         return;
       }
-      st.toast('拖入的文件无法直接读取，已打开导入窗口，请在里面选择文件', 'info', 4500);
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+      const paths = files.map((f) => api.pathForFile(f)).filter(Boolean);
+      if (paths.length) {
+        importPaths(paths).catch((err) => useStore.getState().toast('导入失败：' + err.message, 'error'));
+        return;
+      }
+      st.toast('拖入的文件无法直接读取路径，已打开导入窗口，请在里面选择文件', 'info', 4500);
       importFilesDialog().catch((err) => useStore.getState().toast('导入失败：' + err.message, 'error'));
     };
     // 捕获阶段复位提示：内层模块 stopPropagation 时冒泡阶段收不到 drop
@@ -258,8 +296,8 @@ function DropHint({ hasProject }) {
     <div className="drop-hint" aria-hidden="true">
       <div className="drop-hint-card">
         <Icon name="upload" size={26} />
-        <b>{hasProject ? '松开后打开导入窗口' : '请先打开一个项目'}</b>
-        <span>{hasProject ? '系统限制无法直接读取拖入的文件，需要在导入窗口里再选一次' : '打开或新建项目后，就可以导入素材了'}</span>
+        <b>{hasProject ? '松开即可导入素材' : '请先打开一个项目'}</b>
+        <span>{hasProject ? '视频、图片和音频会直接加入当前项目的素材箱' : '打开或新建项目后，就可以导入素材了'}</span>
       </div>
     </div>
   );
@@ -283,6 +321,7 @@ function Dialogs() {
     <Suspense fallback={null}>
       {dialogs.settings && <SettingsDialog initialTab={typeof dialogs.settings === 'string' ? dialogs.settings : undefined} onClose={() => closeDialog('settings')} />}
       {dialogs.help && <HelpDialog onClose={() => closeDialog('help')} />}
+      {dialogs.shortcuts && <ShortcutsDialog onClose={() => closeDialog('shortcuts')} />}
       {dialogs.newProject && <NewProjectDialog onClose={() => closeDialog('newProject')} />}
       {dialogs.export && hasProject && <ExportDialog onClose={() => closeDialog('export')} />}
     </Suspense>
@@ -302,6 +341,12 @@ export default function App() {
     started.current = true;
     useStore.getState().init();
     prefetchModes();
+  }, []);
+
+  useEffect(() => {
+    const onOpenShortcuts = () => useStore.getState().openDialog('shortcuts');
+    window.addEventListener('ff:open-shortcuts', onOpenShortcuts);
+    return () => window.removeEventListener('ff:open-shortcuts', onOpenShortcuts);
   }, []);
 
   useEffect(() => { if (projectId) setLibraryOnly(false); }, [projectId]);
@@ -347,6 +392,7 @@ export default function App() {
       <div className="app-shell">
         {body}
         <Dialogs />
+        <ConsentHost />
         <div className={'shell-corner' + (projectId || libraryOnly ? ' with-status' : '') + (projectId && mode === 'create' ? ' avoid-pace' : '')}>
           <Toasts />
         </div>

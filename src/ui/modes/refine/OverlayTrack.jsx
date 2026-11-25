@@ -24,7 +24,7 @@ export const OverlayBlock = memo(function OverlayBlock({ ov, asset, start, dur, 
       className={cls}
       style={{ left, width, height }}
       data-ov-id={ov.id}
-      title={`画中画：${name}\n${start.toFixed(2)}s 起 · ${dur.toFixed(2)} 秒\n拖动改位置（上下拖可换轨），拖边缘裁剪`}
+      title={`画中画：${name}\n${start.toFixed(2)}s 起 · ${dur.toFixed(2)} 秒\n${locked ? '已锁定' : '拖动改位置（上下拖可换轨），拖边缘裁剪'}`}
       onPointerDown={(e) => onDown(e, ov.id, 'body')}
       onContextMenu={(e) => onCtx(e, ov.id)}
     >
@@ -53,6 +53,7 @@ function OverlayTrack({ project, track, pps, height, tools, onMenu, flags, viewS
     if (!ov) return;
     selectOverlay(id);
     if (fl && fl.locked) { useStore.getState().toast('该轨道已锁定，先在轨道头解锁'); return; }
+    if (ov.locked) { useStore.getState().toast('该画中画已锁定，先在属性面板或右键解锁'); return; }
     const asset = assets[ov.assetId];
     const still = !asset || asset.kind === 'image' || ov.kind === 'image' || ov.kind === 'sticker';
     const sp = Number(ov.speed) > 0 ? Number(ov.speed) : 1;
@@ -122,7 +123,7 @@ function OverlayTrack({ project, track, pps, height, tools, onMenu, flags, viewS
             pps={pps}
             height={height - 8}
             selected={selectedId === o.id}
-            locked={flags && flags.locked}
+            locked={!!((flags && flags.locked) || o.locked)}
             moveTo={d && d.track !== track ? d.track : null}
             onDown={onDown}
             onCtx={onCtx}

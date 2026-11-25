@@ -4,9 +4,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
-const { run } = require('../lib/proc.cjs');
+const { run, spawnProc, killTree } = require('../lib/proc.cjs');
 const os = require('node:os');
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 let ff = null;
 try { ff = require('../lib/ff.cjs'); } catch { ff = null; }
 // 编码器选择（契约 C12，media 包提供）；模块缺失或出错时回退到旧的硬件探测 + libx264
@@ -115,6 +115,7 @@ function volumeExpr(keys) {
 function segmentFilter(inputIndex, seg, label) {
   const parts = ['aresample=48000', 'aformat=channel_layouts=stereo'];
   if (seg.denoise) parts.push('afftdn=nf=-25');
+  parts.push('asetpts=PTS-STARTPTS');
   if (seg.speedParts && seg.speedParts.length > 1) {
     // 曲线变速：按源顺序分段 atrim + atempo 后 concat；倒放时再整体 areverse
     const sp = seg.speedParts.slice().sort((a, b) => a.srcIn - b.srcIn);
@@ -133,7 +134,6 @@ function segmentFilter(inputIndex, seg, label) {
   }
   // 常速：时间戳归零 → 倒放（areverse 后按采样重建时间戳）→ 保调变速 → 按时间线段长精确截齐
   const retimed = seg.reverse || Math.abs(seg.speed - 1) > 1e-6;
-  if (retimed) parts.push('asetpts=PTS-STARTPTS');
   if (seg.reverse) parts.push('areverse', 'asetpts=N/SR/TB');
   // atempo 只改速度不改音调（保调变速）
   for (const t of atempoChain(seg.speed)) parts.push(`atempo=${num(t, 6)}`);
@@ -224,10 +224,12 @@ function buildExportArgs(opts = {}) {
   const args = ['-hide_banner', '-y', '-loglevel', 'error'];
   // 进度走 stdout（frame= / out_time_us= / progress=end），-nostats 让 stderr 只留真正的错误信息
   if (opts.progress) args.push('-nostats', '-progress', 'pipe:1');
-  if (!audioOnly) {
+  if (audioOnly) {
+    args.push('-nostdin');
+  } else {
     args.push('-thread_queue_size', String(FRAME_QUEUE), '-f', 'image2pipe', '-framerate', String(fps), '-c:v', 'mjpeg', '-i', '-');
   }
-  // 注：不能加 -nostdin（视频帧走 stdin）
+  // 注：视频导出不能加 -nostdin（视频帧走 stdin）
 
   if (gif) {
     // GIF：两遍调色板（palettegen + paletteuse），无声
@@ -448,18 +450,6 @@ function textsToSrt(texts) {
 
 // ───────────────────────── 进程与会话 ─────────────────────────
 
-function killTree(child) {
-  if (!child || child.exitCode != null || child.signalCode != null) return;
-  if (process.platform === 'win32' && child.pid) {
-    try {
-      const k = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-      k.on('error', () => { try { child.kill('SIGKILL'); } catch {} });
-      return;
-    } catch {}
-  }
-  try { child.kill('SIGKILL'); } catch {}
-}
-
 function rmQuiet(p) {
   try { fs.rmSync(p, { force: true }); } catch {}
 }
@@ -554,16 +544,27 @@ function creditsPathFor(finalPath) {
   return finalPath.replace(/\.[^.\\/]+$/, '') + '.credits.txt';
 }
 
-async function renameWithRetry(from, to) {
+async function renameWithRetry(from, to, isAborted) {
   let lastErr;
   for (let i = 0; i < 8; i++) {
+    if (typeof isAborted === 'function' && isAborted()) throw cancelledError();
     try {
-      if (fs.existsSync(to)) fs.rmSync(to, { force: true });
       fs.renameSync(from, to);
       return;
     } catch (e) {
       lastErr = e;
-      await sleep(250);
+      if ((e.code === 'EEXIST' || e.code === 'EPERM') && fs.existsSync(from) && fs.existsSync(to)) {
+        try {
+          if (typeof isAborted === 'function' && isAborted()) throw cancelledError();
+          fs.rmSync(to, { force: true });
+          fs.renameSync(from, to);
+          return;
+        } catch (e2) {
+          if (e2 && e2.code === 'CANCELLED') throw e2;
+          lastErr = e2;
+        }
+      }
+      if (i < 7) await sleep(250);
     }
   }
   const code = lastErr && lastErr.code;
@@ -664,7 +665,9 @@ module.exports = function register({ handle, ctx }) {
   function armIdle(session) {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.idleTimer = setTimeout(() => {
-      fail(session, new Error('导出中断：长时间没有收到画面帧，已自动停止'));
+      fail(session, new Error(session.audioOnly
+        ? '导出中断：长时间没有收到结束指令，已自动停止'
+        : '导出中断：长时间没有收到画面帧，已自动停止'));
     }, IDLE_TIMEOUT_MS);
     if (session.idleTimer.unref) session.idleTimer.unref();
   }
@@ -701,8 +704,8 @@ module.exports = function register({ handle, ctx }) {
     try { fs.mkdirSync(path.dirname(finalPath), { recursive: true }); } catch (e) {
       throw new Error(`无法创建导出目录：${e.message}`);
     }
-    // 先写到同目录的临时文件，成功后再改名：中途失败或取消不会留下半个视频
-    const partPath = finalPath + '.part.' + format;
+    // 先写到同目录的唯一临时文件，成功后再改名：中途失败、硬件回退或并发导出不会互相删掉临时文件
+    const partPath = `${finalPath}.${crypto.randomBytes(4).toString('hex')}.part.${format}`;
     rmQuiet(partPath);
     const duration = total / f;
     const br = Math.max(0, Math.round(Number(bitrate) || 0));
@@ -728,7 +731,7 @@ module.exports = function register({ handle, ctx }) {
 
     let child;
     try {
-      child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawnProc(ffmpeg, args);
     } catch (e) {
       throw new Error(`无法启动 ffmpeg：${e.message}`);
     }
@@ -785,7 +788,10 @@ module.exports = function register({ handle, ctx }) {
     });
     child.stdout.on('data', feed);
     child.stdin.on('error', (e) => { session.stdinError = e; });
+    if (audioOnly) { try { child.stdin.end(); } catch {} }
     session.exited.then((code) => {
+      // 仅音频导出不需要渲染端送帧，短音频经常在 export:end 到达前就已正常编码完成（退出码 0）
+      if (session.audioOnly && code === 0) return;
       // 在 end 之前进程就退出 → 失败
       if (!session.ending && !session.settled) {
         fail(session, exitError(session, code, '导出失败：编码器意外退出'));
@@ -804,7 +810,8 @@ module.exports = function register({ handle, ctx }) {
     session.job = ctx.jobs.get ? ctx.jobs.get(jobId) : null;
     sessions.set(jobId, session);
     liveSessions.add(session);
-    if (!audioOnly) armIdle(session);
+    // 仅音频会话同样挂空闲超时，避免渲染端崩溃或断连后孤儿会话长期残留 .part 文件
+    armIdle(session);
     if (session.job) {
       const hw = pick.hw ? `（${pick.label || '硬件加速'}）` : '';
       const note = missing.length ? `已跳过缺失的音频：${missing.slice(0, 3).join('、')}${missing.length > 3 ? ' 等' : ''}` : audioOnly ? '仅导出音频' : `共 ${total} 帧${hw}`;
@@ -817,13 +824,24 @@ module.exports = function register({ handle, ctx }) {
   /** 导出当前帧为 PNG：渲染端传 PNG 数据（data）+ 时刻 t，保存到 outPath（缺省为系统图片目录） */
   async function saveSnapshot(payload) {
     const buf = toBuffer(payload.data);
-    if (!buf || buf.length < 8 || buf[0] !== 0x89 || buf[1] !== 0x50) throw new Error('截图数据不是 PNG 格式');
+    if (!buf || buf.length < 8 || !buf.subarray(0, 8).equals(PNG_SIG)) throw new Error('截图数据不是 PNG 格式');
     let out = typeof payload.outPath === 'string' && path.isAbsolute(payload.outPath) ? payload.outPath : null;
     if (!out) {
-      const dir = path.join(os.homedir(), 'Pictures', '镜流截图');
+      let picturesDir = path.join(os.homedir(), 'Pictures');
+      if (process.versions && process.versions.electron) {
+        try {
+          const electron = require('electron');
+          if (electron && electron.app && typeof electron.app.getPath === 'function') {
+            const p = electron.app.getPath('pictures');
+            if (p) picturesDir = p;
+          }
+        } catch {}
+      }
+      const dir = path.join(picturesDir, '镜流截图');
       fs.mkdirSync(dir, { recursive: true });
       const t = Math.max(0, Number(payload.t) || 0);
-      out = path.join(dir, `frame-${String(payload.projectId || 'project').slice(0, 24)}-${t.toFixed(2).replace('.', '_')}s-${Date.now()}.png`);
+      const safeId = String(payload.projectId || 'project').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'project';
+      out = path.join(dir, `frame-${safeId}-${t.toFixed(2).replace('.', '_')}s-${Date.now()}.png`);
     }
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, buf);
@@ -881,6 +899,7 @@ module.exports = function register({ handle, ctx }) {
     if (session.error) throw session.error;
     if (session.ending) throw new Error('导出正在收尾，请稍候');
     await session.writeChain;
+    if (session.settled) throw session.error || cancelledError();
     if (session.error) throw session.error;
     session.ending = true;
     if (session.idleTimer) clearTimeout(session.idleTimer);
@@ -895,19 +914,28 @@ module.exports = function register({ handle, ctx }) {
 
     // 收尾最多等 10 分钟（大文件 + faststart 需要重写文件）
     const code = await raceTimeout(session.exited, 10 * 60 * 1000, 'timeout');
-    if (session.settled && session.error) throw session.error;
+    if (session.settled) throw session.error || cancelledError();
     try {
       if (code === 'timeout') throw new Error('导出收尾超时，请重试');
       if (code !== 0) throw exitError(session, code, '导出失败：编码器出错');
       if (!fs.existsSync(session.partPath)) throw new Error('导出失败：没有生成输出文件');
-      await renameWithRetry(session.partPath, session.finalPath);
+      await renameWithRetry(session.partPath, session.finalPath, () => session.settled);
     } catch (err) {
+      if (session.settled) throw session.error || err;
       fail(session, err);
       throw err;
     }
+    if (session.settled) {
+      rmQuiet(session.finalPath);
+      throw session.error || cancelledError();
+    }
     const size = fs.statSync(session.finalPath).size;
     const probed = await probeDuration(session.finalPath);
-    const duration = probed != null ? probed : session.frames / session.fps;
+    if (session.settled) {
+      rmQuiet(session.finalPath);
+      throw session.error || cancelledError();
+    }
+    const duration = probed != null ? probed : (session.audioOnly ? session.duration : (session.fps ? session.frames / session.fps : 0));
     const result = {
       path: session.finalPath,
       size,
@@ -938,6 +966,10 @@ module.exports = function register({ handle, ctx }) {
       } catch (e) {
         result.creditsError = `署名文件写入失败：${e.message}`;
       }
+    }
+    if (session.settled) {
+      rmQuiet(session.finalPath);
+      throw session.error || cancelledError();
     }
     if (typeof ctx.registerMediaPath === 'function') ctx.registerMediaPath(session.finalPath);
     if (session.failedEncoder) noteEncoderFailed(ctx.paths && ctx.paths.ffmpeg, session.failedEncoder);

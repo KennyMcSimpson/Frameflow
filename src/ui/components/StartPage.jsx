@@ -217,44 +217,47 @@ function ProjectCard({ item, nonce, busy, isLast, onOpen, onMenu }) {
   return (
     <div
       className={'proj-card' + (busy ? ' busy' : '')}
-      role="button"
-      tabIndex={0}
-      title={`打开「${item.name}」`}
-      onClick={() => onOpen(item)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(item); }
-        else if (e.key === 'ContextMenu') { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); onMenu(item, r.left + 24, r.top + 24); }
-      }}
+      style={{ position: 'relative' }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(item, e.clientX, e.clientY); }}
     >
-      <div className="proj-thumb">
-        {src
-          ? <img src={src} alt="" draggable={false} onError={() => setBroken(true)} />
-          : <span className="proj-thumb-empty"><Icon name="film" size={26} stroke={1.3} /></span>}
-        {duration > 0 && <span className="proj-duration mono">{fmtTime(duration, false)}</span>}
-        {isLast && <span className="proj-last">上次打开</span>}
-        {busy && <span className="proj-loading"><Spinner /></span>}
-      </div>
-      <div className="proj-info">
-        <div className="proj-text">
-          <div className="proj-name ellipsis">{item.name || '未命名项目'}</div>
-          <div className="proj-meta ellipsis">
-            {clips > 0 ? `${clips} 个片段` : '时间线为空'}
-            <span className="proj-meta-sep">·</span>
-            {relativeTime(item.updatedAt) || '时间未知'}
+      <button
+        type="button"
+        title={`打开「${item.name}」`}
+        onClick={() => onOpen(item)}
+        onKeyDown={(e) => {
+          if (e.key === 'ContextMenu') { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); onMenu(item, r.left + 24, r.top + 24); }
+        }}
+        style={{ display: 'block', width: '100%', padding: 0, margin: 0, border: 0, background: 'none', color: 'inherit', textAlign: 'left', cursor: 'inherit' }}
+      >
+        <div className="proj-thumb">
+          {src
+            ? <img src={src} alt="" draggable={false} onError={() => setBroken(true)} />
+            : <span className="proj-thumb-empty"><Icon name="film" size={26} stroke={1.3} /></span>}
+          {duration > 0 && <span className="proj-duration mono">{fmtTime(duration, false)}</span>}
+          {isLast && <span className="proj-last">上次打开</span>}
+          {busy && <span className="proj-loading"><Spinner /></span>}
+        </div>
+        <div className="proj-info" style={{ paddingRight: 38 }}>
+          <div className="proj-text">
+            <div className="proj-name ellipsis">{item.name || '未命名项目'}</div>
+            <div className="proj-meta ellipsis">
+              {clips > 0 ? `${clips} 个片段` : '时间线为空'}
+              <span className="proj-meta-sep">·</span>
+              {relativeTime(item.updatedAt) || '时间未知'}
+            </div>
           </div>
         </div>
-        <button
-          type="button"
-          className="proj-more"
-          title="更多操作"
-          aria-label="更多操作"
-          onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); onMenu(item, r.left, r.bottom + 4); }}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <Icon name="dots" size={16} stroke={2.6} />
-        </button>
-      </div>
+      </button>
+      <button
+        type="button"
+        className="proj-more"
+        title="更多操作"
+        aria-label={`「${item.name || '未命名项目'}」更多操作`}
+        style={{ position: 'absolute', right: 6, bottom: 13 }}
+        onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); onMenu(item, r.left, r.bottom + 4); }}
+      >
+        <Icon name="dots" size={16} stroke={2.6} />
+      </button>
     </div>
   );
 }

@@ -4,8 +4,42 @@ const { requestJson, trimSlash, splitDataUrl, VideogenError } = require('./util.
 
 const DEFAULT_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_MODEL = 'veo-3.1-fast-generate-preview';
-const base = (cfg) => trimSlash(cfg.baseUrl) || DEFAULT_BASE;
+const base = (cfg) => trimSlash(cfg && cfg.baseUrl) || DEFAULT_BASE;
 const auth = (cfg) => ({ 'x-goog-api-key': cfg.key });
+
+function validateTaskId(taskId) {
+  const raw = String(taskId || '');
+  if (!raw || /\s/.test(raw)) throw new VideogenError('Veo 任务 ID 无效', 'BAD_TASK');
+  if (/[?#\\]/.test(raw) || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) || raw.startsWith('//')) {
+    throw new VideogenError('Veo 任务 ID 无效', 'BAD_TASK');
+  }
+  const clean = raw.replace(/^\/+/, '');
+  if (!clean || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(clean)) throw new VideogenError('Veo 任务 ID 无效', 'BAD_TASK');
+  let decoded;
+  try {
+    decoded = decodeURIComponent(clean);
+  } catch {
+    throw new VideogenError('Veo 任务 ID 编码无效', 'BAD_TASK');
+  }
+  if (/\s|[?#\\]/.test(decoded) || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(decoded)) {
+    throw new VideogenError('Veo 任务 ID 无效', 'BAD_TASK');
+  }
+  const segs = decoded.split('/');
+  if (segs.some((s) => !s || s === '.' || s === '..')) {
+    throw new VideogenError('Veo 任务 ID 包含非法路径', 'BAD_TASK');
+  }
+  return clean;
+}
+
+function isSameOriginAsBase(urlStr, cfg) {
+  try {
+    const target = new URL(String(urlStr || ''));
+    const b = new URL(base(cfg));
+    return (target.protocol === 'http:' || target.protocol === 'https:') && target.origin === b.origin;
+  } catch {
+    return false;
+  }
+}
 
 module.exports = {
   id: 'veo',
@@ -33,7 +67,7 @@ module.exports = {
     const model = cfg.model || DEFAULT_MODEL;
     const r = await requestJson(fetch, `${base(cfg)}/models/${encodeURIComponent(model)}:predictLongRunning`, { method: 'POST', headers: auth(cfg), body: this.buildBody(input), signal });
     if (!r || !r.name) throw new VideogenError('Veo 未返回任务 ID');
-    return { taskId: r.name };
+    return { taskId: validateTaskId(r.name) };
   },
 
   parseStatus(r) {
@@ -50,12 +84,15 @@ module.exports = {
   },
 
   async poll(taskId, cfg, { fetch, signal }) {
-    return this.parseStatus(await requestJson(fetch, `${base(cfg)}/${String(taskId).replace(/^\/+/, '')}`, { headers: auth(cfg), signal }));
+    const cleanId = validateTaskId(taskId);
+    const url = `${base(cfg)}/${cleanId}`;
+    if (!isSameOriginAsBase(url, cfg)) throw new VideogenError('Veo 任务查询地址不受信任', 'UNTRUSTED_URL');
+    return this.parseStatus(await requestJson(fetch, url, { headers: auth(cfg), signal }));
   },
 
   async fetchResult(taskId, cfg, deps, last) {
     if (!last || !last.url) throw new VideogenError('Veo 未返回视频地址');
-    return { url: last.url, headers: auth(cfg) };
+    return isSameOriginAsBase(last.url, cfg) ? { url: last.url, headers: auth(cfg) } : { url: last.url };
   },
 
   async test(cfg, { fetch, signal }) {
