@@ -210,22 +210,31 @@ test('真实编码：多段 + 变速 + 0 段静音', { skip: !haveBins && '缺�
 
 function makeCtx() {
   const events = [];
+  const listeners = new Set();
   const handlers = {};
-  const jobs = createJobs((ev, data) => events.push({ ev, data }));
+  const jobs = createJobs((ev, data) => {
+    const item = { ev, data };
+    events.push(item);
+    for (const fn of [...listeners]) fn(item);
+  });
   const registered = [];
   const ctx = { paths: { ffmpeg, ffprobe }, jobs, registerMediaPath: (p) => registered.push(p), send() {} };
   registerExport({ handle: (ch, fn) => { handlers[ch] = fn; }, ctx });
   const waitJob = (jobId, timeoutMs = 30000) => new Promise((resolve, reject) => {
-    const hit = () => events.find((x) => (x.ev === 'job:done' || x.ev === 'job:error') && x.data.jobId === jobId);
-    const existing = hit();
+    const isMatch = (x) => (x.ev === 'job:done' || x.ev === 'job:error') && x.data.jobId === jobId;
+    const existing = events.find(isMatch);
     if (existing) { resolve(existing); return; }
-    const deadline = Date.now() + timeoutMs;
-    const iv = setInterval(() => {
-      const e = hit();
-      if (e) { clearInterval(iv); resolve(e); return; }
-      if (Date.now() > deadline) { clearInterval(iv); reject(new Error(`waitJob(${jobId}) 超时（${timeoutMs}ms）`)); }
-    }, 20);
-    if (iv.unref) iv.unref();
+    const timer = setTimeout(() => {
+      listeners.delete(onEvent);
+      reject(new Error(`waitJob(${jobId}) 超时（${timeoutMs}ms）`));
+    }, timeoutMs);
+    const onEvent = (item) => {
+      if (!isMatch(item)) return;
+      clearTimeout(timer);
+      listeners.delete(onEvent);
+      resolve(item);
+    };
+    listeners.add(onEvent);
   });
   return { handlers, events, waitJob, registered };
 }
