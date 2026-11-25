@@ -19,22 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-Party Components Notice
-
-This MIT License applies to the original source code of Frameflow Studio.
-Bundled and on-demand third-party software, libraries, audio, and sample media
-remain governed by their respective licenses, including:
-
-- FFmpeg (dynamically linked Windows x64 LGPL v3 shared build, unmodified)
-- Electron, Chromium, React, Zustand, and ported open-source utilities
-  (MIT, ISC, and BSD-3-Clause licenses)
-- Built-in CC0 1.0 music (FreePD) and synthesized sound effects
-- Sample project video clips (Mixkit Free License)
-- On-demand optional tools (yt-dlp under Unlicense; whisper.cpp and Whisper
-  ggml models under MIT)
-
-See `build/THIRD_PARTY_LICENSES.txt` and `docs/licenses/sample-media.md` for
-full license texts, attributions, and source links.
