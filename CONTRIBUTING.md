@@ -1,14 +1,14 @@
-# Contributing to Frameflow Studio
+# Contributing to Frameflow
 
-Thank you for your interest in contributing to **Frameflow Studio**! Whether you are fixing a timeline edge case, adding a test, improving export reliability, or proposing a new provider adapter, we welcome clean, well-tested pull requests.
+Thank you for your interest in contributing to **Frameflow**! Whether you are fixing a timeline edge case, adding a test, improving export reliability, or proposing a new provider adapter, we welcome clean, well-tested pull requests.
 
 ## Development Setup (Windows x64)
 
 1. Install **Node.js 22+** and Git on Windows 10/11 (x64).
 2. Fork and clone the repository:
    ```powershell
-   git clone https://github.com/KennyMcSimpson/frameflow-studio.git
-   cd frameflow-studio
+   git clone https://github.com/KennyMcSimpson/Frameflow.git
+   cd Frameflow
    npm ci
    ```
 3. (Optional) Fetch the sample project footage and built-in CC0 audio library:
@@ -27,7 +27,7 @@ Please review [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before making structu
 
 - **Plain JavaScript Only** — Renderer modules (`src/`) use ESM (`.js`/`.jsx`); Electron main & preload (`electron/`) use CommonJS (`.cjs`). Do not introduce TypeScript build steps.
 - **Keep `src/engine/` Pure** — Never import DOM, browser, or Electron APIs into `src/engine/`. All editing mutations should go through atomic `applyOps()` in `src/engine/ops.js` with undo/redo coverage.
-- **Preserve the Security Boundary** — Keep `contextIsolation: true` and `sandbox: true`, never expose `ipcRenderer` or Node primitives to the renderer, validate `isTrustedSender(event)` on every IPC channel, and keep secrets encrypted via `safeStorage` (never returned in plaintext over IPC or printed to logs).
+- **Preserve the Security Boundary** — Keep `contextIsolation: true` and `sandbox: true`, never expose `ipcRenderer` or Node primitives to the renderer, validate `isTrustedSender(event)` on every IPC channel, enforce `ALLOWED_OPEN_EXT` and `urlSafety.cjs` SSRF/origin checks on path and network boundaries, and keep secrets encrypted via `safeStorage` (never returned in plaintext over IPC or printed to logs).
 - **Single Compositor** — Visual effects, color looks, transforms, and text rendering must stay unified in `src/render/compositor.js` so preview and export remain consistent.
 - **LGPL FFmpeg Hygiene** — Never bundle GPL-licensed `ffmpeg-static` / `ffprobe-static` binaries into release packages (`app.asar` or `extraResources`). Release builds strictly use the SHA-256-pinned LGPL v3 shared FFmpeg fetched by `scripts/fetch-ffmpeg.mjs`.
 - **UI Copy** — Existing in-app UI copy is in Simplified Chinese (`zh-CN`); keep user-facing error messages clear, actionable, and consistent with the surrounding UI.
@@ -37,7 +37,7 @@ Please review [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before making structu
 Run the relevant verification suite locally and include the results in your PR description:
 
 ```powershell
-# 1. Run all unit & integration tests
+# 1. Run all unit & integration tests (56 suites, 694 offline tests)
 npm test
 
 # 2. Verify production renderer bundle builds cleanly

@@ -1,16 +1,20 @@
-# Frameflow Studio Architecture
+# Frameflow Architecture
 
-This document describes the current v2.0 architecture of Frameflow Studio across its Electron main process, sandboxed React renderer, pure editing engine, media/export pipeline, security boundary, and Windows packaging checks.
+This document describes the current v2.0 architecture of Frameflow across its Electron main process, sandboxed React renderer, pure editing engine, media/export pipeline, security boundary, and Windows packaging checks.
 
 <p align="center">
-  <img src="images/architecture.svg" alt="Frameflow Studio Layered Electron Security and Media Architecture" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/architecture-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="images/architecture-light.svg" />
+    <img src="images/architecture-dark.svg" alt="Frameflow Layered Electron Security and Media Architecture" width="100%" />
+  </picture>
 </p>
 
 ---
 
 ## 1. High-Level Process Model
 
-Frameflow Studio follows a strict two-process Electron 45 architecture written in plain JavaScript (ESM in `src/`, CommonJS in `electron/`):
+Frameflow follows a strict two-process Electron 45 architecture written in plain JavaScript (ESM in `src/`, CommonJS in `electron/`):
 
 | Process | Entry Point | Runtime & Key Responsibilities |
 | --- | --- | --- |
@@ -76,6 +80,7 @@ Preview playback and final export share one rendering pipeline (`compositor.js`)
 - **`encoders.cjs`** — Real 1-frame hardware encoder probing (cached weekly in `<userData>/encoders.json`) prioritized as:
   `h264_nvenc` > `h264_qsv` > `h264_amf` > `h264_mf` (HW) > `libx264` > `libopenh264` / `h264_mf` (SW). Tracks runtime failures and temporarily demotes flaky GPU encoders after repeated failures.
 - **`shotdetect.cjs` & `analyzer.cjs`** — Single-pass FFmpeg `128×72` `rgb24` stream processed inside Node `worker_threads` (loaded via eval-compatible source so it works inside `app.asar`). Implements PySceneDetect-inspired adaptive/content/threshold cut detection, linear-blend dissolve detection, flash filtering, keyframe sharpness/exposure scoring, MMCQ dominant color extraction (`quantize.js` / Color Thief), and audio loudness/beat peak detection.
+- **`urlSafety.cjs`** — Outbound URL and UNC path hardening: blocks loopback, RFC 1918 private, link-local, CGNAT, and mapped/reserved IPv6 hosts (`assertSafePublicUrl`), performs async DNS resolution verification (`assertSafePublicUrlAsync`) to defeat DNS rebinding/private-domain SSRF, and enforces strict trusted-host credential scoping (`isTrustedHostForBase`).
 - **`settings.cjs`** — Atomic temp-file + `fsync` + rename persistence with `.bak` recovery and `.corrupt-<timestamp>` quarantine on parse failure. API keys are encrypted via Electron `safeStorage` into `<userData>/secrets.json`.
 - **`jobs.cjs`, `proc.cjs`, `log.cjs`** — Abortable job registry streaming `job:progress` / `job:done` / `job:error`, tracked subprocess spawning with tree termination on quit (`proc.killAll()`), and redacted rotating logs (`log.redact()`).
 
@@ -83,20 +88,21 @@ Preview playback and final export share one rendering pipeline (`compositor.js`)
 
 ## 4. Security & Reliability Controls
 
-Frameflow Studio implements defense-in-depth aligned with the Electron security checklist:
+Frameflow implements defense-in-depth aligned with the Electron security checklist:
 
 1. **BrowserWindow Isolation** — `contextIsolation: true`, `sandbox: true` (+ `app.enableSandbox()`), `nodeIntegration: false`, `nodeIntegrationInWorker: false`, `nodeIntegrationInSubFrames: false`, `webSecurity: true`, `allowRunningInsecureContent: false`, `webviewTag: false`, `navigateOnDragDrop: false`, `safeDialogs: true`.
 2. **Hardened Production CSP** — Declared in `src/index.html`: `default-src 'self'; script-src 'self'; connect-src 'self' ffmedia:; img-src 'self' data: blob: ffmedia: https:; media-src 'self' blob: ffmedia: https:; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'` (`connect-src` blocks direct renderer XHR/fetch/WebSocket calls to external APIs, while `img-src` and `media-src` permit `https:` for stock-media thumbnails and previews). Vite dev mode (`vite.config.mjs`) appends localhost HMR origins only during development.
 3. **IPC Sender Verification** — `isTrustedSender()` checks `event.senderFrame` has no parent frame and matches either the packaged `dist-renderer/` `file://` root or (in development only) a validated loopback `FF_DEV_URL`.
 4. **Scoped `ffmedia://` Media Protocol** — Serves local files with HTTP `Range` support (`206 Partial Content`) only if the canonicalized path is in `allowedMedia` or beneath `dataRoot`, `tmp`, or bundled `mediaRoots`; returns `403` otherwise.
 5. **Navigation, Permission & Shell Restrictions** — Blocks `<webview>`, redirects, and popup windows; only `https:` URLs pass to `shell.openExternal`; default-deny permission handlers allow only `clipboard-sanitized-write` and `fullscreen` from the main frame; USB/HID/serial device permissions are denied; `shell:openPath` enforces an 18-extension allowlist (`ALLOWED_OPEN_EXT`) with fail-closed `realpath` resolution, UNC path rejection, and trailing dot/space protection.
-6. **Hardened Electron Fuses** — Configured in `package.json` and audited post-build by `scripts/check-artifacts.mjs`:
+6. **Outbound SSRF & Credential Scoping** — Outbound main-process fetches across AI, video generation, stock download, ASR, and `yt-dlp` validate targets via `assertSafePublicUrlAsync` (blocking private/loopback/link-local/CGNAT/mapped IPv6 DNS records) and restrict authorization headers via `isTrustedHostForBase`.
+7. **Hardened Electron Fuses** — Configured in `package.json` and audited post-build by `scripts/check-artifacts.mjs`:
    - `runAsNode: false`
    - `enableNodeOptionsEnvironmentVariable: false`
    - `enableNodeCliInspectArguments: false`
    - `enableEmbeddedAsarIntegrityValidation: true`
    - `onlyLoadAppFromAsar: true`
-7. **Crash & Shutdown Resilience** — `running.lock` heartbeat detects unclean exits; `win.on('close')` warns about active jobs and awaits renderer flush (`app:flush` → `app:flushed`) before exit; repeated renderer or GPU crashes within 5 minutes offer a one-click software-rendering fallback (`hardwareAcceleration: false`).
+8. **Crash & Shutdown Resilience** — `running.lock` heartbeat detects unclean exits; `win.on('close')` warns about active jobs and awaits renderer flush (`app:flush` → `app:flushed`) before exit; repeated renderer or GPU crashes within 5 minutes offer a one-click software-rendering fallback (`hardwareAcceleration: false`).
 
 ---
 
@@ -117,11 +123,11 @@ Frameflow Studio implements defense-in-depth aligned with the Electron security 
 
 ```text
 npm run dist / dist:portable
-  1. scripts/fetch-ffmpeg.mjs   -> Downloads pinned BtbN win64-lgpl-shared FFmpeg, verifies SHA-256,
-                                   validates LGPL v3 config + required encoders/filters
-  2. vite build                 -> Compiles sandboxed renderer into dist-renderer/ (no sourcemaps)
-  3. scripts/gen-licenses.mjs   -> Generates build/THIRD_PARTY_LICENSES.txt and syncs license artifacts
-  4. electron-builder --win     -> Packages app.asar + extraResources (ffmpeg, licenses, sample-media, builtin-audio),
-                                   runs scripts/after-pack.cjs, flips 5 Electron Fuses, builds NSIS / Portable
+  1. scripts/fetch-ffmpeg.mjs    -> Downloads pinned BtbN win64-lgpl-shared FFmpeg, verifies SHA-256,
+                                    validates LGPL v3 config + required encoders/filters
+  2. vite build                  -> Compiles sandboxed renderer into dist-renderer/ (no sourcemaps)
+  3. scripts/gen-licenses.mjs    -> Generates build/THIRD_PARTY_LICENSES.txt and syncs license artifacts
+  4. electron-builder --win      -> Packages app.asar + extraResources (ffmpeg, licenses, sample-media, builtin-audio),
+                                    runs scripts/after-pack.cjs, flips 5 Electron Fuses, builds NSIS / Portable
   5. scripts/check-artifacts.mjs -> Read-only audit of fuses, LGPL FFmpeg, license files, ASAR hygiene, and size budgets
 ```

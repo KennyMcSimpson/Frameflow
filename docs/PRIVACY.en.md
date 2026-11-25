@@ -1,8 +1,8 @@
-# Frameflow Studio Privacy Notice
+# Frameflow Privacy Notice
 
 *English translation of [docs/PRIVACY.md](PRIVACY.md). Last updated: November 2026.*
 
-Frameflow Studio (the "Software") is a local desktop application that runs directly on your computer. Your projects, media assets, and exported videos are stored on your own device. We do not operate an account system, we do not run first-party servers, and we do not collect your personal information.
+Frameflow (the "Software") is a local desktop application that runs directly on your computer. Your projects, media assets, and exported videos are stored on your own device. We do not operate an account system, we do not run first-party servers, and we do not collect your personal information.
 
 ## What We Do Not Do
 

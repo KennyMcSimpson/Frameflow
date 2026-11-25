@@ -1,18 +1,18 @@
 # Changelog
 
-All notable changes to **Frameflow Studio** are documented in this file.
+All notable changes to **Frameflow** are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] — v2.0.1 Stabilization & Open-Source Release Prep
 
 ### Added
-- **Repository & Documentation Presence:** Native-English `README.md`, `docs/ARCHITECTURE.md`, `docs/PRIVACY.en.md`, `LICENSE` (MIT with third-party component notices), `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, and custom vector diagrams (`hero-banner.svg`, `workflow.svg`, `architecture.svg`).
-- **Continuous Integration & Full E2E Coverage:** Automated CI checks alongside unit tests (`tests/*.test.mjs`), renderer builds, smoke E2E, and full import-to-FFprobe export verification.
+- **Repository & Bilingual Documentation Presence:** Flagship English `README.md` and Simplified Chinese `README.zh-CN.md`, `docs/ARCHITECTURE.md`, `docs/PRIVACY.en.md`, standard MIT `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, and theme-adaptive light/dark vector diagrams (`hero-{dark,light}.svg`, `workflow-{dark,light}.svg`, `architecture-{dark,light}.svg`).
+- **Continuous Integration & Full E2E Coverage:** Automated CI checks alongside 56 Node unit/integration test suites (694 passing offline tests + 1 opt-in gated live network test), renderer builds, smoke E2E, and full import-to-FFprobe export verification.
 
 ### Changed & Stabilized
 - **Export Pipeline Reliability:** Stabilized Web Worker JPEG frame encoding (`jpegEncoder.worker.js`), bounded 32-frame backpressure into FFmpeg `image2pipe`, explicit BT.601 full-range → BT.709 limited-range color tagging, hardware encoder trial probing (`h264_nvenc`, `h264_qsv`, `h264_amf`, `h264_mf`), and automatic mid-export CPU fallback.
-- **Electron Security & Crash Hardening:** Enforced `contextIsolation` + `sandbox` + `app.enableSandbox()`, strict production CSP, `isTrustedSender` IPC validation, allowlisted `ffmedia://` streaming, blocked executable extensions in `shell:openPath`, `running.lock` heartbeat crash detection, graceful close-flush handling, and automated post-pack verification of all 5 Electron Fuses.
+- **Electron Security & Crash Hardening:** Enforced `contextIsolation` + `sandbox` + `app.enableSandbox()`, strict production CSP (`connect-src 'self' ffmedia:` with `https:` limited to `img-src`/`media-src` previews), `isTrustedSender` IPC validation, allowlisted `ffmedia://` streaming, 18-extension `ALLOWED_OPEN_EXT` allowlist with fail-closed `realpath`/UNC/trailing dot-or-space checks in `shell:openPath`, async DNS SSRF protection and trusted-host auth guards (`urlSafety.cjs`), `running.lock` heartbeat crash detection, graceful close-flush handling, and automated post-pack verification of all 5 Electron Fuses.
 - **LGPL v3 FFmpeg Packaging:** Replaced static GPL binaries in packaged releases with SHA-256-verified BtbN `win64-lgpl-shared` FFmpeg builds (`resources/ffmpeg/`), guarded by `scripts/after-pack.cjs` and `scripts/check-artifacts.mjs`.
 
 ## [2.0.0] — 2026-11

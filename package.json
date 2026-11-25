@@ -1,8 +1,8 @@
 {
-  "name": "frameflow-studio",
+  "name": "frameflow",
   "productName": "Frameflow",
   "version": "2.0.0",
-  "description": "AI-native desktop video creation, multi-track refinement, and shot breakdown workstation for Windows",
+  "description": "Frameflow - Offline-first AI video workstation for Windows with storyboard direction, multi-track refinement, shot breakdown library, and hardware-accelerated LGPL FFmpeg export.",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -13,11 +13,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/KennyMcSimpson/frameflow-studio.git"
+    "url": "https://github.com/KennyMcSimpson/Frameflow.git"
   },
-  "homepage": "https://github.com/KennyMcSimpson/frameflow-studio#readme",
+  "homepage": "https://github.com/KennyMcSimpson/Frameflow#readme",
   "bugs": {
-    "url": "https://github.com/KennyMcSimpson/frameflow-studio/issues"
+    "url": "https://github.com/KennyMcSimpson/Frameflow/issues"
   },
   "keywords": [
     "video-editor",
