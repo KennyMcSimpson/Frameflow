@@ -728,7 +728,7 @@ function toHex(r, g, b) {
 }
 function rgbDist(a, b) { return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2); }
 
-/** rgb24 像素 → ColorStats（SPEC §3.6）：亮度、对比、饱和、冷暖、色偏、5 个主色（MMCQ，彼此相差明显） */
+/** rgb24 像素 → ColorStats：亮度、对比、饱和、冷暖、色偏、5 个主色（MMCQ，彼此相差明显） */
 function statsFromRgb(buf) {
   const n = Math.floor(buf.length / 3);
   if (!n) return null;

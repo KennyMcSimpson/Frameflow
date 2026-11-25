@@ -1,5 +1,5 @@
 'use strict';
-// 主进程日志（契约 C7，路线图 P0-8 / C1）。自己实现，不依赖 electron，单测里可以直接 require。
+// 主进程日志。零依赖实现，不依赖 electron，单测里可以直接 require。
 // - 写到 <dir>/main.log；超过 2MB 轮转为 main.1.log … main.4.log，一共保留 5 份。
 // - 内存队列 + 异步追加，避免并发写坏文件；进程退出或致命错误时 flushSync() 同步落盘。
 // - 统一脱敏：sk- 开头的 Key、Bearer/Authorization、各类 key/token/secret 字段、用户目录换成 ~、

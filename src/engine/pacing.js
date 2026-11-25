@@ -1,4 +1,4 @@
-// 节奏：把「快/中/慢」或显式时长表换算为每个镜头的目标时长（CONTRACTS §B）。纯函数。
+// 节奏：把「快/中/慢」或显式时长表换算为每个镜头的目标时长。纯函数。
 import { LIMITS } from './model.js';
 import { clipDuration } from './timeline.js';
 

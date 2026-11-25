@@ -194,7 +194,7 @@ function validRow(v, maxRows) {
 function spansOverlap(a, b) { return a.start < b.end - 1e-6 && b.start < a.end - 1e-6; }
 
 /**
- * 把可能重叠的块分到多行，行号尽量稳定（契约 C18）。
+ * 把可能重叠的块分到多行，行号尽量稳定。
  * items: [{ id, start, end, row?, prefRow? }]
  *  - row：强偏好（工程里保存的行号，或用户刚拖到的行），这一行空着就一定放这里；
  *  - prefRow：弱偏好（上一次排布时所在的行），增删、挪动别的块时其它块不跳行；
@@ -272,7 +272,7 @@ export function filmFrameCount(width, thumbW) {
 }
 
 /**
- * 胶片条分块（契约 C5）：把片段块按 chunkW 像素切块，只返回 [fromChunk, toChunk] 范围内（看得见的）块。
+ * 胶片条分块：把片段块按 chunkW 像素切块，只返回 [fromChunk, toChunk] 范围内（看得见的）块。
  * 每块给出在块内的位置与对应的素材区间 [a, b]（倒放时从出点往回），以及要取的帧数 n。
  * 定格片段只有一块，区间退化为入点那一帧。
  */

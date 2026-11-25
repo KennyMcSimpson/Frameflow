@@ -10,9 +10,16 @@ const log = require('./log.cjs');
 const DEFAULTS = {
   dataRoot: '',
   ai: {
-    provider: 'auto', // 'auto' | 'codex' | 'openai' | 'local'
+    provider: 'auto', // 'auto' | 'api' | 'openai' | 'anthropic' | 'cli' | 'claude' | 'codex' | 'gemini' | 'local'
+    apiPreset: 'openai',
+    apiProtocol: 'openai',
+    cliAgent: 'claude',
+    claudePath: '',
+    claudeModel: '',
     codexPath: '',
     codexModel: '',
+    geminiPath: '',
+    geminiModel: '',
     openaiBaseUrl: 'https://api.openai.com/v1',
     openaiModel: 'gpt-4.1-mini',
     openaiVisionModel: '',
@@ -21,7 +28,7 @@ const DEFAULTS = {
   // 免 key 的来源排在前面（Pexels 已停止发放新 key）
   web: { maxDownloadSeconds: 180, preferredSources: ['commons', 'openverse', 'archive', 'nasa', 'pexels', 'pixabay', 'bilibili', 'youtube'] },
   export: { quality: 'high', fps: 30, resolution: 'full', folder: '', hwaccel: 'auto' },
-  ui: { lastProjectId: '', onboarded: false, scale: 1 },
+  ui: { lastProjectId: '', onboarded: false, scale: 1, locale: 'zh-CN' },
   general: { autosave: true, openLastProject: true },
   editing: { aspect: '16:9', fps: 30, imageDuration: 3, transitionDuration: 0.5, previewQuality: 'auto' },
   shortcuts: { overrides: {} },

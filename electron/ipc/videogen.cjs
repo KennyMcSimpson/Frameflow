@@ -1,5 +1,5 @@
 'use strict';
-// AI 真人视频生成 IPC（PLAN-v3 §4）：videogen:providers / test / generate / resume
+// AI 真人视频生成 IPC：videogen:providers / test / generate / resume
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -14,7 +14,7 @@ const RATIOS = new Set(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']);
 const REF_MAX_SIDE = 1920;
 const REF_MAX_BYTES = 2.5 * 1024 * 1024;
 const REF_DIRECT_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp']);
-// 素材上的 ai.provider 用平台名（契约 C3/C10）：Seedance 属于即梦
+// 素材上的 ai.provider 统一用平台名：Seedance 属于即梦
 const AI_PROVIDER = { seedance: 'jimeng' };
 
 function isCancel(e) { return !!(e && e.code === 'CANCELLED'); }
@@ -27,7 +27,7 @@ function projectAssets(proj) {
   return Array.isArray(proj.assets) ? proj.assets : Object.values(proj.assets);
 }
 
-/** 生成的视频导入为素材时的 AI 标记字段（契约 C3 / C10；纯函数，便于单测） */
+/** 生成的视频导入为素材时的 AI 标记字段（纯函数，便于单测） */
 function aiFields({ provider, model, prompt, taskId, name, createdAt } = {}) {
   const ap = aiProviderOf(provider);
   const ai = { provider: ap, createdAt: createdAt || new Date().toISOString() };
@@ -237,7 +237,7 @@ module.exports = function register({ handle, ctx }) {
       hasAudio: !!info.hasAudio,
       size: info.size || 0,
       thumb,
-      // 契约 C3 / C10：来源对象 + ai 标记 + 许可（旧代码按字符串 source==='videogen' 判断的，都已兼容 source.kind==='ai' 和 asset.ai）
+      // 来源对象 + ai 标记 + 许可（旧代码按字符串 source==='videogen' 判断的，都已兼容 source.kind==='ai' 和 asset.ai）
       ...aiFields({ provider: meta.provider, model, prompt: meta.prompt, taskId: meta.taskId, name }),
       credit: `${vg.getProvider(meta.provider).label} 生成`,
       tags: ['AI 生成'],

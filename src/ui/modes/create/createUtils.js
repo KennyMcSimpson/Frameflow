@@ -486,7 +486,7 @@ const usableAsset = (assets, id) => {
 
 /**
  * 素材本身的出处，只分三类：'ai'（AI 生成）、'stock'（免版权实拍/示例/内置素材）、'local'（用户自己挑的）。
- * 同时认旧写法（source 是字符串 'videogen' / 'stock'）和契约 C3 的对象写法（source.kind / asset.ai）。
+ * 同时认旧写法（source 是字符串 'videogen' / 'stock'）和对象写法（source.kind / asset.ai）。
  * 从网页或视频站下载的素材（kind 'web' / 'videosite'）算用户自己挑的：版权不明，也不能被「换一批实拍」自动替换。
  */
 export function assetOrigin(asset) {
@@ -501,7 +501,7 @@ export function assetOrigin(asset) {
 
 /**
  * 「没有连接 AI」类错误：AI 那边会退回本地规则，这不是真正的失败。
- * 任务通道有时会丢掉错误码，只剩中文提示，所以文案也要认（契约 C9）。
+ * 任务通道有时会丢掉错误码，只剩中文提示，所以文案也要认。
  */
 export function isNoAIError(e) {
   if (!e) return false;
@@ -516,7 +516,7 @@ export function isLocalOnlyAI(status) {
 }
 
 /**
- * 分镜当前画面来源，优先级见 PLAN-v3 §7：用户素材 > AI 视频 > 实拍 > 示意(previz)。
+ * 分镜当前画面来源优先级：用户素材 > AI 视频 > 实拍 > 示意(previz)。
  * 返回 { kind:'local'|'ai'|'stock'|'previz'|'none', asset }
  */
 export function shotSource(shot, assets) {

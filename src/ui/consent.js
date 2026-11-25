@@ -1,4 +1,4 @@
-// 视频站使用须知的同意（契约 C4，渲染端）。
+// 视频站使用须知的同意（渲染端）。
 // withConsent(fn)：先执行 fn；主进程报 NEED_CONSENT 时弹同意框，用户同意后记录（consent:grant）并重试一次；
 // 用户拒绝时抛 code='CONSENT_DECLINED' 的错误，调用方静默忽略即可（isConsentDeclined）。
 // 同意框由 dialogs/ConsentDialog.jsx 的 <ConsentHost /> 渲染；没挂载时退回系统确认框，保证功能可用。

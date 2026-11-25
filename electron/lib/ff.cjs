@@ -1,5 +1,5 @@
 'use strict';
-// ffmpeg / ffprobe 工具库（CONTRACTS §A）。
+// ffmpeg / ffprobe 工具库。
 // 注意：本文件不依赖 electron，只接收 paths 对象（{ ffmpeg, ffprobe, cache, thumbs?, waveforms? }），便于在 node 中测试。
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,7 +22,7 @@ const STATS_W = 32;
 const STATS_H = 18;
 const WAVE_RATE = 8000;
 const PROXY_MAX_SIDE = 1280;
-// 预览代理的关键帧间隔（帧）：拖动/跳转时最多解码 15 帧就能出画面（ROADMAP P0-6）
+// 预览代理的关键帧间隔（帧）：拖动/跳转时最多解码 15 帧就能出画面
 const PREVIEW_GOP = 15;
 // 胶片条取帧时间的取整粒度（秒）：1 帧@25fps，缩放时间线时缓存能命中
 const STRIP_STEP = 0.04;
@@ -422,7 +422,7 @@ async function frameAtHeight(paths, file, time, height, { signal, sig } = {}) {
 }
 
 /**
- * 胶片条取帧时间（纯函数，契约 C5）：在 [start, end]（缺省为整段）内均分 count 段，取每段中点，取整到 0.04 秒。
+ * 胶片条取帧时间（纯函数）：在 [start, end]（缺省为整段）内均分 count 段，取每段中点，取整到 0.04 秒。
  * 区间无效（定格片段 in === out）时每张都取起点那一帧。
  */
 function filmstripTimes(duration, count = 10, start, end) {
@@ -439,7 +439,7 @@ function filmstripTimes(duration, count = 10, start, end) {
 }
 
 /**
- * 胶片条（契约 C5）：返回 count 张定高图片路径。
+ * 胶片条：返回 count 张定高图片路径。
  * 每帧都有磁盘缓存，重复请求只做一次文件签名 + 若干次存在性检查；个别帧失败时用相邻成功的帧补位。
  * @param {{duration?:number, count?:number, height?:number, start?:number, end?:number, signal?:AbortSignal}} opts
  */
@@ -694,7 +694,7 @@ function parseFfTime(text) {
 
 /**
  * 兼容 / 预览代理：H.264 + AAC 的 mp4（音频文件则为仅 AAC 的 mp4/m4a），+faststart。
- * - 画面最长边 maxSide（默认 1280）；关键帧间隔固定 15 帧、不用 B 帧，拖动预览时跳转更快（ROADMAP P0-6）。
+ * - 画面最长边 maxSide（默认 1280）；关键帧间隔固定 15 帧、不用 B 帧，拖动预览时跳转更快。
  * - 编码器按 encoders.cjs 的优先级选（显卡优先，没有就用 CPU）；某个编码器中途失败自动换下一个。
  * @param {{signal?:AbortSignal, onProgress?:(p:number)=>void, maxSide?:number, quality?:'high'|'standard'|'small'|'proxy',
  *          preferHw?:boolean, gop?:number, purpose?:'preview'|'proxy'|'export'|'videogen'}} [opts]
@@ -787,7 +787,7 @@ async function makeProxy(paths, file, outPath, { signal, onProgress, maxSide = P
 }
 
 // ---------------------------------------------------------------------------
-// 硬件编码探测（旧接口）：内部改用 encoders.cjs（1 帧试编码 + 磁盘缓存，契约 C12）。
+// 硬件编码探测（旧接口）：内部改用 encoders.cjs（1 帧试编码 + 磁盘缓存）。
 // export.cjs 仍在用 pickVideoEncoder，它只认 nvenc/qsv/amf/libx264 四个名字，所以这里只返回这四个；
 // 新代码请直接用 encoders.pickH264（含 h264_mf / libopenh264 兜底和完整编码参数）。
 // ---------------------------------------------------------------------------

@@ -1,33 +1,36 @@
 // 设置：左侧分类导航 + 右侧内容。分类：常规 / 外观 / 素材 / AI 视频和图片 / AI 助手 / 语音识别 / 剪辑 / 导出 / 存储与缓存 / 隐私与联网 / 关于
-// 草稿换算、服务商列表合并、即梦（火山方舟）的排查提示都是纯函数，放在 settingsDialogUtils.js（有单测）。
+// 草稿换算、API 预设、服务商列表合并与排查提示为纯函数，放在 settingsDialogUtils.js（有单测）。
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import useStore from '../store.js';
 import api from '../api.js';
+import { setLocale, useLocale, useT } from '../i18n.js';
 import { Modal, Button, Field, Select, Segmented, Switch, Spinner, ProgressBar, Chip, Icon, ICON_NAMES } from '../components/ui.jsx';
 import { hasConsentLocal, requestConsent } from '../consent.js';
 import {
-  FIELD_LABEL, IMAGE_PROVIDERS, FREE_SOURCES, ARK_CONSOLE_URL, ARK_IMAGE_MODEL, ARK_VIDEO_MODEL,
-  toDraft, validate, toPatch, ovOf, mergeVgProviders, applyArkKey, describeImageSource, arkTroubleshoot,
+  SUPPORTED_LOCALES, AI_API_PRESETS, CLI_AGENTS, FIELD_LABEL, IMAGE_PROVIDERS, FREE_SOURCES,
+  ARK_CONSOLE_URL, ARK_IMAGE_MODEL, ARK_VIDEO_MODEL,
+  mergeApiPresets, applyApiPreset, aiModeOf, providerForAiMode, apiRequiresKey, detectActivePreset, aiProviderLabel,
+  cliStatusOf, toDraft, validate, toPatch, ovOf, mergeVgProviders, applyArkKey, describeImageSource, arkTroubleshoot,
   stockTestResult, keyReady, providerReady,
 } from './settingsDialogUtils.js';
 
-const CODEX_URL = 'https://developers.openai.com/codex';
+export { cliStatusOf };
 
-// 新图标（契约 C2）还没合入时退回到已有图标
+// 图标未注册时退回到兜底图标
 const iconOr = (name, fallback) => (Array.isArray(ICON_NAMES) && ICON_NAMES.includes(name) ? name : fallback);
 
 const NAV = [
-  { value: 'general', label: '常规', icon: 'settings' },
-  { value: 'appearance', label: '外观', icon: 'palette' },
-  { value: 'media', label: '素材', icon: 'film' },
-  { value: 'videogen', label: 'AI 视频和图片', icon: 'sparkles', ai: true },
-  { value: 'ai', label: 'AI 助手', icon: 'brain' },
-  { value: 'asr', label: '语音识别', icon: 'captions' },
-  { value: 'editing', label: '剪辑', icon: 'scissors' },
-  { value: 'export', label: '导出', icon: 'export' },
-  { value: 'cache', label: '存储与缓存', icon: 'folder' },
-  { value: 'privacy', label: '隐私与联网', icon: iconOr('shield', 'lock') },
-  { value: 'about', label: '关于', icon: 'info' },
+  { value: 'general', labelKey: 'settings.nav.general', icon: 'settings' },
+  { value: 'appearance', labelKey: 'settings.nav.appearance', icon: 'palette' },
+  { value: 'media', labelKey: 'settings.nav.media', icon: 'film' },
+  { value: 'videogen', labelKey: 'settings.nav.videogen', icon: 'sparkles', ai: true },
+  { value: 'ai', labelKey: 'settings.nav.ai', icon: 'brain' },
+  { value: 'asr', labelKey: 'settings.nav.asr', icon: 'captions' },
+  { value: 'editing', labelKey: 'settings.nav.editing', icon: 'scissors' },
+  { value: 'export', labelKey: 'settings.nav.export', icon: 'export' },
+  { value: 'cache', labelKey: 'settings.nav.cache', icon: 'folder' },
+  { value: 'privacy', labelKey: 'settings.nav.privacy', icon: iconOr('shield', 'lock') },
+  { value: 'about', labelKey: 'settings.nav.about', icon: 'info' },
 ];
 // 旧入口兼容（initialTab='web'/'storage'），以及其他界面可能用到的叫法
 const TAB_ALIAS = {
@@ -41,38 +44,281 @@ const FREE_TEST_KIND = { openverse: 'image' };
 
 // 隐私页：哪些功能会联网、连到哪里、发送什么（按代码实际行为如实写，改功能时同步更新）
 const NET_USES = [
-  { icon: 'brain', title: 'AI 助手', to: '本机 Codex（OpenAI 账号）或你填写的 OpenAI 兼容接口', what: '你的指令，以及完成任务需要的项目文字（分镜、字幕、素材说明）；看画面的功能会附带截图。', when: '连接了 AI 并使用 AI 功能时' },
-  { icon: 'sparkles', title: 'AI 视频和图片', to: '即梦（火山方舟），或你选择的其他服务商（如可灵、海螺）', what: '镜头的画面描述；用参考图生成时还会发送参考图。', when: '点「生成」时，费用由服务商直接收取' },
-  { icon: 'search', title: '免费素材搜索', to: '维基共享资源、Openverse、互联网档案馆、NASA 影像库；填了 Key 时还有 Pexels、Pixabay', what: '只发送搜索关键词，选中后下载素材文件。', when: '搜索和添加素材时' },
-  { icon: iconOr('globe', 'external'), title: '视频站解析', to: '你粘贴链接或搜索的视频网站（如 B 站）', what: '视频链接或搜索词，由开源工具 yt-dlp 读取公开信息。', when: '第一次使用前需要阅读并同意使用须知' },
-  { icon: 'captions', title: '语音识别', to: '默认在本机识别，不联网', what: '只连接了 OpenAI、还没安装本机模型时，会把音频发到 OpenAI 接口转写。', when: '识别字幕时' },
-  { icon: 'download', title: '组件下载', to: 'GitHub（yt-dlp、识别程序）、Hugging Face（识别模型）', what: '只下载文件，不上传你的内容。', when: '点「安装」或「更新」时' },
+  {
+    key: 'ai',
+    icon: 'brain',
+    title: 'AI 助手',
+    titleEn: 'AI Assistant',
+    to: '你配置的在线/本地 API（如 OpenAI、DeepSeek、Claude、Gemini、OpenRouter、火山方舟，或本机离线 Ollama / LM Studio）或按需启用的本机 Agent CLI（Claude Code / Codex CLI / Gemini CLI）',
+    toEn: 'Your configured cloud or local API (OpenAI, DeepSeek, Claude, Gemini, OpenRouter, Volcengine Ark, or offline Ollama / LM Studio) or an opt-in local Agent CLI (Claude Code / Codex CLI / Gemini CLI)',
+    what: '你的指令，以及完成任务需要的项目文字（分镜、字幕、素材说明）；看画面的功能会附带截图。使用本机 Ollama / LM Studio 时数据不出本机。',
+    whatEn: 'Your prompts and only the project text needed for the task (storyboards, captions, asset notes), plus screenshots for vision features. Local Ollama / LM Studio keeps all data on your machine.',
+    when: '连接了 AI 并使用 AI 功能时',
+    whenEn: 'When AI is connected and you use AI features',
+  },
+  {
+    key: 'videogen',
+    icon: 'sparkles',
+    title: 'AI 视频和图片',
+    titleEn: 'AI Video & Image',
+    to: '你选择的图片或视频服务商（如 OpenAI、Runway、Luma、Google Veo、可灵、海螺、火山方舟、fal.ai 等）',
+    toEn: 'Your chosen image or video provider (OpenAI, Runway, Luma, Google Veo, Kling, Hailuo, Volcengine Ark, fal.ai, etc.)',
+    what: '镜头的画面描述；用参考图生成时还会发送参考图。',
+    whatEn: 'Shot visual descriptions, plus reference images when image-guided generation is used.',
+    when: '点「生成」时，费用由对应服务商直接收取',
+    whenEn: 'When you click Generate; billed directly by the provider',
+  },
+  {
+    key: 'stock',
+    icon: 'search',
+    title: '免费素材搜索',
+    titleEn: 'Free Stock Search',
+    to: '维基共享资源、Openverse、互联网档案馆、NASA 影像库；填了 Key 时还有 Pexels、Pixabay',
+    toEn: 'Wikimedia Commons, Openverse, Internet Archive, NASA Image Library; plus Pexels and Pixabay if keys are provided',
+    what: '只发送搜索关键词，选中后下载素材文件。',
+    whatEn: 'Search keywords only; selected media files are downloaded locally.',
+    when: '搜索和添加素材时',
+    whenEn: 'When searching or adding stock media',
+  },
+  {
+    key: 'videoSites',
+    icon: iconOr('globe', 'external'),
+    title: '视频站解析',
+    titleEn: 'Video Site Parsing',
+    to: '你粘贴链接或搜索的视频网站（如 B 站）',
+    toEn: 'Video sites you paste links from or search (e.g., YouTube, Bilibili)',
+    what: '视频链接或搜索词，由开源工具 yt-dlp 读取公开信息。',
+    whatEn: 'Video URLs or search queries fetched as public metadata via open-source yt-dlp.',
+    when: '第一次使用前需要阅读并同意使用须知',
+    whenEn: 'Requires accepting the terms notice before first use',
+  },
+  {
+    key: 'asr',
+    icon: 'captions',
+    title: '语音识别',
+    titleEn: 'Speech to Text',
+    to: '默认在本机识别，不联网',
+    toEn: 'Runs locally by default (no network access)',
+    what: '只连接了 OpenAI、还没安装本机模型时，会把音频发到 OpenAI 接口转写。',
+    whatEn: 'Only when OpenAI is configured and the local model is not installed is audio sent to your OpenAI endpoint for transcription.',
+    when: '识别字幕时',
+    whenEn: 'When transcribing captions',
+  },
+  {
+    key: 'downloads',
+    icon: 'download',
+    title: '组件下载',
+    titleEn: 'Component Downloads',
+    to: 'GitHub（yt-dlp、识别程序）、Hugging Face（识别模型）',
+    toEn: 'GitHub (yt-dlp, speech binary) and Hugging Face (speech model)',
+    what: '只下载文件，不上传你的内容。',
+    whatEn: 'Download-only; none of your files or data are uploaded.',
+    when: '点「安装」或「更新」时',
+    whenEn: 'When clicking Install or Update',
+  },
 ];
 
-const AI_PROVIDERS = [
-  { value: 'auto', title: '自动（推荐）', desc: '优先用本机 Codex，其次 OpenAI 兼容接口，都不可用时退回本地规则。' },
-  { value: 'codex', title: 'Codex CLI', desc: '使用 ChatGPT 账号登录的本机 Codex，无需 API Key。' },
-  { value: 'openai', title: 'OpenAI 兼容接口', desc: '响应更快，还能生成图片。需要自备 Base URL 和 API Key。' },
-  { value: 'local', title: '仅本地规则', desc: '不联网调用 AI：中文指令解析、模板分镜、统计拆片仍可用。' },
+const AI_MODES = [
+  {
+    value: 'auto',
+    title: '自动（API 优先）',
+    titleEn: 'Auto (API First)',
+    desc: '优先使用已配置的在线或本机 API；未配置时尝试已启用的本机 Agent CLI，均不可用时退回本地规则。',
+    descEn: 'Uses your configured cloud or local API first, falls back to an enabled local Agent CLI, and finally to local rules.',
+  },
+  {
+    value: 'api',
+    title: '在线与本地 API',
+    titleEn: 'Cloud & Local API',
+    desc: '支持 OpenAI 兼容接口、Anthropic Claude 原生接口，以及免 Key 的 Ollama / LM Studio 本机模型。',
+    descEn: 'Supports OpenAI-compatible APIs, native Anthropic Claude API, and keyless local Ollama / LM Studio models.',
+  },
+  {
+    value: 'cli',
+    title: '本地 Agent CLI',
+    titleEn: 'Local Agent CLI',
+    desc: '平等按需调用本机已登录的 Claude Code、Codex CLI 或 Gemini CLI。',
+    descEn: 'Runs your locally signed-in Claude Code, Codex CLI, or Gemini CLI on demand.',
+  },
+  {
+    value: 'local',
+    title: '仅本地规则',
+    titleEn: 'Local Rules Only',
+    desc: '完全离线，不联网调用 AI：中文指令解析、模板分镜、统计拆片仍可用。',
+    descEn: 'Completely offline with zero AI network calls: built-in command parsing, template storyboards, and statistical breakdown.',
+  },
 ];
 
-const openUrl = (url, toast) => api.call('shell:openExternal', { url }).catch((e) => toast && toast('打开网页失败：' + e.message, 'error'));
+const EXTERNAL_AGENT_SNIPPET = [
+  '# CLI（无头编辑 / 导出 / 预览）',
+  'node bin/frameflow.mjs --help',
+  '# 或：npx frameflow --help',
+  '',
+  '# Agent Skill（适用于 Claude Code / Antigravity / Codex / Gemini CLI / Cursor）',
+  'skills/frameflow/SKILL.md',
+  '',
+  '# 可选 MCP Server（按需挂载）',
+  'node bin/frameflow-mcp.mjs',
+].join('\n');
+
+const EXTERNAL_AGENT_SNIPPET_EN = [
+  '# CLI (headless edit / export / preview)',
+  'node bin/frameflow.mjs --help',
+  '# or: npx frameflow --help',
+  '',
+  '# Agent Skill (for Claude Code / Antigravity / Codex / Gemini CLI / Cursor)',
+  'skills/frameflow/SKILL.md',
+  '',
+  '# Optional MCP Server (mount on demand)',
+  'node bin/frameflow-mcp.mjs',
+].join('\n');
+
+const FREE_SOURCE_EN = {
+  commons: { name: 'Wikimedia Commons', sub: 'Free media repository', kinds: 'Video · Image', license: 'CC0 / Public Domain / CC BY / CC BY-SA' },
+  openverse: { name: 'Openverse', sub: 'WordPress open media search', kinds: 'Image · Audio', license: 'CC0 / Public Domain / CC BY & more' },
+  archive: { name: 'Internet Archive', sub: 'Non-profit digital archive', kinds: 'Video', license: 'Public Domain / Creative Commons' },
+  nasa: { name: 'NASA Image & Video Library', sub: 'NASA public media library', kinds: 'Video · Image', license: 'Public Domain' },
+};
+
+const VG_EN = {
+  seedance: { label: 'Seedance (Volcengine Ark)', vendor: 'Volcengine Ark / ByteDance', priceHint: '~¥1.5–3.7 / 5s' },
+  'jimeng-visual': { label: 'Jimeng AI (Volcengine Visual)', vendor: 'ByteDance', priceHint: 'Billed by Volcengine' },
+  kling: { label: 'Kling', vendor: 'Kuaishou', priceHint: '~¥1–3.5 / 5s' },
+  minimax: { label: 'Hailuo (MiniMax)', vendor: 'MiniMax', priceHint: '~¥2–3.5 / 6s' },
+  runway: { label: 'Runway Gen-4', vendor: 'Runway', priceHint: '~$0.25–0.5 / 5s' },
+  veo: { label: 'Google Veo (Gemini)', vendor: 'Google', priceHint: '~$0.15–0.4 / s' },
+  sora: { label: 'OpenAI Sora 2', vendor: 'OpenAI', priceHint: '~$0.1 / s' },
+  luma: { label: 'Luma Ray 2', vendor: 'Luma AI', priceHint: '~$0.4–1.6 / 5s' },
+  fal: { label: 'fal.ai Hub', vendor: 'fal.ai', priceHint: 'Varies by model' },
+  mock: { label: 'Demo Mode', vendor: 'Frameflow', priceHint: 'Free · Demo only' },
+};
+
+const IMAGE_PROVIDER_EN = {
+  auto: 'Auto',
+  openai: 'OpenAI-Compatible API',
+  ark: 'Volcengine Ark (Seedream)',
+};
+
+const VALIDATION_EN = {
+  'Base URL 需要以 http:// 或 https:// 开头': 'Base URL must start with http:// or https://',
+  '接口地址需要以 http:// 或 https:// 开头': 'Endpoint URL must start with http:// or https://',
+  '密钥中间不能有空格或换行，请重新复制完整的一串': 'API keys cannot contain spaces or line breaks — please copy the full key again',
+  '最长下载时长需要在 10 到 3600 秒之间': 'Max download duration must be between 10 and 3600 seconds',
+  '图片默认时长需在 0.5–60 秒之间': 'Default image duration must be between 0.5 and 60 seconds',
+  '转场时长需在 0.1–2 秒之间': 'Transition duration must be between 0.1 and 2 seconds',
+};
+
+const STOCK_RESULT_EN = {
+  '可以搜到素材': 'Stock results available',
+  '没有搜到结果，请检查 Key 是否填对': 'No results found — please verify your API key',
+  '没有搜到结果，可能是网络没连上：检查网络或代理后再试': 'No results found — check your network connection or proxy and try again',
+};
+
+function localizeVgProvider(p, isEn) {
+  if (!isEn || !p) return p;
+  const ov = VG_EN[p.id];
+  return ov ? { ...p, ...ov } : p;
+}
+
+function presetKeyPlaceholder(preset, isEn) {
+  if (!preset) return 'sk-…';
+  if (!isEn) return preset.keyPlaceholder || 'sk-…';
+  if (preset.id === 'ark') return 'Volcengine Ark API Key';
+  if (preset.id === 'ollama') return 'No API key needed for local Ollama';
+  if (preset.id === 'lmstudio') return 'No API key needed for local LM Studio';
+  return preset.keyPlaceholder || 'sk-…';
+}
+
+function localizeImageSourceText(imgSrc, { imageProvider, hasArk, hasOpenai, hasOpenaiKey }, isEn) {
+  if (!isEn) return imgSrc.text;
+  const openaiMissing = hasOpenaiKey && !hasOpenai
+    ? 'No image model is set for the OpenAI-compatible API'
+    : 'No API key is set for the OpenAI-compatible API';
+  if (imageProvider === 'ark') {
+    return hasArk
+      ? 'Images will be generated with Volcengine Ark (Seedream).'
+      : 'No Volcengine Ark API key is configured yet — shots will use placeholder previz. Select "Seedance (Volcengine Ark)" below to add your key.';
+  }
+  if (imageProvider === 'openai') {
+    return hasOpenai
+      ? 'Images will be generated with the OpenAI-compatible API in AI Assistant (requires an image-capable model).'
+      : `${openaiMissing} — shots will use placeholder previz. Configure it in AI Assistant or choose another provider.`;
+  }
+  if (hasArk) return 'Volcengine Ark API key configured — images will be generated with Seedream.';
+  if (hasOpenai) return 'Images will be generated with the OpenAI-compatible API in AI Assistant.';
+  return 'No image generation provider is configured yet — shots will use placeholder previz. Set an OpenAI-compatible image model in AI Assistant or add a Volcengine Ark key below.';
+}
+
+function localizeArkSteps(detail, zhSteps, isEn) {
+  if (!isEn) return zhSteps;
+  const t = String(detail == null ? '' : detail);
+  if (!t.trim()) return [];
+  const KEY_STEPS = [
+    'Your API key may be invalid or incomplete: copy the full key from API Key Management in the console and paste it again.',
+    'Make sure you are using a Volcengine Ark API Key, not a Jimeng app password or IAM AccessKey / SecretKey.',
+  ];
+  const MODEL_STEPS = [
+    'The model ID may be incorrect or not yet activated: clear the Image Model and Video Model fields to retry with defaults.',
+    'If defaults still fail, confirm Seedream and Seedance are activated under Model Activation in the console.',
+    'If using a custom endpoint, enter its ep-... endpoint ID from the console.',
+  ];
+  if (/尚未填写|未填写|没有填写|NO_KEY/i.test(t)) return ['Paste your Volcengine Ark API key above, then click "Test Connection".'];
+  if (/超时|timeout|timed out|fetch failed|网络连接失败|network|ENOTFOUND|ECONN|EAI_AGAIN|连不上|无法连接/i.test(t)) {
+    return [
+      'Could not reach Volcengine Ark: check your internet connection, or disable/switch your proxy.',
+      'Leave "Endpoint URL" blank unless you use a custom proxy.',
+    ];
+  }
+  if (/\b429\b|限流|频繁|rate ?limit|繁忙|暂时不可用|\b5\d\d\b/i.test(t)) {
+    return [
+      'Provider is temporarily busy or rate-limiting requests: wait a minute or two and retry.',
+      'If this persists, check whether your free quota in the Volcengine console is exhausted.',
+    ];
+  }
+  if (/额度|余额|欠费|用量上限|安全体验|quota|balance|overdue|SetLimitExceeded|\b402\b/i.test(t)) {
+    return ['Free quota exhausted, spending cap reached, or insufficient balance: top up in the Volcengine console or raise the usage limit under Model Activation.'];
+  }
+  if (/找不到这个模型|InvalidEndpointOrModel|不支持当前的画面尺寸|\b404\b|NotFound/i.test(t)) return MODEL_STEPS;
+  if (/\b401\b|Unauthorized|InvalidApiKey|AuthenticationError|Key 无效|Key 不对|已失效/i.test(t)) return KEY_STEPS;
+  if (/未开通|开通管理|ModelNotOpen|not (been )?activated|没有权限|无权限|\b403\b/i.test(t)) {
+    return [
+      'Model not activated yet: open the Volcengine Ark console and activate Seedream (image) and Seedance (video) under Model Activation.',
+      'Verify that the API key belongs to the same account where the models were activated.',
+    ];
+  }
+  if (/无效|api ?key/i.test(t)) return KEY_STEPS;
+  if (/模型|model|接入点|endpoint/i.test(t)) return MODEL_STEPS;
+  return ['Check three things: (1) the full API key was copied cleanly, (2) Seedream and Seedance are activated in the console, and (3) your account has available quota.'];
+}
+
+function localizeStockResult(res, isEn) {
+  if (!isEn || !res) return res;
+  return {
+    ...res,
+    detail: res.detail ? (STOCK_RESULT_EN[res.detail] || res.detail) : res.detail,
+    error: res.error ? (STOCK_RESULT_EN[res.error] || res.error) : res.error,
+  };
+}
+
+const openUrl = (url, toast, isEn) => api.call('shell:openExternal', { url }).catch((e) => toast && toast((isEn ? 'Failed to open URL: ' : '打开网页失败：') + e.message, 'error'));
 
 // ---------------------------------------------------------------------------
 // 小组件
 // ---------------------------------------------------------------------------
 function SecretField({ label, hint, placeholder, value, saved, cleared, onChange, onClear, onUndoClear }) {
   const [show, setShow] = useState(false);
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   return (
     <Field label={label} hint={hint}>
       <div className="row">
         <input className="input grow mono" type={show ? 'text' : 'password'} autoComplete="off" spellCheck={false} value={value}
-          placeholder={saved && !cleared ? '已保存，留空表示不修改' : (placeholder || '粘贴密钥')} onChange={(e) => onChange(e.target.value)} />
-        <Button variant="ghost" icon={show ? 'eyeOff' : 'eye'} title={show ? '隐藏' : '显示'} onClick={() => setShow(!show)} />
-        {saved && !cleared && <Chip kind="ok" dot>已保存</Chip>}
-        {saved && !cleared && <Button size="sm" variant="ghost" onClick={onClear}>清除</Button>}
-        {cleared && <Chip kind="warn">保存后清除</Chip>}
-        {cleared && <Button size="sm" onClick={onUndoClear}>撤销</Button>}
+          placeholder={saved && !cleared ? L('已保存，留空表示不修改', 'Saved — leave blank to keep current') : (placeholder || L('粘贴密钥', 'Paste key'))} onChange={(e) => onChange(e.target.value)} />
+        <Button variant="ghost" icon={show ? 'eyeOff' : 'eye'} title={show ? L('隐藏', 'Hide') : L('显示', 'Show')} onClick={() => setShow(!show)} />
+        {saved && !cleared && <Chip kind="ok" dot>{L('已保存', 'Saved')}</Chip>}
+        {saved && !cleared && <Button size="sm" variant="ghost" onClick={onClear}>{L('清除', 'Clear')}</Button>}
+        {cleared && <Chip kind="warn">{L('保存后清除', 'Will clear on save')}</Chip>}
+        {cleared && <Button size="sm" onClick={onUndoClear}>{L('撤销', 'Undo')}</Button>}
       </div>
     </Field>
   );
@@ -80,20 +326,25 @@ function SecretField({ label, hint, placeholder, value, saved, cleared, onChange
 
 /** 测试结果的一行。brief：不在这一行里带出详情（下面另有完整说明时用） */
 function TestResult({ state, waitingText, okText, failText, brief }) {
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   if (!state) return null;
-  if (state.running) return <span className="st-test running" role="status"><Spinner ai /> {waitingText || '测试中…'}</span>;
+  if (state.running) return <span className="st-test running" role="status"><Spinner ai /> {waitingText || L('测试中…', 'Testing…')}</span>;
+  const detailText = state.detail && isEn ? (STOCK_RESULT_EN[state.detail] || state.detail) : state.detail;
   return (
-    <span className={'st-test ' + (state.ok ? 'ok' : 'bad')} title={brief ? undefined : state.detail} role="status">
+    <span className={'st-test ' + (state.ok ? 'ok' : 'bad')} title={brief ? undefined : detailText} role="status">
       <Icon name={state.ok ? 'check' : 'close'} size={14} stroke={2.2} />
-      {state.ok ? (okText || '连接成功') : (failText || '连接失败')}
-      {Number.isFinite(state.ms) && state.ms > 0 && <span className="mono">{(state.ms / 1000).toFixed(1)} 秒</span>}
-      {!brief && state.detail && <span className="st-test-detail ellipsis">{state.detail}</span>}
+      {state.ok ? (okText || L('连接成功', 'Connected')) : (failText || L('连接失败', 'Connection failed'))}
+      {Number.isFinite(state.ms) && state.ms > 0 && <span className="mono">{(state.ms / 1000).toFixed(1)}{L(' 秒', 's')}</span>}
+      {!brief && detailText && <span className="st-test-detail ellipsis">{detailText}</span>}
     </span>
   );
 }
 
 /** 测试失败后的完整说明：原始报错（可选中复制）+ 下一步怎么办 */
 function FailHelp({ detail, steps }) {
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   const list = Array.isArray(steps) ? steps : [];
   if (!detail && !list.length) return null;
   return (
@@ -101,7 +352,7 @@ function FailHelp({ detail, steps }) {
       {detail && <div className="sx-fix-detail selectable">{detail}</div>}
       {list.length > 0 && (
         <>
-          <b>可以这样处理</b>
+          <b>{L('可以这样处理', 'How to fix')}</b>
           <ul>{list.map((s) => <li key={s}>{s}</li>)}</ul>
         </>
       )}
@@ -159,7 +410,7 @@ const STYLE = `
 .sx-head p{margin:4px 0 0;color:var(--text-2,#8b9098);font-size:var(--fs-13,13px);line-height:1.6}
 .sx-head-icon{width:36px;height:36px;border-radius:var(--radius-md,12px);display:grid;place-items:center;background:var(--bg-2,#1d2024);color:var(--accent,#c8e250);flex:none}
 .sx-card{border:1px solid var(--line,#2a2d33);border-radius:var(--radius-md,12px);background:var(--bg-1,#15171a);padding:16px 20px;margin-bottom:16px}
-.sx-card>h4{margin:0 0 12px;font-size:var(--fs-13,13px);font-weight:600;color:var(--text-0,#fff);display:flex;align-items:center;gap:8px}
+.sx-card>h4{margin:0 0 12px;font-size:var(--fs-13,13px);font-weight:600;color:var(--text-0,#fff);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .sx-row{display:flex;align-items:center;gap:16px;padding:12px 0;border-top:1px solid var(--line,#2a2d33)}
 .sx-card>.sx-row:first-of-type,.sx-card>h4+.sx-row{border-top:0;padding-top:4px}
 .sx-row-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -177,6 +428,13 @@ const STYLE = `
 .sx-prov b{font-size:var(--fs-13,13px);font-weight:600;color:var(--text-0,#fff)}
 .sx-prov small{font-size:var(--fs-11,11px);color:var(--text-2,#8b9098)}
 .sx-prov .sx-prov-status{position:absolute;top:12px;right:12px}
+.sx-presets{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.sx-preset{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:var(--radius-sm,8px);border:1px solid var(--line,#2a2d33);background:var(--bg-2,#1d2024);color:var(--text-1,#c9ccd1);font-size:var(--fs-12,12px);font-weight:500;transition:border-color .15s,background .15s,color .15s}
+.sx-preset:hover{border-color:var(--line-strong,#3a3e45);color:var(--text-0,#fff)}
+.sx-preset.active{border-color:var(--ai,#9d8cff);background:color-mix(in srgb,var(--ai,#9d8cff) 14%,var(--bg-2,#1d2024));color:var(--text-0,#fff)}
+.sx-preset:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.sx-preset-tag{font-size:10px;padding:1px 5px;border-radius:999px;background:var(--bg-3,#262a2f);color:var(--text-2,#8b9098)}
+.sx-codeblock{margin:10px 0 0;padding:10px 12px;border-radius:var(--radius-s,8px);border:1px solid var(--line,#2a2d33);background:var(--bg-0,#0f1114);color:var(--text-1,#c9ccd1);font-size:var(--fs-12,12px);line-height:1.6;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .sx-price{font-size:var(--fs-12,12px);color:var(--text-1,#c9ccd1)}
 .sx-note{font-size:var(--fs-12,12px);color:var(--text-2,#8b9098);line-height:1.6;margin:8px 0 0}
 .sx-note a{color:var(--accent,#c8e250);cursor:pointer}
@@ -197,7 +455,7 @@ const STYLE = `
 .sx-net-ico{width:32px;height:32px;border-radius:var(--radius-s);display:grid;place-items:center;background:var(--bg-2);color:var(--text-1)}
 .sx-net-title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:var(--text-0);font-size:var(--fs-13);font-weight:600}
 .sx-net-when{color:var(--text-2);font-size:var(--fs-11);font-weight:400}
-.sx-net-kv{display:grid;grid-template-columns:56px minmax(0,1fr);gap:2px 8px;margin-top:4px;font-size:var(--fs-12);line-height:1.55}
+.sx-net-kv{display:grid;grid-template-columns:minmax(56px,max-content) minmax(0,1fr);gap:2px 10px;margin-top:4px;font-size:var(--fs-12);line-height:1.55}
 .sx-net-kv dt{color:var(--text-2)}
 .sx-net-kv dd{margin:0;color:var(--text-1)}
 .sx-consent{display:flex;align-items:center;gap:12px}
@@ -237,10 +495,17 @@ export default function SettingsDialog({ onClose, initialTab }) {
   const aiStatus = useStore((s) => s.aiStatus);
   const settingsDialog = useStore((s) => s.dialogs && s.dialogs.settings);
   const toast = useStore((s) => s.toast);
+  const t = useT();
+  const rawLocale = useLocale();
+  const activeLocale = typeof rawLocale === 'string'
+    ? rawLocale
+    : (rawLocale && typeof rawLocale.locale === 'string' ? rawLocale.locale : 'zh-CN');
+  const isEn = activeLocale === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
 
-  const resolveTab = (t) => {
-    if (typeof t !== 'string' || !t) return null;
-    const mapped = TAB_ALIAS[t] || t;
+  const resolveTab = (v) => {
+    if (typeof v !== 'string' || !v) return null;
+    const mapped = TAB_ALIAS[v] || v;
     return NAV.some((n) => n.value === mapped) ? mapped : null;
   };
   const requestedTab = initialTab || (typeof settingsDialog === 'string' ? settingsDialog : undefined);
@@ -257,11 +522,15 @@ export default function SettingsDialog({ onClose, initialTab }) {
   const [ytdlp, setYtdlp] = useState(null);
   const [ytInstall, setYtInstall] = useState(null);
   const [vgList, setVgList] = useState(null);
+  const [remotePresets, setRemotePresets] = useState(null);
+  const [probedAiStatus, setProbedAiStatus] = useState(null);
   const [asr, setAsr] = useState(null);
   const [asrInstall, setAsrInstall] = useState(null);
   const [freeTest, setFreeTest] = useState(null);
   const [consentBusy, setConsentBusy] = useState(false);
+  const [copiedAgent, setCopiedAgent] = useState(false);
   const mounted = useRef(true);
+  const copyTimer = useRef(null);
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const setOv = (id, patch) => setDraft((d) => ({ ...d, vgOverrides: { ...d.vgOverrides, [id]: { ...ovOf(d, id), ...patch } } }));
@@ -282,22 +551,57 @@ export default function SettingsDialog({ onClose, initialTab }) {
       }).catch(() => {});
     }
     api.call('web:ytdlpStatus').then((s) => { if (mounted.current) setYtdlp(s); }).catch(() => { if (mounted.current) setYtdlp({ installed: false, path: '', version: '' }); });
+    api.call('ai:presets').then((r) => { if (mounted.current && r) setRemotePresets(r); }).catch(() => {});
     loadVg();
     loadAsr();
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (tab !== 'ai') return undefined;
+    let active = true;
+    api.call('ai:status', { probeClis: true })
+      .then((res) => {
+        if (!active || !mounted.current || !res || typeof res !== 'object') return;
+        setProbedAiStatus(res);
+        useStore.setState({ aiStatus: res });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [tab]);
 
   const refreshAppInfo = async () => { try { useStore.setState({ appInfo: await api.call('app:info') }); } catch { /* 保留旧值 */ } };
 
   const persist = async () => {
     const bad = validate(draft);
-    if (bad) { setTab(bad.tab); toast(bad.message, 'warn'); return null; }
+    if (bad) {
+      setTab(bad.tab);
+      toast(isEn ? (VALIDATION_EN[bad.message] || bad.message) : bad.message, 'warn');
+      return null;
+    }
     const prevRoot = (settings && settings.dataRoot) || '';
     const patch = toPatch(draft, clear);
     const next = await api.call('settings:set', patch);
+    setLocale(patch.ui.locale);
     const st = useStore.getState();
     if (st.refreshSettings) await st.refreshSettings();
-    if (st.refreshAI) await st.refreshAI();
+    if (tab === 'ai') {
+      try {
+        const probed = await api.call('ai:status', { probeClis: true, refresh: true });
+        if (mounted.current && probed && typeof probed === 'object') {
+          setProbedAiStatus(probed);
+          useStore.setState({ aiStatus: probed });
+        }
+      } catch {
+        if (st.refreshAI) await st.refreshAI();
+      }
+    } else {
+      if (mounted.current) setProbedAiStatus(null);
+      if (st.refreshAI) await st.refreshAI();
+    }
     await refreshAppInfo();
     if (patch.dataRoot !== prevRoot && st.refreshProjects) await st.refreshProjects();
     loadVg();
@@ -313,35 +617,43 @@ export default function SettingsDialog({ onClose, initialTab }) {
     setSaving(true);
     try {
       const r = await persist();
-      if (r) { toast('设置已保存', 'ok'); if (onClose) onClose(); }
-    } catch (e) { toast('保存设置失败：' + e.message, 'error'); } finally { if (mounted.current) setSaving(false); }
+      if (r) { toast(t('settings.saved'), 'ok'); if (onClose) onClose(); }
+    } catch (e) { toast(t('settings.saveFailed', { error: e.message }), 'error'); } finally { if (mounted.current) setSaving(false); }
   };
 
   /** 先保存再测试，确保测的就是界面上填写的内容 */
   const runTest = async (key, fn) => {
-    setTests((t) => ({ ...t, [key]: { running: true } }));
+    setTests((ts) => ({ ...ts, [key]: { running: true } }));
     try {
       const saved = await persist();
-      if (!saved) { if (mounted.current) setTests((t) => ({ ...t, [key]: null })); return; }
+      if (!saved) { if (mounted.current) setTests((ts) => ({ ...ts, [key]: null })); return; }
       const t0 = Date.now();
       const r = await fn();
-      if (mounted.current) setTests((t) => ({ ...t, [key]: { ok: !!(r && r.ok), ms: (r && r.ms) || Date.now() - t0, detail: (r && (r.detail || r.error)) || '', path: (r && r.path) || '' } }));
+      if (mounted.current) setTests((ts) => ({ ...ts, [key]: { ok: !!(r && r.ok), ms: (r && r.ms) || Date.now() - t0, detail: (r && (r.detail || r.error)) || '', path: (r && r.path) || '' } }));
     } catch (e) {
-      if (mounted.current) setTests((t) => ({ ...t, [key]: { ok: false, detail: (e && e.message) || String(e) } }));
+      if (mounted.current) setTests((ts) => ({ ...ts, [key]: { ok: false, detail: (e && e.message) || String(e) } }));
     }
   };
   const testing = (key) => !!(tests[key] && tests[key].running);
-  const testAi = (provider) => runTest(provider, () => api.call('ai:test', { provider }));
+  const testAi = (provider) => runTest('ai:' + provider, () => api.call('ai:test', { provider }));
   const testVg = (provider) => runTest('vg:' + provider, () => (api.videogen ? api.videogen.test(provider) : api.call('videogen:test', { provider })));
   const testStock = (source) => runTest('stock:' + source, async () => stockTestResult(
     await api.call('web:search', { query: 'ocean', kind: 'video', sources: [source], limit: 1 }), source,
   ));
-  /** 真的用即梦出一张图（会用掉一张图的额度），用来确认 Seedream 已经开通 */
+  /** 试生成一张火山方舟 Seedream 图片（会消耗一张图额度），用于确认模型已开通 */
   const testArkImage = () => runTest('img:ark', async () => {
     try {
       return await api.call('ai:imageTest', { provider: 'ark' });
     } catch (e) {
-      if (/No handler registered|未知的通道|unknown channel/i.test((e && e.message) || '')) return { ok: false, error: '这个版本还不支持在这里试生成，请到创作模式里点「生成画面」试试。' };
+      if (/No handler registered|未知的通道|unknown channel/i.test((e && e.message) || '')) {
+        return {
+          ok: false,
+          error: L(
+            '这个版本还不支持在这里试生成，请到创作模式里点「生成画面」试试。',
+            'Test image generation is not supported in this build — try "Generate Visuals" in Create mode.',
+          ),
+        };
+      }
       throw e;
     }
   });
@@ -367,7 +679,7 @@ export default function SettingsDialog({ onClose, initialTab }) {
     try {
       await requestConsent(CONSENT_KEY);
     } catch (e) {
-      toast('没能打开使用须知：' + ((e && e.message) || '未知原因'), 'error');
+      toast(L('没能打开使用须知：', 'Failed to open terms notice: ') + ((e && e.message) || L('未知原因', 'Unknown error')), 'error');
     } finally {
       if (mounted.current) setConsentBusy(false);
     }
@@ -395,13 +707,13 @@ export default function SettingsDialog({ onClose, initialTab }) {
       if (done) {
         await useStore.getState().refreshSettings?.();
         if (hasConsentLocal(CONSENT_KEY)) {
-          toast('当前版本暂不支持在此撤回同意状态', 'warn');
+          toast(L('当前版本暂不支持在此撤回同意状态', 'Revoking consent from Settings is not supported in this build'), 'warn');
         } else {
-          toast('已撤回视频站使用须知同意，下次使用时将重新确认', 'ok');
+          toast(L('已撤回视频站使用须知同意，下次使用时将重新确认', 'Video site consent revoked — you will be asked again next time'), 'ok');
         }
       }
     } catch (e) {
-      toast('撤回同意失败：' + ((e && e.message) || '未知原因'), 'error');
+      toast(L('撤回同意失败：', 'Failed to revoke consent: ') + ((e && e.message) || L('未知原因', 'Unknown error')), 'error');
     } finally {
       if (mounted.current) setConsentBusy(false);
     }
@@ -410,40 +722,63 @@ export default function SettingsDialog({ onClose, initialTab }) {
   const installYtdlp = async () => {
     if (ytInstall) return;
     const isUpdate = !!(ytdlp && ytdlp.installed);
-    setYtInstall({ progress: 0, message: '正在连接…' });
+    setYtInstall({ progress: 0, message: L('正在连接…', 'Connecting…') });
     try {
-      const status = await useStore.getState().trackJob('web:ytdlpInstall', { latest: isUpdate }, isUpdate ? '更新 yt-dlp' : '安装 yt-dlp', (p) => {
-        if (mounted.current) setYtInstall({ progress: p.progress || 0, message: p.message || p.stage || '正在下载…' });
-      });
+      const status = await useStore.getState().trackJob(
+        'web:ytdlpInstall',
+        { latest: isUpdate },
+        isUpdate ? L('更新 yt-dlp', 'Update yt-dlp') : L('安装 yt-dlp', 'Install yt-dlp'),
+        (p) => {
+          if (mounted.current) setYtInstall({ progress: p.progress || 0, message: p.message || p.stage || L('正在下载…', 'Downloading…') });
+        },
+      );
       if (mounted.current && status) setYtdlp(status);
-      toast(isUpdate ? 'yt-dlp 更新完成' : 'yt-dlp 安装完成', 'ok');
+      toast(isUpdate ? L('yt-dlp 更新完成', 'yt-dlp updated') : L('yt-dlp 安装完成', 'yt-dlp installed'), 'ok');
       await refreshAppInfo();
-    } catch (e) { if (!e.cancelled) toast('安装 yt-dlp 失败：' + e.message, 'error'); } finally { if (mounted.current) setYtInstall(null); }
+    } catch (e) { if (!e.cancelled) toast(L('安装 yt-dlp 失败：', 'Failed to install yt-dlp: ') + e.message, 'error'); } finally { if (mounted.current) setYtInstall(null); }
   };
 
   const installAsr = async () => {
     if (asrInstall) return;
-    setAsrInstall({ progress: 0, message: '正在连接…' });
+    setAsrInstall({ progress: 0, message: L('正在连接…', 'Connecting…') });
     try {
-      const onP = (p) => { if (mounted.current) setAsrInstall({ progress: p.progress || 0, message: p.message || p.stage || '正在下载模型…' }); };
+      const onP = (p) => { if (mounted.current) setAsrInstall({ progress: p.progress || 0, message: p.message || p.stage || L('正在下载模型…', 'Downloading model…') }); };
       const st = useStore.getState();
-      if (st.trackJob) await st.trackJob('asr:installModel', {}, '安装语音识别模型', onP);
+      if (st.trackJob) await st.trackJob('asr:installModel', {}, L('安装语音识别模型', 'Install speech recognition model'), onP);
       else await api.asr.installModel(onP);
-      toast('语音识别模型安装完成', 'ok');
+      toast(L('语音识别模型安装完成', 'Speech recognition model installed'), 'ok');
       loadAsr();
-    } catch (e) { if (!e.cancelled) toast('安装失败：' + e.message, 'error'); } finally { if (mounted.current) setAsrInstall(null); }
+    } catch (e) { if (!e.cancelled) toast(L('安装失败：', 'Installation failed: ') + e.message, 'error'); } finally { if (mounted.current) setAsrInstall(null); }
   };
 
   const pickFolder = async (field) => {
-    try { const dir = await api.call('dialog:openFolder'); if (dir) set({ [field]: dir }); } catch (e) { toast('选择文件夹失败：' + e.message, 'error'); }
+    try { const dir = await api.call('dialog:openFolder'); if (dir) set({ [field]: dir }); } catch (e) { toast(L('选择文件夹失败：', 'Failed to choose folder: ') + e.message, 'error'); }
   };
-  const openPath = (p) => { if (p) api.call('shell:openPath', { path: p }).catch((e) => toast('打开目录失败：' + e.message, 'error')); };
+  const openPath = (p) => { if (p) api.call('shell:openPath', { path: p }).catch((e) => toast(L('打开目录失败：', 'Failed to open folder: ') + e.message, 'error')); };
 
-  const codex = (appInfo && appInfo.codex) || (aiStatus && aiStatus.codex) || null;
+  const agentSnippet = isEn ? EXTERNAL_AGENT_SNIPPET_EN : EXTERNAL_AGENT_SNIPPET;
+
+  const copyAgentSnippet = async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(agentSnippet);
+      } else {
+        throw new Error('clipboard unavailable');
+      }
+      setCopiedAgent(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => { if (mounted.current) setCopiedAgent(false); }, 2000);
+      toast(L('已复制外部 Agent 接入命令', 'External agent setup commands copied'), 'ok');
+    } catch {
+      toast(L('无法自动复制，请直接选中上方命令手动复制', 'Auto-copy unavailable — please select and copy the commands above manually'), 'warn');
+    }
+  };
+
   const currentRoot = (appInfo && appInfo.dataRoot) || '';
   const has = (k) => !!(settings && settings['has' + k[0].toUpperCase() + k.slice(1)]);
   const hasVg = (k) => !!(settings && settings.videogen && settings.videogen.hasKeys && settings.videogen.hasKeys[k]);
   const rootChanged = (draft.dataRoot || '') !== ((settings && settings.dataRoot) || '');
+  const savedLocale = (settings && settings.ui && settings.ui.locale) || 'zh-CN';
 
   const secretProps = (k, saved) => ({
     value: draft[k], saved, cleared: !!clear[k],
@@ -452,71 +787,123 @@ export default function SettingsDialog({ onClose, initialTab }) {
     onUndoClear: () => setClear((c) => ({ ...c, [k]: false })),
   });
 
+  // API 预设与本地 Agent CLI 状态
+  const effectiveAiStatus = useMemo(() => {
+    if (!probedAiStatus) return aiStatus;
+    if (!aiStatus) return probedAiStatus;
+    return {
+      ...probedAiStatus,
+      ...aiStatus,
+      clis: probedAiStatus.clis || aiStatus.clis,
+    };
+  }, [aiStatus, probedAiStatus]);
+  const apiPresets = useMemo(() => mergeApiPresets(remotePresets), [remotePresets]);
+  const activePresetId = detectActivePreset(draft, apiPresets);
+  const activePreset = apiPresets.find((p) => p.id === activePresetId) || null;
+  const needsApiKey = apiRequiresKey(draft, apiPresets);
+  const aiMode = aiModeOf(draft.provider);
+  const activeCli = CLI_AGENTS.find((a) => a.id === draft.cliAgent) || CLI_AGENTS[0];
+  const cliInfo = cliStatusOf(activeCli.id, effectiveAiStatus, probedAiStatus && probedAiStatus.clis ? null : appInfo);
+  const cliFound = !!(cliInfo && (cliInfo.ok || cliInfo.installed || cliInfo.available || cliInfo.path));
+  const cliLoggedIn = !!(cliInfo && (cliInfo.loggedIn ?? cliInfo.authenticated ?? cliInfo.ready ?? cliFound));
+  const apiTestProvider = draft.apiProtocol === 'anthropic' ? 'anthropic' : 'openai';
+  const apiTestState = tests['ai:' + apiTestProvider];
+  const cliTestState = tests['ai:' + activeCli.id];
+
+  const apiConfigured = !!(
+    (effectiveAiStatus && effectiveAiStatus.api && effectiveAiStatus.api.configured)
+    || (effectiveAiStatus && effectiveAiStatus.openai && effectiveAiStatus.openai.configured)
+    || (effectiveAiStatus && effectiveAiStatus.anthropic && effectiveAiStatus.anthropic.configured)
+    || (effectiveAiStatus && effectiveAiStatus.ready && (effectiveAiStatus.provider === 'api' || effectiveAiStatus.provider === 'openai' || effectiveAiStatus.provider === 'anthropic'))
+  );
+
+  // 视频与图片服务商
   const vgProviders = useMemo(() => mergeVgProviders(vgList), [vgList]);
   const vgCur = vgProviders.find((p) => p.id === draft.vgProvider) || vgProviders[vgProviders.length - 1];
+  const vgCurDisp = localizeVgProvider(vgCur, isEn);
   const vgReady = (p) => providerReady(p, { draft, clear, hasKey: hasVg });
   const vgConfigured = vgProviders.some(vgReady);
 
-  // 即梦（火山方舟）：一个 Key 同时用于出图和出视频
   const arkReady = keyReady(draft, clear, 'arkKey', hasVg('arkKey'));
-  const arkSaved = hasVg('arkKey') && !clear.arkKey && !draft.arkKey.trim();
   const arkVideoModel = (vgProviders.find((p) => p.id === 'seedance') || {}).defaultModel || ARK_VIDEO_MODEL;
   const arkTest = tests['vg:seedance'];
   const arkImgTest = tests['img:ark'];
-  // 现在点「生成画面」会走哪条路（跟着输入框即时变化）
   const openaiKeyReady = keyReady(draft, clear, 'openaiKey', has('openaiKey'));
-  const imgSrc = describeImageSource({
+  const openaiImageReady = openaiKeyReady && !!draft.openaiBaseUrl.trim() && !!draft.openaiImageModel.trim();
+  const imgSrcCtx = {
     imageProvider: draft.imageProvider,
     hasArk: arkReady,
-    hasOpenai: openaiKeyReady && !!draft.openaiBaseUrl.trim() && !!draft.openaiImageModel.trim(),
+    hasOpenai: openaiImageReady,
     hasOpenaiKey: openaiKeyReady,
-  });
+  };
+  const imgSrc = describeImageSource(imgSrcCtx);
+  const imgSrcText = localizeImageSourceText(imgSrc, imgSrcCtx, isEn);
+  const imageProviderOptions = useMemo(
+    () => IMAGE_PROVIDERS.map((p) => ({ value: p.value, label: isEn ? (IMAGE_PROVIDER_EN[p.value] || p.label) : p.label })),
+    [isEn],
+  );
   const freeFailed = !!(freeTest && freeTest.results && Object.values(freeTest.results).some((r) => !r.ok));
 
-  // AI 是否已连上（Codex 或 OpenAI 兼容接口）；没连上时在 AI 页顶部给出两条路
-  const aiConnected = !!(aiStatus && aiStatus.ready && (aiStatus.provider === 'codex' || aiStatus.provider === 'openai'));
+  // AI 是否已连上（任意在线/本地 API 或任意本机 Agent CLI）
+  const aiConnected = !!(effectiveAiStatus && effectiveAiStatus.ready && effectiveAiStatus.provider && effectiveAiStatus.provider !== 'local' && effectiveAiStatus.provider !== 'none');
   // 语音识别走哪条路：本机 whisper 不上传；只有 OpenAI Key 时在线转写，会上传音频（如实告知）
   const asrEngine = asr && asr.ready ? asr.engine : null;
   const asrPrivacy = asrEngine === 'whisper'
-    ? '识别在本机完成，不上传音频。'
+    ? L('识别在本机完成，不上传音频。', 'Transcription runs locally on your machine—no audio is uploaded.')
     : asrEngine === 'openai'
-      ? '现在用的是 OpenAI 在线识别，音频会上传到你填写的 OpenAI 接口。安装本机模型后改为离线识别，不再上传。'
-      : '安装本机模型后，识别在本机完成，不上传音频。';
-  const asrEngineLabel = asrEngine === 'whisper' ? '本机识别（whisper.cpp）' : asrEngine === 'openai' ? 'OpenAI 在线识别' : (asr && asr.engine) || '—';
+      ? L(
+          '现在用的是 OpenAI 在线识别，音频会上传到你填写的 OpenAI 接口。安装本机模型后改为离线识别，不再上传。',
+          'Currently using OpenAI online transcription (audio is sent to your configured OpenAI endpoint). Install the local model to transcribe offline.',
+        )
+      : L('安装本机模型后，识别在本机完成，不上传音频。', 'Once the local model is installed, transcription runs fully offline.');
+  const asrEngineLabel = asrEngine === 'whisper'
+    ? L('本机识别（whisper.cpp）', 'Local (whisper.cpp)')
+    : asrEngine === 'openai'
+      ? L('OpenAI 在线识别', 'OpenAI Online')
+      : (asr && asr.engine) || '—';
   // 视频站使用须知：以设置里记录的同意时间为准
   const consentRec = settings && settings.consent && settings.consent[CONSENT_KEY];
   const consentOk = hasConsentLocal(CONSENT_KEY);
   const consentAt = consentRec && consentRec.at ? new Date(consentRec.at) : null;
-  const consentDate = consentAt && !Number.isNaN(consentAt.getTime()) ? `${consentAt.getFullYear()}年${consentAt.getMonth() + 1}月${consentAt.getDate()}日` : '';
+  const consentDate = consentAt && !Number.isNaN(consentAt.getTime())
+    ? (isEn
+        ? `${consentAt.getFullYear()}-${String(consentAt.getMonth() + 1).padStart(2, '0')}-${String(consentAt.getDate()).padStart(2, '0')}`
+        : `${consentAt.getFullYear()}年${consentAt.getMonth() + 1}月${consentAt.getDate()}日`)
+    : '';
   const licensesPath = (appInfo && appInfo.licensesPath) || '';
   const privacyPath = (appInfo && appInfo.privacyPath) || '';
 
-  const requestClose = () => {
-    if (saving) return;
-    if (dirty) { toast('有未保存的修改，请点「保存」或「放弃修改」', 'warn'); return; }
+  const discardAndClose = () => {
+    if (draft.locale !== savedLocale) setLocale(savedLocale);
     if (onClose) onClose();
   };
 
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty) { toast(t('settings.unsavedWarning'), 'warn'); return; }
+    discardAndClose();
+  };
+
   return (
-    <Modal title="设置" onClose={requestClose} wide className="st-modal sx-modal"
+    <Modal title={t('settings.title')} onClose={requestClose} wide className="st-modal sx-modal"
       footer={(
         <>
-          <span className="grow hint">{dirty ? '有尚未保存的修改' : '修改后点击「保存」生效'}</span>
-          <Button onClick={onClose} disabled={saving}>{dirty ? '放弃修改' : '关闭'}</Button>
-          <Button variant="primary" onClick={save} disabled={saving || !dirty}>{saving ? <><Spinner /> 保存中…</> : '保存'}</Button>
+          <span className="grow hint">{dirty ? t('settings.dirtyHint') : t('settings.cleanHint')}</span>
+          <Button onClick={discardAndClose} disabled={saving}>{dirty ? t('settings.discard') : t('app.close')}</Button>
+          <Button variant="primary" onClick={save} disabled={saving || !dirty}>{saving ? <><Spinner /> {t('app.saving')}</> : t('app.save')}</Button>
         </>
       )}
     >
       <style>{STYLE}</style>
       <div className="sx-layout">
-        <nav className="sx-nav" aria-label="设置分类">
+        <nav className="sx-nav" aria-label={t('settings.navAria')}>
           {NAV.map((n, i) => (
             <React.Fragment key={n.value}>
               {(i === 3 || i === 6 || i === 8) && <div className="sx-nav-sep" />}
               <button type="button" data-tab={n.value} className={(tab === n.value ? 'active ' : '') + (n.ai ? 'ai' : '')} onClick={() => setTab(n.value)}>
                 <Icon name={n.icon} size={16} />
-                {n.label}
-                {n.value === 'videogen' && vgConfigured && <span className="sx-nav-dot" title="已填写密钥" />}
+                {t(n.labelKey)}
+                {n.value === 'videogen' && vgConfigured && <span className="sx-nav-dot" title={L('已填写密钥', 'API key configured')} />}
               </button>
             </React.Fragment>
           ))}
@@ -525,19 +912,27 @@ export default function SettingsDialog({ onClose, initialTab }) {
         <div className="sx-pane" data-pane={tab}>
           {tab === 'general' && (
             <>
-              <PaneHead icon="settings" title="常规" desc="项目保存与启动行为。" />
+              <PaneHead icon="settings" title={t('settings.general.title')} desc={t('settings.general.desc')} />
               <div className="sx-card">
-                <Row title="自动保存" desc="编辑时每隔几秒自动保存项目，关闭窗口前也会保存。"><Switch checked={draft.autosave} onChange={(v) => set({ autosave: v })} /></Row>
-                <Row title="启动时打开上次的项目" desc="关闭后启动将停在首页。"><Switch checked={draft.openLastProject} onChange={(v) => set({ openLastProject: v })} /></Row>
+                <Row title={t('settings.general.autosave')} desc={t('settings.general.autosaveDesc')}><Switch checked={draft.autosave} onChange={(v) => set({ autosave: v })} /></Row>
+                <Row title={t('settings.general.openLast')} desc={t('settings.general.openLastDesc')}><Switch checked={draft.openLastProject} onChange={(v) => set({ openLastProject: v })} /></Row>
               </div>
             </>
           )}
 
           {tab === 'appearance' && (
             <>
-              <PaneHead icon="palette" title="外观" desc="调整界面大小，适配高分屏或小屏笔记本。" />
+              <PaneHead icon="palette" title={t('settings.appearance.title')} desc={L('切换界面语言与缩放比例，适配不同语言习惯与屏幕分辨率。', t('settings.appearance.desc'))} />
               <div className="sx-card">
-                <Row title="界面缩放" desc="影响全部文字与控件大小。">
+                <Row title={L('界面语言 / Interface Language', 'Interface Language')} desc={L('立即生效，保存后持久化到本地设置。', 'Takes effect immediately; click Save to persist across launches.')}>
+                  <Segmented
+                    value={draft.locale}
+                    onChange={(v) => { set({ locale: v }); setLocale(v); }}
+                    options={SUPPORTED_LOCALES}
+                    label={L('界面语言 / Interface Language', 'Interface Language')}
+                  />
+                </Row>
+                <Row title={t('settings.appearance.scale')} desc={t('settings.appearance.scaleDesc')}>
                   <Segmented value={draft.uiScale} onChange={(v) => set({ uiScale: v })} options={[{ value: 0.9, label: '90%' }, { value: 1, label: '100%' }, { value: 1.1, label: '110%' }, { value: 1.25, label: '125%' }]} />
                 </Row>
               </div>
@@ -546,67 +941,102 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'media' && (
             <>
-              <PaneHead icon="film" title="素材" desc="「为全部分镜配实拍素材」和素材搜索，默认从下面这些免费素材库里找画面，不需要填任何 Key。" />
+              <PaneHead
+                icon="film"
+                title={t('settings.nav.media')}
+                desc={L(
+                  '「为全部分镜配实拍素材」和素材搜索，默认从下面这些免费素材库里找画面，不需要填任何 Key。',
+                  'Auto-matching stock footage and media search pull from these free public libraries by default—no API key required.',
+                )}
+              />
               <div className="sx-card" data-card="free-sources">
-                <h4>免费素材来源 <Chip kind="ok" dot>无需 Key</Chip></h4>
+                <h4>{L('免费素材来源', 'Free Stock Sources')} <Chip kind="ok" dot>{L('无需 Key', 'No Key Needed')}</Chip></h4>
                 <ul className="sx-src">
                   {FREE_SOURCES.map((s) => {
-                    const r = freeTest && freeTest.results ? freeTest.results[s.id] : null;
+                    const enSrc = FREE_SOURCE_EN[s.id];
+                    const r = freeTest && freeTest.results ? localizeStockResult(freeTest.results[s.id], isEn) : null;
                     return (
                       <li key={s.id} data-source={s.id}>
-                        <span className="sx-src-name"><b>{s.name}</b><small>{s.en}</small></span>
-                        <span>{s.kinds}</span>
-                        <span>{s.license}</span>
+                        <span className="sx-src-name">
+                          <b>{isEn && enSrc ? enSrc.name : s.name}</b>
+                          <small>{isEn && enSrc ? enSrc.sub : s.en}</small>
+                        </span>
+                        <span>{isEn && enSrc ? enSrc.kinds : s.kinds}</span>
+                        <span>{isEn && enSrc ? enSrc.license : s.license}</span>
                         <span className="sx-src-state">
                           {freeTest && freeTest.running && <Spinner />}
-                          {r && (r.ok ? <Chip kind="ok" dot>可用</Chip> : <Chip kind="warn" dot title={r.error}>没搜到</Chip>)}
+                          {r && (r.ok ? <Chip kind="ok" dot>{L('可用', 'Available')}</Chip> : <Chip kind="warn" dot title={r.error}>{L('没搜到', 'No results')}</Chip>)}
                         </span>
                       </li>
                     );
                   })}
                 </ul>
-                <p className="sx-note">这些来源的素材都可以商用，或者属于公有领域。需要署名的素材，导出时会自动生成一份署名清单（和视频放在一起的 .credits.txt 文件）。</p>
+                <p className="sx-note">{L(
+                  '这些来源的素材都可以商用，或者属于公有领域。需要署名的素材，导出时会自动生成一份署名清单（和视频放在一起的 .credits.txt 文件）。',
+                  'Assets from these libraries are public domain or commercial-safe. When attribution is required, Frameflow automatically generates a .credits.txt file alongside your exported video.',
+                )}</p>
                 <div className="sx-actions">
-                  <Button size="sm" icon="search" onClick={testFree} disabled={!!(freeTest && freeTest.running)}>试着搜一下</Button>
-                  {freeTest && freeTest.running && <span className="st-test running" role="status">正在逐个搜索，最多要等半分钟…</span>}
+                  <Button size="sm" icon="search" onClick={testFree} disabled={!!(freeTest && freeTest.running)}>{L('试着搜一下', 'Test Free Sources')}</Button>
+                  {freeTest && freeTest.running && <span className="st-test running" role="status">{L('正在逐个搜索，最多要等半分钟…', 'Testing each source—this may take up to 30 seconds…')}</span>}
                 </div>
                 {freeFailed && (
                   <FailHelp
-                    detail={FREE_SOURCES.filter((s) => freeTest.results[s.id] && !freeTest.results[s.id].ok).map((s) => `${s.name}：${freeTest.results[s.id].error}`).join('；')}
-                    steps={['检查网络是否正常；开了代理的话，换个节点或关掉代理再试。', '只有个别来源没搜到不要紧，镜流会自动用其余来源。']}
+                    detail={FREE_SOURCES
+                      .filter((s) => freeTest.results[s.id] && !freeTest.results[s.id].ok)
+                      .map((s) => {
+                        const enSrc = FREE_SOURCE_EN[s.id];
+                        const r = localizeStockResult(freeTest.results[s.id], isEn);
+                        return `${isEn && enSrc ? enSrc.name : s.name}${L('：', ': ')}${r.error}`;
+                      })
+                      .join(L('；', '; '))}
+                    steps={isEn
+                      ? [
+                          'Check your internet connection; if using a proxy, try switching nodes or turning it off.',
+                          'It is fine if one source is unreachable—Frameflow automatically uses the remaining sources.',
+                        ]
+                      : [
+                          '检查网络是否正常；开了代理的话，换个节点或关掉代理再试。',
+                          '只有个别来源没搜到不要紧，镜流会自动用其余来源。',
+                        ]}
                   />
                 )}
               </div>
               <div className="sx-card" data-card="stock-keys">
-                <h4>可选：已有 Pexels / Pixabay Key 可以填在这里</h4>
-                <p className="sx-note" style={{ marginTop: 0 }}>不填也能正常使用。Pexels 已经暂停发放新的 Key；如果你以前申请过，填上后搜索素材时会多出这两个来源。</p>
+                <h4>{L('可选：已有 Pexels / Pixabay Key 可以填在这里', 'Optional: Pexels / Pixabay API Keys')}</h4>
+                <p className="sx-note" style={{ marginTop: 0 }}>{L(
+                  '不填也能正常使用。Pexels 已经暂停发放新的 Key；如果你以前申请过，填上后搜索素材时会多出这两个来源。',
+                  'Completely optional. Pexels has paused issuing new keys, but if you already have keys, adding them unlocks both libraries in media search.',
+                )}</p>
                 <div className="sx-keys st-gap">
-                  <SecretField label="Pexels API Key（可选）" {...secretProps('pexelsKey', has('pexelsKey'))} />
+                  <SecretField label={L('Pexels API Key（可选）', 'Pexels API Key (Optional)')} {...secretProps('pexelsKey', has('pexelsKey'))} />
                   {keyReady(draft, clear, 'pexelsKey', has('pexelsKey')) && (
                     <div className="sx-actions">
-                      <Button size="sm" icon="bolt" onClick={() => testStock('pexels')} disabled={saving || testing('stock:pexels')}>测试 Pexels</Button>
+                      <Button size="sm" icon="bolt" onClick={() => testStock('pexels')} disabled={saving || testing('stock:pexels')}>{L('测试 Pexels', 'Test Pexels')}</Button>
                       <TestResult state={tests['stock:pexels']} />
                     </div>
                   )}
-                  <SecretField label="Pixabay API Key（可选）" {...secretProps('pixabayKey', has('pixabayKey'))} />
+                  <SecretField label={L('Pixabay API Key（可选）', 'Pixabay API Key (Optional)')} {...secretProps('pixabayKey', has('pixabayKey'))} />
                   {keyReady(draft, clear, 'pixabayKey', has('pixabayKey')) && (
                     <div className="sx-actions">
-                      <Button size="sm" icon="bolt" onClick={() => testStock('pixabay')} disabled={saving || testing('stock:pixabay')}>测试 Pixabay</Button>
+                      <Button size="sm" icon="bolt" onClick={() => testStock('pixabay')} disabled={saving || testing('stock:pixabay')}>{L('测试 Pixabay', 'Test Pixabay')}</Button>
                       <TestResult state={tests['stock:pixabay']} />
                     </div>
                   )}
                 </div>
               </div>
               <div className="sx-card">
-                <h4>视频站下载（yt-dlp）{!ytdlp ? <Chip>检测中…</Chip> : ytdlp.installed ? <Chip kind="ok" dot>已安装</Chip> : <Chip kind="warn" dot>未安装</Chip>}</h4>
-                <p className="sx-note" style={{ marginTop: 0 }}>用于从 B站、YouTube 等下载参考视频到拆片库学习。</p>
-                {ytdlp && ytdlp.installed && <StatusLine label="版本" value={ytdlp.version || '—'} mono />}
-                <Row title="最长下载时长" desc="超过时只下载开头部分。">
-                  <input className="input st-num" type="number" min={10} max={3600} step={10} value={draft.maxDownloadSeconds} onChange={(e) => set({ maxDownloadSeconds: e.target.value })} /> 秒
+                <h4>
+                  {L('视频站下载（yt-dlp）', 'Online Video Downloader (yt-dlp)')}
+                  {!ytdlp ? <Chip>{L('检测中…', 'Checking…')}</Chip> : ytdlp.installed ? <Chip kind="ok" dot>{L('已安装', 'Installed')}</Chip> : <Chip kind="warn" dot>{L('未安装', 'Not Installed')}</Chip>}
+                </h4>
+                <p className="sx-note" style={{ marginTop: 0 }}>{L('用于从 B站、YouTube 等下载参考视频到拆片库学习。', 'Downloads reference videos from YouTube, Bilibili, and other sites into the Breakdown Library for study.')}</p>
+                {ytdlp && ytdlp.installed && <StatusLine label={L('版本', 'Version')} value={ytdlp.version || '—'} mono />}
+                <Row title={L('最长下载时长', 'Max Download Duration')} desc={L('超过时只下载开头部分。', 'Longer videos are clipped to this duration from the start.')}>
+                  <input className="input st-num" type="number" min={10} max={3600} step={10} value={draft.maxDownloadSeconds} onChange={(e) => set({ maxDownloadSeconds: e.target.value })} />{L(' 秒', ' s')}
                 </Row>
                 <div className="sx-actions">
                   <Button size="sm" icon={ytInstall ? undefined : 'download'} onClick={installYtdlp} disabled={!!ytInstall || !ytdlp}>
-                    {ytInstall ? <><Spinner /> 下载中…</> : ytdlp && ytdlp.installed ? '更新到最新版' : '一键安装'}
+                    {ytInstall ? <><Spinner /> {L('下载中…', 'Downloading…')}</> : ytdlp && ytdlp.installed ? L('更新到最新版', 'Update to Latest') : L('一键安装', 'Install Now')}
                   </Button>
                 </div>
                 {ytInstall && <div className="st-progress"><ProgressBar value={ytInstall.progress} indeterminate={!(ytInstall.progress > 0)} /><div className="xs muted ellipsis">{ytInstall.message}</div></div>}
@@ -616,82 +1046,143 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'videogen' && (
             <>
-              <PaneHead icon="sparkles" title="AI 视频和图片" desc="让 AI 按分镜生成画面和视频镜头，生成后自动放进项目。推荐用即梦：填一个 API Key，图片和视频都能用。" />
-              <div className="sx-card" data-card="ark">
-                <h4>
-                  即梦（火山方舟）<Chip kind="accent">推荐</Chip>
-                  {arkSaved ? <Chip kind="ok" dot>已填写</Chip> : arkReady ? <Chip kind="warn" dot>保存后生效</Chip> : <Chip dot>还没填写</Chip>}
-                </h4>
-                <p className="sx-note" style={{ marginTop: 0 }}>一个火山方舟 API Key，同时用于即梦图片（Seedream）和即梦视频（Seedance）。</p>
-                <div className="st-gap">
-                  <SecretField label="API Key" placeholder="粘贴火山方舟 API Key" {...secretProps('arkKey', hasVg('arkKey'))} onChange={(v) => setDraft((d) => applyArkKey(d, v))} />
-                </div>
-                <div className="sx-grid2">
-                  <Field label="图片模型名（可选）" hint={`留空使用 ${ARK_IMAGE_MODEL}`}>
-                    <input className="input mono" spellCheck={false} value={draft.arkImageModel} placeholder={ARK_IMAGE_MODEL} onChange={(e) => set({ arkImageModel: e.target.value })} />
-                  </Field>
-                  <Field label="视频模型名（可选）" hint={`留空使用 ${arkVideoModel}`}>
-                    <input className="input mono" spellCheck={false} value={ovOf(draft, 'seedance').model} placeholder={arkVideoModel} onChange={(e) => setOv('seedance', { model: e.target.value })} />
-                  </Field>
-                </div>
-                <div className="sx-actions">
-                  <Button size="sm" icon="bolt" onClick={() => testVg('seedance')} disabled={saving || testing('vg:seedance')}>测试连接</Button>
-                  <Button size="sm" variant="ghost" icon="external" onClick={() => openUrl(ARK_CONSOLE_URL, toast)}>打开火山方舟控制台</Button>
-                  <TestResult state={arkTest} okText="连接成功，Key 可以用" brief={!!arkTest && !arkTest.running && !arkTest.ok} />
-                </div>
-                {arkTest && !arkTest.running && !arkTest.ok && <FailHelp detail={arkTest.detail} steps={arkTroubleshoot(arkTest.detail)} />}
-                <ul className="sx-tips">
-                  <li>即梦 App 的会员积分<b>不能</b>用于 API。API 按火山引擎的价格计费，新用户通常有免费额度。</li>
-                  <li>要先在控制台的「开通管理」里开通 <b>Seedream</b>（图片）和 <b>Seedance</b>（视频）模型，否则会提示模型未开通。</li>
-                  <li>「测试连接」只检查 Key 能不能用，不花钱。</li>
-                </ul>
-                <Row title="试生成一张图" desc="真的让即梦画一张图，确认 Seedream 已经开通。会用掉一张图的额度，一般 10–60 秒出结果。">
-                  <Button size="sm" icon={iconOr('image', 'sparkles')} onClick={testArkImage} disabled={!arkReady || saving || testing('img:ark')} title={arkReady ? undefined : '先填写 API Key'}>试生成</Button>
+              <PaneHead
+                icon="sparkles"
+                title={t('settings.nav.videogen')}
+                desc={L(
+                  '让 AI 按分镜生成参考画面与视频镜头，生成后自动导入当前项目。支持 OpenAI、Runway、Luma、Google Veo (Gemini)、可灵、海螺、火山方舟（即梦）与 fal.ai 等多家服务商。',
+                  'Generate storyboard frames and AI video clips directly into your project. Supports OpenAI, Runway, Luma, Google Veo (Gemini), Kling, Hailuo, Volcengine Ark (Seedance), fal.ai, and more.',
+                )}
+              />
+              <div className="sx-card" data-card="image-source">
+                <h4>{L('AI 出图来源', 'AI Image Generation Source')}</h4>
+                <Row
+                  title={L('生成画面时用哪个服务', 'Image Provider')}
+                  desc={L(
+                    '选「自动」时自动选用已配置的出图服务（火山方舟 Seedream 或「AI 助手」里的 OpenAI 兼容图片模型）。',
+                    'Auto selects whichever image service is configured (Volcengine Ark Seedream or the OpenAI-compatible image model in AI Assistant).',
+                  )}
+                >
+                  <Segmented value={draft.imageProvider} onChange={(v) => set({ imageProvider: v })} options={imageProviderOptions} label={L('AI 出图来源', 'AI Image Generation Source')} />
                 </Row>
-                {arkImgTest && (
-                  <div className="sx-imgtest">
-                    <TestResult state={arkImgTest} waitingText="即梦正在出图，请稍等…" okText="出图成功" failText="出图失败" brief />
-                    {!arkImgTest.running && arkImgTest.ok && arkImgTest.path && (
-                      <img className="sx-thumb" src={api.mediaUrl(arkImgTest.path)} alt="即梦试生成的图片" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                    )}
-                    {!arkImgTest.running && !arkImgTest.ok && <FailHelp detail={arkImgTest.detail} steps={arkTroubleshoot(arkImgTest.detail)} />}
+                <div className={'callout st-gap ' + (imgSrc.warn ? 'warn' : 'ok')} role="status" data-image-source={imgSrc.source}>{imgSrcText}</div>
+                {imgSrc.warn && (
+                  <div className="sx-actions">
+                    <Button size="sm" variant="ghost" onClick={() => setTab('ai')}>{L('前往「AI 助手」配置图片模型', 'Configure Image Model in AI Assistant')}</Button>
+                    {draft.vgProvider !== 'seedance' && <Button size="sm" variant="ghost" onClick={() => set({ vgProvider: 'seedance' })}>{L('配置火山方舟密钥', 'Configure Volcengine Ark Key')}</Button>}
                   </div>
                 )}
               </div>
 
-              <div className="sx-card" data-card="image-source">
-                <h4>AI 出图来源</h4>
-                <Row title="生成画面时用哪个服务" desc="选「自动」时优先用即梦；没有填火山方舟 Key，就用「AI 助手」里的 OpenAI 兼容接口。">
-                  <Segmented value={draft.imageProvider} onChange={(v) => set({ imageProvider: v })} options={IMAGE_PROVIDERS} label="AI 出图来源" />
-                </Row>
-                <div className={'callout st-gap ' + (imgSrc.warn ? 'warn' : 'ok')} role="status" data-image-source={imgSrc.source}>{imgSrc.text}</div>
-              </div>
-
-              <h4 className="sx-sub">AI 视频服务商</h4>
-              <p className="sx-note">生成视频镜头时用哪一家。选即梦以外的服务商，需要另外填写它自己的密钥。</p>
-              <div className="sx-providers" role="radiogroup" aria-label="AI 视频服务商">
-                {vgProviders.map((p) => (
-                  <button key={p.id} type="button" role="radio" aria-checked={draft.vgProvider === p.id} data-provider={p.id} className={'sx-prov' + (draft.vgProvider === p.id ? ' active' : '')} onClick={() => set({ vgProvider: p.id })}>
-                    <span className="sx-prov-top"><span className="sx-prov-radio" /><b>{p.label}</b></span>
-                    <small>{p.vendor}{p.recommended && vgReady(p) ? ' · 推荐' : ''}</small>
-                    <span className="sx-price">{p.priceHint}</span>
-                    <span className="sx-prov-status">{p.isMock ? <span className="sx-badge">免密钥</span> : vgReady(p) ? <Chip kind="ok" dot>已填写</Chip> : p.recommended ? <Chip kind="accent">推荐</Chip> : null}</span>
-                  </button>
-                ))}
+              <h4 className="sx-sub">{L('AI 视频服务商', 'AI Video Providers')}</h4>
+              <p className="sx-note">{L(
+                '平等支持多家主流 AI 视频生成服务商，按需选择一家并配置对应密钥，或使用免密钥的演示模式体验完整流程。',
+                'Choose any supported AI video provider and add its API key, or use keyless Demo Mode to preview the full workflow.',
+              )}</p>
+              <div className="sx-providers" role="radiogroup" aria-label={L('AI 视频服务商', 'AI Video Providers')}>
+                {vgProviders.map((p) => {
+                  const pd = localizeVgProvider(p, isEn);
+                  return (
+                    <button key={p.id} type="button" role="radio" aria-checked={draft.vgProvider === p.id} data-provider={p.id} className={'sx-prov' + (draft.vgProvider === p.id ? ' active' : '')} onClick={() => set({ vgProvider: p.id })}>
+                      <span className="sx-prov-top"><span className="sx-prov-radio" /><b>{pd.label}</b></span>
+                      <small>{pd.vendor}</small>
+                      <span className="sx-price">{pd.priceHint}</span>
+                      <span className="sx-prov-status">{p.isMock ? <span className="sx-badge">{L('免密钥', 'No Key')}</span> : vgReady(p) ? <Chip kind="ok" dot>{L('已填写', 'Configured')}</Chip> : null}</span>
+                    </button>
+                  );
+                })}
               </div>
               <div className="sx-card" data-card="provider">
-                <h4>{vgCur.label} {vgCur.isMock ? <span className="sx-badge">演示</span> : vgReady(vgCur) ? <Chip kind="ok" dot>已填写</Chip> : <Chip kind="warn" dot>还没填写密钥</Chip>}</h4>
+                <h4>
+                  {vgCurDisp.label}{' '}
+                  {vgCur.isMock
+                    ? <span className="sx-badge">{L('演示', 'Demo')}</span>
+                    : vgReady(vgCur)
+                      ? <Chip kind="ok" dot>{L('已填写', 'Configured')}</Chip>
+                      : <Chip kind="warn" dot>{L('还没填写密钥', 'Key Required')}</Chip>}
+                </h4>
                 {vgCur.isMock ? (
-                  <p className="sx-note" style={{ marginTop: 0 }}>演示模式不联网、不收费：返回内置的实拍样例片段，用来体验「AI 生成 → 自动放进分镜」的流程。正式使用请选择上方任一服务商。</p>
+                  <p className="sx-note" style={{ marginTop: 0 }}>{L(
+                    '演示模式不联网、不收费：返回内置的实拍样例片段，用来体验「AI 生成 → 自动放进分镜」的流程。正式使用请选择上方任一服务商。',
+                    'Demo Mode runs offline at no cost, returning bundled sample clips so you can preview the AI generation workflow. Pick any provider above for real generation.',
+                  )}</p>
                 ) : vgCur.id === 'seedance' ? (
                   <>
-                    <p className="sx-note" style={{ marginTop: 0 }}>即梦的 API Key 和模型名在本页最上面的「即梦（火山方舟）」里填写和测试。</p>
+                    <p className="sx-note" style={{ marginTop: 0 }}>{L(
+                      '同一个火山方舟 API Key 可同时用于 Seedream 图片生成与 Seedance 视频生成。',
+                      'A single Volcengine Ark API key works for both Seedream image generation and Seedance video generation.',
+                    )}</p>
                     <div className="st-gap">
-                      <Field label="接口地址（可选）" hint="一般留空。使用代理时填写，图片和视频共用这个地址">
+                      <SecretField label="API Key" placeholder={L('粘贴火山方舟 API Key', 'Paste Volcengine Ark API Key')} {...secretProps('arkKey', hasVg('arkKey'))} onChange={(v) => setDraft((d) => applyArkKey(d, v))} />
+                    </div>
+                    <div className="sx-grid3">
+                      <Field label={L('视频模型名（可选）', 'Video Model (Optional)')} hint={L(`留空使用 ${arkVideoModel}`, `Leave blank for ${arkVideoModel}`)}>
+                        <input className="input mono" spellCheck={false} value={ovOf(draft, 'seedance').model} placeholder={arkVideoModel} onChange={(e) => setOv('seedance', { model: e.target.value })} />
+                      </Field>
+                      <Field label={L('图片模型名（可选）', 'Image Model (Optional)')} hint={L(`留空使用 ${ARK_IMAGE_MODEL}`, `Leave blank for ${ARK_IMAGE_MODEL}`)}>
+                        <input className="input mono" spellCheck={false} value={draft.arkImageModel} placeholder={ARK_IMAGE_MODEL} onChange={(e) => set({ arkImageModel: e.target.value })} />
+                      </Field>
+                      <Field label={L('接口地址（可选）', 'Endpoint URL (Optional)')} hint={L('一般留空；使用代理时填写', 'Leave blank unless using a custom proxy')}>
                         <input className="input mono" spellCheck={false} value={ovOf(draft, 'seedance').baseUrl} placeholder={vgCur.defaultBaseUrl || ''} onChange={(e) => setOv('seedance', { baseUrl: e.target.value })} />
                       </Field>
                     </div>
-                    <p className="sx-note"><Icon name="info" size={12} /> 视频参考价格 {vgCur.priceHint}，<b>费用由火山引擎直接收取</b>，镜流不加价。</p>
+                    <p className="sx-note">
+                      <Icon name="info" size={12} />{' '}
+                      {isEn ? (
+                        <>
+                          Est. {vgCurDisp.priceHint} — <b>billed directly by Volcengine</b> with zero markup from Frameflow.{' '}
+                          <TextLink onClick={() => openUrl(ARK_CONSOLE_URL, toast, isEn)}>Open Volcengine Ark Console →</TextLink>
+                        </>
+                      ) : (
+                        <>
+                          参考价格 {vgCurDisp.priceHint}，<b>费用由火山引擎直接收取</b>，镜流不加价。{' '}
+                          <TextLink onClick={() => openUrl(ARK_CONSOLE_URL, toast, isEn)}>打开火山方舟控制台 →</TextLink>
+                        </>
+                      )}
+                    </p>
+                    <div className="sx-actions">
+                      <Button size="sm" icon="bolt" onClick={() => testVg('seedance')} disabled={saving || testing('vg:seedance')}>{L('测试连接', 'Test Connection')}</Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={iconOr('image', 'sparkles')}
+                        onClick={testArkImage}
+                        disabled={!arkReady || saving || testing('img:ark')}
+                        title={arkReady ? L('调用一次 Seedream 验证出图（消耗一张图额度）', 'Generate one sample image with Seedream (uses 1 image credit)') : L('请先填写 API Key', 'Enter your API key first')}
+                      >
+                        {L('试生成一张图', 'Generate Test Image')}
+                      </Button>
+                      <TestResult state={arkTest} okText={L('连接成功，Key 可以用', 'Connected — key is valid')} brief={!!arkTest && !arkTest.running && !arkTest.ok} />
+                    </div>
+                    {arkTest && !arkTest.running && !arkTest.ok && <FailHelp detail={arkTest.detail} steps={localizeArkSteps(arkTest.detail, arkTroubleshoot(arkTest.detail), isEn)} />}
+                    {arkImgTest && (
+                      <div className="sx-imgtest">
+                        <TestResult
+                          state={arkImgTest}
+                          waitingText={L('正在调用 Seedream 出图，请稍等…', 'Generating test image with Seedream…')}
+                          okText={L('出图成功', 'Image generated')}
+                          failText={L('出图失败', 'Generation failed')}
+                          brief
+                        />
+                        {!arkImgTest.running && arkImgTest.ok && arkImgTest.path && (
+                          <img className="sx-thumb" src={api.mediaUrl(arkImgTest.path)} alt={L('Seedream 试生成的图片', 'Seedream test image')} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                        )}
+                        {!arkImgTest.running && !arkImgTest.ok && <FailHelp detail={arkImgTest.detail} steps={localizeArkSteps(arkImgTest.detail, arkTroubleshoot(arkImgTest.detail), isEn)} />}
+                      </div>
+                    )}
+                    <ul className="sx-tips">
+                      {isEn ? (
+                        <>
+                          <li>Activate both <b>Seedream</b> (image) and <b>Seedance</b> (video) under Model Activation in the Volcengine Ark console; Jimeng app credits do not apply to API usage.</li>
+                          <li>"Test Connection" only checks key validity and costs nothing; "Generate Test Image" consumes one image credit per provider pricing.</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>需在火山方舟控制台「开通管理」中开通 <b>Seedream</b>（图片）与 <b>Seedance</b>（视频）模型；即梦 App 会员积分不适用于 API。</li>
+                          <li>「测试连接」仅检查 Key 有效性，不扣费；「试生成一张图」会按服务商计费标准消耗一次出图额度。</li>
+                        </>
+                      )}
+                    </ul>
                   </>
                 ) : (
                   <>
@@ -699,99 +1190,305 @@ export default function SettingsDialog({ onClose, initialTab }) {
                       const secret = vgCur.keyFields && vgCur.keyFields[f];
                       if (!secret) return null;
                       const fb = f === 'key' && vgCur.keyFields.fallback;
-                      return <SecretField key={f} label={FIELD_LABEL[f] || f} hint={fb ? '留空时使用「AI 助手」中的 OpenAI API Key' : undefined} {...secretProps(secret, hasVg(secret))} />;
+                      return (
+                        <SecretField
+                          key={f}
+                          label={FIELD_LABEL[f] || f}
+                          hint={fb ? L('留空时使用「AI 助手」中的 OpenAI API Key', 'Leave blank to reuse the OpenAI API key from AI Assistant') : undefined}
+                          {...secretProps(secret, hasVg(secret))}
+                        />
+                      );
                     })}
                     <div className="sx-grid2">
-                      <Field label="模型名（可选）" hint={vgCur.defaultModel ? `留空使用 ${vgCur.defaultModel}` : undefined}>
+                      <Field label={L('模型名（可选）', 'Model (Optional)')} hint={vgCur.defaultModel ? L(`留空使用 ${vgCur.defaultModel}`, `Leave blank for ${vgCur.defaultModel}`) : undefined}>
                         <input className="input mono" spellCheck={false} value={ovOf(draft, vgCur.id).model} placeholder={vgCur.defaultModel || ''} onChange={(e) => setOv(vgCur.id, { model: e.target.value })} />
                       </Field>
-                      <Field label="接口地址（可选）" hint="使用代理或海外节点时填写">
+                      <Field label={L('接口地址（可选）', 'Endpoint URL (Optional)')} hint={L('使用代理或自定义端点时填写', 'Set only for proxies or custom endpoints')}>
                         <input className="input mono" spellCheck={false} value={ovOf(draft, vgCur.id).baseUrl} placeholder={vgCur.defaultBaseUrl || ''} onChange={(e) => setOv(vgCur.id, { baseUrl: e.target.value })} />
                       </Field>
                     </div>
                     <p className="sx-note">
-                      <Icon name="info" size={12} /> 参考价格 {vgCur.priceHint}，<b>费用由服务商直接收取</b>，镜流不加价。
-                      {vgCur.keyUrl && <> <TextLink onClick={() => openUrl(vgCur.keyUrl, toast)}>去获取密钥 →</TextLink></>}
+                      <Icon name="info" size={12} />{' '}
+                      {isEn ? (
+                        <>
+                          Est. {vgCurDisp.priceHint} — <b>billed directly by the provider</b> with zero markup from Frameflow.
+                          {vgCur.keyUrl && <> <TextLink onClick={() => openUrl(vgCur.keyUrl, toast, isEn)}>Get API Key →</TextLink></>}
+                        </>
+                      ) : (
+                        <>
+                          参考价格 {vgCurDisp.priceHint}，<b>费用由服务商直接收取</b>，镜流不加价。
+                          {vgCur.keyUrl && <> <TextLink onClick={() => openUrl(vgCur.keyUrl, toast, isEn)}>去获取密钥 →</TextLink></>}
+                        </>
+                      )}
                     </p>
-                  </>
-                )}
-                {vgCur.id !== 'seedance' && (
-                  <>
                     <div className="sx-actions">
-                      <Button size="sm" icon="bolt" onClick={() => testVg(vgCur.id)} disabled={saving || testing('vg:' + vgCur.id)}>测试连接</Button>
+                      <Button size="sm" icon="bolt" onClick={() => testVg(vgCur.id)} disabled={saving || testing('vg:' + vgCur.id)}>{L('测试连接', 'Test Connection')}</Button>
                       <TestResult state={tests['vg:' + vgCur.id]} brief={!!tests['vg:' + vgCur.id] && !tests['vg:' + vgCur.id].running && !tests['vg:' + vgCur.id].ok} />
                     </div>
                     {tests['vg:' + vgCur.id] && !tests['vg:' + vgCur.id].running && !tests['vg:' + vgCur.id].ok && <FailHelp detail={tests['vg:' + vgCur.id].detail} />}
                   </>
                 )}
               </div>
-              <p className="sx-note">所有密钥都用系统加密保存在这台电脑上，不会写进项目文件。每家服务商同时最多运行 2 个任务，其余自动排队。</p>
+              <p className="sx-note">{L(
+                '所有密钥都用系统加密保存在这台电脑上，不会写进项目文件。每家服务商同时最多运行 2 个任务，其余自动排队。',
+                'All API keys are encrypted locally using OS credential storage and never saved inside project files. Up to 2 concurrent jobs run per provider; additional jobs queue automatically.',
+              )}</p>
             </>
           )}
 
           {tab === 'ai' && (
             <>
-              <PaneHead icon="brain" title="AI 助手" desc="写分镜、改剪辑、拆片分析所用的语言模型。" />
+              <PaneHead
+                icon="brain"
+                title={t('settings.ai.title')}
+                desc={L(
+                  '写分镜、改剪辑、拆片分析所用的语言模型。支持主流在线 API、免 Key 本机模型与多种本机 Agent CLI。',
+                  'Language models for storyboarding, natural-language editing, and breakdown analysis. Supports cloud APIs, keyless local models, and local Agent CLIs.',
+                )}
+              />
               {!aiConnected && (
                 <div className="callout ai sx-guide">
                   <Icon name="sparkles" size={16} />
                   <div>
-                    <b>还没有连接 AI。</b>有两种方式，任选一种：
-                    <br />1. 安装 Codex，用 ChatGPT 账号登录，不需要 API Key（推荐）；
-                    <br />2. 在下方「OpenAI 兼容接口」里填写地址和 Key。
-                    <br />没连接时，镜流会用本地规则帮你拆分镜、做剪辑，能做的事会少一些。
-                    <div className="sx-actions">
-                      <Button size="sm" icon="external" onClick={() => openUrl(CODEX_URL, toast)}>查看 Codex 安装说明</Button>
-                    </div>
+                    {isEn ? (
+                      <>
+                        <b>AI is not connected yet.</b> Choose any option below:
+                        <br />1. Pick a preset under "Cloud & Local API" (OpenAI, DeepSeek, Claude, Gemini, OpenRouter, Volcengine Ark, or keyless local Ollama / LM Studio);
+                        <br />2. Enable a locally signed-in CLI under "Local Agent CLI" (Claude Code, Codex CLI, or Gemini CLI);
+                        <br />3. Or collaborate directly from an external agent via CLI, Agent Skill, or MCP.
+                        <br />Without AI, local rules still handle basic editing commands and template storyboards.
+                      </>
+                    ) : (
+                      <>
+                        <b>尚未连接 AI。</b>可按需任选其一：
+                        <br />1. 在下方「在线与本地 API」一键选用 OpenAI、DeepSeek、Claude、Gemini、OpenRouter、火山方舟，或免 Key 的 Ollama / LM Studio 本机模型；
+                        <br />2. 在「本地 Agent CLI」按需启用本机已登录的 Claude Code、Codex CLI 或 Gemini CLI；
+                        <br />3. 或直接通过外部 Agent（CLI / Skill / MCP）协作操作项目。
+                        <br />未连接时，仍可使用本地规则完成基础指令解析与模板分镜。
+                      </>
+                    )}
                   </div>
                 </div>
               )}
-              <div className="sx-card">
-                <h4>提供方</h4>
-                <div className="st-radios" role="radiogroup" aria-label="AI 提供方">
-                  {AI_PROVIDERS.map((p) => (
-                    <button key={p.value} type="button" role="radio" aria-checked={draft.provider === p.value} className={'st-radio' + (draft.provider === p.value ? ' active' : '')} onClick={() => set({ provider: p.value })}>
+
+              <div className="sx-card" data-card="ai-mode">
+                <h4>{L('工作模式', 'Mode')}</h4>
+                <div className="st-radios" role="radiogroup" aria-label={L('AI 工作模式', 'AI Mode')}>
+                  {AI_MODES.map((m) => (
+                    <button
+                      key={m.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={aiMode === m.value}
+                      className={'st-radio' + (aiMode === m.value ? ' active' : '')}
+                      onClick={() => set({ provider: providerForAiMode(m.value, draft) })}
+                    >
                       <span className="st-radio-dot" />
-                      <span className="st-radio-text"><b>{p.title}</b><span>{p.desc}</span></span>
+                      <span className="st-radio-text"><b>{isEn ? m.titleEn : m.title}</b><span>{isEn ? m.descEn : m.desc}</span></span>
                     </button>
                   ))}
                 </div>
-                {aiStatus && (
-                  <div className="st-current">当前生效：<b>{aiStatus.provider === 'codex' ? 'Codex CLI' : aiStatus.provider === 'openai' ? 'OpenAI 兼容接口' : '本地规则'}</b>{aiStatus.model ? <span className="mono"> · {aiStatus.model}</span> : null}</div>
+                {effectiveAiStatus && (
+                  <div className="st-current">
+                    {L('当前生效：', 'Active engine: ')}<b>{aiProviderLabel(effectiveAiStatus.provider, activeLocale, effectiveAiStatus.preset || (effectiveAiStatus.api && effectiveAiStatus.api.preset))}</b>
+                    {effectiveAiStatus.model ? <span className="mono"> · {effectiveAiStatus.model}</span> : null}
+                  </div>
                 )}
               </div>
-              <div className="sx-card">
-                <h4>Codex CLI {codex ? (codex.ok ? (codex.loggedIn ? <Chip kind="ok" dot>已登录</Chip> : <Chip kind="warn" dot>未登录</Chip>) : <Chip kind="warn" dot>未检测到</Chip>) : <Chip dot>状态未知</Chip>}</h4>
-                {codex && codex.ok ? (
-                  <>
-                    <StatusLine label="路径" value={codex.path || '—'} mono />
-                    <StatusLine label="版本" value={codex.version || '—'} mono />
-                    {!codex.loggedIn && <div className="callout warn st-gap">打开终端运行 <kbd>codex login</kbd>，登录后回到这里点「测试」。</div>}
-                  </>
+
+              <div className="sx-card" data-card="ai-api">
+                <h4>
+                  {L('在线与本地 API', 'Cloud & Local API')}
+                  {apiConfigured
+                    ? <Chip kind="ok" dot>{t('settings.ai.configured')}</Chip>
+                    : !needsApiKey
+                      ? <Chip kind="ai" dot>{L('本机免 Key', 'Local · No Key')}</Chip>
+                      : <Chip dot>{t('settings.ai.notConfigured')}</Chip>}
+                </h4>
+                <div className="sx-presets" role="group" aria-label={L('常用 API 预设', 'API Presets')}>
+                  {apiPresets.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      data-preset={p.id}
+                      className={'sx-preset' + (activePresetId === p.id ? ' active' : '')}
+                      onClick={() => setDraft((d) => applyApiPreset(d, p.id, apiPresets))}
+                    >
+                      <span>{isEn && p.labelEn ? p.labelEn : p.label}</span>
+                      {!p.requiresKey && <span className="sx-preset-tag">{L('免 Key', 'No Key')}</span>}
+                    </button>
+                  ))}
+                </div>
+                {activePreset && (
+                  <p className="sx-note" style={{ marginTop: 0, marginBottom: 10 }}>
+                    {isEn && activePreset.hintEn ? activePreset.hintEn : activePreset.hint}
+                    {activePreset.keyUrl && (
+                      <> · <TextLink onClick={() => openUrl(activePreset.keyUrl, toast, isEn)}>{activePreset.requiresKey ? L('获取 API Key →', 'Get API Key →') : L('查看官网 →', 'Visit Website →')}</TextLink></>
+                    )}
+                  </p>
+                )}
+                <Row
+                  title={L('接口协议', 'API Protocol')}
+                  desc={L(
+                    '大多数服务与本机推理引擎兼容 OpenAI 协议；官方 Claude API 使用 Anthropic 协议。',
+                    'Most providers and local inference engines use the OpenAI protocol; the official Claude API uses Anthropic Messages.',
+                  )}
+                >
+                  <Segmented
+                    value={draft.apiProtocol}
+                    onChange={(v) => setDraft((d) => ({
+                      ...d,
+                      apiProtocol: v,
+                      ...(aiModeOf(d.provider) === 'api' ? { provider: v } : {}),
+                    }))}
+                    options={[
+                      { value: 'openai', label: L('OpenAI 兼容', 'OpenAI-Compatible') },
+                      { value: 'anthropic', label: 'Anthropic Claude' },
+                    ]}
+                    label={L('接口协议', 'API Protocol')}
+                  />
+                </Row>
+                <div className="st-gap">
+                  <Field label={t('settings.ai.baseUrl')}>
+                    <input
+                      className="input mono"
+                      value={draft.openaiBaseUrl}
+                      spellCheck={false}
+                      placeholder={activePreset ? activePreset.baseUrl : 'https://api.openai.com/v1'}
+                      onChange={(e) => set({ openaiBaseUrl: e.target.value, apiPreset: '' })}
+                    />
+                  </Field>
+                  {!needsApiKey && (
+                    <div className="callout ok st-gap" role="note">
+                      {isEn ? (
+                        <>Using local inference server ({activePreset ? (activePreset.labelEn || activePreset.label) : 'localhost'}) — <b>no API key required</b>; leave it blank to connect directly.</>
+                      ) : (
+                        <>当前为本机推理服务（{activePreset ? activePreset.label : 'localhost'}），<b>无需填写 API Key</b>，留空即可直接连接。</>
+                      )}
+                    </div>
+                  )}
+                  <SecretField
+                    label={needsApiKey ? t('settings.ai.apiKey') : L('API Key（本机服务无需填写）', 'API Key (Optional for Local Server)')}
+                    hint={!needsApiKey ? L('Ollama / LM Studio 本地服务留空即可；仅在自建鉴权代理时填写', 'Leave blank for local Ollama / LM Studio; fill only if your proxy requires auth') : undefined}
+                    placeholder={presetKeyPlaceholder(activePreset, isEn)}
+                    {...secretProps('openaiKey', has('openaiKey') || (draft.apiProtocol === 'anthropic' && has('anthropicKey')))}
+                  />
+                </div>
+                <div className="sx-grid3">
+                  <Field label={t('settings.ai.textModel')}>
+                    <input className="input mono" value={draft.openaiModel} spellCheck={false} placeholder={(activePreset && activePreset.model) || 'gpt-4.1-mini'} onChange={(e) => set({ openaiModel: e.target.value })} />
+                  </Field>
+                  <Field label={t('settings.ai.visionModel')}>
+                    <input className="input mono" value={draft.openaiVisionModel} spellCheck={false} placeholder={(activePreset && activePreset.visionModel) || L('留空沿用文本模型', 'Defaults to text model')} onChange={(e) => set({ openaiVisionModel: e.target.value })} />
+                  </Field>
+                  <Field label={t('settings.ai.imageModel')}>
+                    <input className="input mono" value={draft.openaiImageModel} spellCheck={false} placeholder={(activePreset && activePreset.imageModel) || L('支持出图的模型名', 'Image-capable model name')} onChange={(e) => set({ openaiImageModel: e.target.value })} />
+                  </Field>
+                </div>
+                <div className="sx-actions">
+                  <Button size="sm" icon="bolt" onClick={() => testAi(apiTestProvider)} disabled={testing('ai:' + apiTestProvider) || saving}>{L('测试接口', 'Test API')}</Button>
+                  <TestResult state={apiTestState} />
+                </div>
+              </div>
+
+              <div className="sx-card" data-card="ai-cli">
+                <h4>
+                  {L('本地 Agent CLI（可选）', 'Local Agent CLI (Optional)')}
+                  {cliInfo
+                    ? (cliFound
+                        ? (cliLoggedIn ? <Chip kind="ok" dot>{L('已就绪', 'Ready')}</Chip> : <Chip kind="warn" dot>{t('settings.ai.cliNotLoggedIn')}</Chip>)
+                        : <Chip kind="warn" dot>{t('settings.ai.cliNotDetected')}</Chip>)
+                    : <Chip dot>{L('按需启用', 'On Demand')}</Chip>}
+                </h4>
+                <p className="sx-note" style={{ marginTop: 0, marginBottom: 12 }}>{L(
+                  '平等支持本机已安装的终端编程 Agent，按需选用，不作为默认前提。切换工作模式为「本地 Agent CLI」或在「自动」模式下作为备选即可调用。',
+                  'Works with locally installed terminal coding agents on demand. Switch Mode to "Local Agent CLI" or keep "Auto" to use as a fallback.',
+                )}</p>
+                <Row title={L('选择本机 Agent CLI', 'Select Local Agent CLI')} desc={isEn && activeCli.descEn ? activeCli.descEn : activeCli.desc}>
+                  <Segmented
+                    value={activeCli.id}
+                    onChange={(id) => setDraft((d) => ({
+                      ...d,
+                      cliAgent: id,
+                      ...(aiModeOf(d.provider) === 'cli' ? { provider: id } : {}),
+                    }))}
+                    options={CLI_AGENTS.map((a) => ({ value: a.id, label: a.label }))}
+                    label={L('本机 Agent CLI', 'Local Agent CLI')}
+                  />
+                </Row>
+                {cliFound ? (
+                  <div className="st-gap">
+                    <StatusLine label={L('路径', 'Path')} value={cliInfo.path || '—'} mono />
+                    <StatusLine label={L('版本', 'Version')} value={cliInfo.version || '—'} mono />
+                    {!cliLoggedIn && (
+                      <div className="callout warn st-gap">
+                        {isEn ? (
+                          <>Run <kbd>{activeCli.loginHint}</kbd> in your terminal to sign in, then click "Test {activeCli.label}" below.</>
+                        ) : (
+                          <>打开终端运行 <kbd>{activeCli.loginHint}</kbd> 完成登录后，回到这里点击「测试 {activeCli.label}」。</>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 ) : (
-                  <p className="sx-note" style={{ marginTop: 0 }}>没有检测到 Codex。安装后无需 API Key 即可使用全部 AI 功能。<TextLink onClick={() => openUrl(CODEX_URL, toast)}>查看安装说明 →</TextLink></p>
+                  <p className="sx-note">
+                    {isEn ? (
+                      <>
+                        {activeCli.label} (command <kbd>{activeCli.command}</kbd>) was not detected. Install it first or specify a custom executable path below.{' '}
+                        <TextLink onClick={() => openUrl(activeCli.docsUrl, toast, isEn)}>View Docs →</TextLink>
+                      </>
+                    ) : (
+                      <>
+                        当前未检测到本机 {activeCli.label}（命令 <kbd>{activeCli.command}</kbd>）。如需使用请先安装，或在下方填写自定义可执行文件路径。{' '}
+                        <TextLink onClick={() => openUrl(activeCli.docsUrl, toast, isEn)}>查看文档 →</TextLink>
+                      </>
+                    )}
+                  </p>
                 )}
                 <div className="sx-grid2 st-gap">
-                  <Field label="自定义 codex 路径（可选）"><input className="input mono" value={draft.codexPath} spellCheck={false} placeholder="留空自动探测" onChange={(e) => set({ codexPath: e.target.value })} /></Field>
-                  <Field label="Codex 模型（可选）"><input className="input mono" value={draft.codexModel} spellCheck={false} placeholder="默认" onChange={(e) => set({ codexModel: e.target.value })} /></Field>
+                  <Field label={L(`自定义 ${activeCli.command} 路径（可选）`, `Custom ${activeCli.command} Path (Optional)`)}>
+                    <input
+                      className="input mono"
+                      value={draft[activeCli.pathField] || ''}
+                      spellCheck={false}
+                      placeholder={L('留空自动探测 PATH', 'Leave blank to auto-detect on PATH')}
+                      onChange={(e) => set({ [activeCli.pathField]: e.target.value })}
+                    />
+                  </Field>
+                  <Field label={L(`${activeCli.label} 模型覆写（可选）`, `${activeCli.label} Model Override (Optional)`)}>
+                    <input
+                      className="input mono"
+                      value={draft[activeCli.modelField] || ''}
+                      spellCheck={false}
+                      placeholder={L('留空使用 CLI 默认模型', 'Leave blank to use CLI default')}
+                      onChange={(e) => set({ [activeCli.modelField]: e.target.value })}
+                    />
+                  </Field>
                 </div>
                 <div className="sx-actions">
-                  <Button size="sm" icon="bolt" onClick={() => testAi('codex')} disabled={!!(tests.codex && tests.codex.running) || saving}>测试 Codex</Button>
-                  <TestResult state={tests.codex} waitingText="Codex 首次响应可能要 10–30 秒…" />
+                  <Button size="sm" icon="bolt" onClick={() => testAi(activeCli.id)} disabled={testing('ai:' + activeCli.id) || saving}>{L(`测试 ${activeCli.label}`, `Test ${activeCli.label}`)}</Button>
+                  <TestResult state={cliTestState} waitingText={L(`${activeCli.label} 首次响应可能需要 10–30 秒…`, `First response from ${activeCli.label} may take 10–30s…`)} />
                 </div>
               </div>
-              <div className="sx-card">
-                <h4>OpenAI 兼容接口 {aiStatus && aiStatus.openai && aiStatus.openai.configured ? <Chip kind="ok" dot>已配置</Chip> : <Chip dot>未配置</Chip>}</h4>
-                <Field label="Base URL"><input className="input mono" value={draft.openaiBaseUrl} spellCheck={false} placeholder="https://api.openai.com/v1" onChange={(e) => set({ openaiBaseUrl: e.target.value })} /></Field>
-                <SecretField label="API Key" placeholder="sk-…" {...secretProps('openaiKey', has('openaiKey'))} />
-                <div className="sx-grid3">
-                  <Field label="文本模型"><input className="input mono" value={draft.openaiModel} spellCheck={false} placeholder="gpt-4.1-mini" onChange={(e) => set({ openaiModel: e.target.value })} /></Field>
-                  <Field label="视觉模型（可选）"><input className="input mono" value={draft.openaiVisionModel} spellCheck={false} onChange={(e) => set({ openaiVisionModel: e.target.value })} /></Field>
-                  <Field label="图片模型（可选）"><input className="input mono" value={draft.openaiImageModel} spellCheck={false} onChange={(e) => set({ openaiImageModel: e.target.value })} /></Field>
-                </div>
+
+              <div className="sx-card" data-card="external-agent">
+                <h4>{L('外部 Agent 协作', 'External Agent Integration')} <Chip kind="ai">CLI · Skill · MCP</Chip></h4>
+                <p className="sx-note" style={{ marginTop: 0 }}>
+                  {isEn ? (
+                    <>Connect external agents such as <b>Claude Code, Antigravity, Codex, Gemini CLI, or Cursor</b> via headless CLI, Agent Skill, or optional MCP to inspect and edit projects directly. With <b>Live Watch</b>, external changes sync automatically to your desktop timeline and storyboard.</>
+                  ) : (
+                    <>支持 <b>Claude Code、Antigravity、Codex、Gemini CLI、Cursor</b> 等任意外部 Agent 通过无头 CLI、Agent Skill 或可选 MCP 直接读写工程；配合 <b>Live Watch</b> 实时监听，外部修改会自动同步到桌面端时间线与分镜。</>
+                  )}
+                </p>
+                <pre className="sx-codeblock mono selectable">{agentSnippet}</pre>
                 <div className="sx-actions">
-                  <Button size="sm" icon="bolt" onClick={() => testAi('openai')} disabled={!!(tests.openai && tests.openai.running) || saving}>测试接口</Button>
-                  <TestResult state={tests.openai} />
+                  <Button size="sm" icon={copiedAgent ? 'check' : 'copy'} onClick={copyAgentSnippet}>
+                    {copiedAgent ? L('已复制命令', 'Copied') : L('复制接入命令', 'Copy Setup Commands')}
+                  </Button>
+                  <span className="xs muted">{L(
+                    'Live Watch：外部工具写入项目文件后界面自动刷新，无需重启应用',
+                    'Live Watch: the desktop UI refreshes automatically whenever an external tool updates the project file',
+                  )}</span>
                 </div>
               </div>
             </>
@@ -799,18 +1496,42 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'asr' && (
             <>
-              <PaneHead icon="captions" title="语音识别" desc={'把视频里的人声转成字幕，支持一键识别字幕、按字幕剪辑。' + asrPrivacy} />
+              <PaneHead
+                icon="captions"
+                title={t('settings.nav.asr')}
+                desc={L('把视频里的人声转成字幕，支持一键识别字幕、按字幕剪辑。', 'Transcribe video speech into captions for one-click subtitling and text-based editing. ') + asrPrivacy}
+              />
               <div className="sx-card">
-                <h4>识别引擎 {!asr ? <Chip>检测中…</Chip> : asr.ready ? <Chip kind="ok" dot>可用</Chip> : asr.unavailable ? <Chip dot>暂不可用</Chip> : <Chip kind="warn" dot>需安装模型</Chip>}</h4>
-                {asr && asr.ready && (<><StatusLine label="引擎" value={asrEngineLabel} /><StatusLine label="模型" value={asr.model || '—'} mono /></>)}
-                {asrEngine === 'openai' && <div className="callout warn st-gap">现在识别字幕时，音频会上传到你填写的 OpenAI 接口。点下面的「安装模型」后改为在本机识别，不再上传。</div>}
-                {asr && !asr.ready && !asr.unavailable && <p className="sx-note" style={{ marginTop: 0 }}>首次使用需要下载本机语音识别模型（small，约 466 MB），下载一次后可离线使用。</p>}
-                {asr && asr.unavailable && <p className="sx-note" style={{ marginTop: 0 }}>当前版本未包含语音识别组件{asr.error ? `（${asr.error}）` : ''}。</p>}
+                <h4>
+                  {L('识别引擎', 'Recognition Engine')}{' '}
+                  {!asr ? <Chip>{L('检测中…', 'Checking…')}</Chip> : asr.ready ? <Chip kind="ok" dot>{L('可用', 'Ready')}</Chip> : asr.unavailable ? <Chip dot>{L('暂不可用', 'Unavailable')}</Chip> : <Chip kind="warn" dot>{L('需安装模型', 'Model Required')}</Chip>}
+                </h4>
+                {asr && asr.ready && (<><StatusLine label={L('引擎', 'Engine')} value={asrEngineLabel} /><StatusLine label={L('模型', 'Model')} value={asr.model || '—'} mono /></>)}
+                {asrEngine === 'openai' && (
+                  <div className="callout warn st-gap">{L(
+                    '现在识别字幕时，音频会上传到你填写的 OpenAI 接口。点下面的「安装模型」后改为在本机识别，不再上传。',
+                    'Audio is currently uploaded to your configured OpenAI endpoint for transcription. Click "Install Model" below to switch to offline local recognition.',
+                  )}</div>
+                )}
+                {asr && !asr.ready && !asr.unavailable && (
+                  <p className="sx-note" style={{ marginTop: 0 }}>{L(
+                    '首次使用需要下载本机语音识别模型（small，约 466 MB），下载一次后可离线使用。',
+                    'First-time setup downloads the local speech model (small, ~466 MB) for offline transcription.',
+                  )}</p>
+                )}
+                {asr && asr.unavailable && (
+                  <p className="sx-note" style={{ marginTop: 0 }}>
+                    {L(
+                      `当前版本未包含语音识别组件${asr.error ? `（${asr.error}）` : ''}。`,
+                      `Speech recognition components are not included in this build${asr.error ? ` (${asr.error})` : ''}.`,
+                    )}
+                  </p>
+                )}
                 <div className="sx-actions">
                   <Button size="sm" icon={asrInstall ? undefined : 'download'} onClick={installAsr} disabled={!!asrInstall || !asr || asr.unavailable || (asr.ready && !asr.downloadable)}>
-                    {asrInstall ? <><Spinner /> 安装中…</> : asr && asr.ready ? '重新安装模型' : '安装模型'}
+                    {asrInstall ? <><Spinner /> {L('安装中…', 'Installing…')}</> : asr && asr.ready ? L('重新安装模型', 'Reinstall Model') : L('安装模型', 'Install Model')}
                   </Button>
-                  <Button size="sm" variant="ghost" icon="refresh" onClick={loadAsr}>重新检测</Button>
+                  <Button size="sm" variant="ghost" icon="refresh" onClick={loadAsr}>{L('重新检测', 'Recheck')}</Button>
                 </div>
                 {asrInstall && <div className="st-progress"><ProgressBar value={asrInstall.progress} indeterminate={!(asrInstall.progress > 0)} /><div className="xs muted ellipsis">{asrInstall.message}</div></div>}
               </div>
@@ -819,22 +1540,39 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'editing' && (
             <>
-              <PaneHead icon="scissors" title="剪辑" desc="新建项目和添加素材时使用的默认值。" />
+              <PaneHead icon="scissors" title={t('settings.nav.editing')} desc={L('新建项目和添加素材时使用的默认值。', 'Defaults applied when creating new projects or adding media.')} />
               <div className="sx-card">
-                <Row title="默认画幅" desc="新建项目时预选。">
-                  <Segmented value={draft.edAspect} onChange={(v) => set({ edAspect: v })} options={[{ value: '16:9', label: '16:9 横屏' }, { value: '9:16', label: '9:16 竖屏' }, { value: '1:1', label: '1:1' }, { value: '4:3', label: '4:3' }]} />
+                <Row title={L('默认画幅', 'Default Aspect Ratio')} desc={L('新建项目时预选。', 'Preselected for new projects.')}>
+                  <Segmented
+                    value={draft.edAspect}
+                    onChange={(v) => set({ edAspect: v })}
+                    options={[
+                      { value: '16:9', label: L('16:9 横屏', '16:9 Landscape') },
+                      { value: '9:16', label: L('9:16 竖屏', '9:16 Vertical') },
+                      { value: '1:1', label: '1:1' },
+                      { value: '4:3', label: '4:3' },
+                    ]}
+                  />
                 </Row>
-                <Row title="默认帧率">
-                  <Select value={String(draft.edFps)} onChange={(v) => set({ edFps: Number(v) })} options={['24', '25', '30', '50', '60'].map((f) => ({ value: f, label: `${f} 帧/秒` }))} />
+                <Row title={L('默认帧率', 'Default Frame Rate')}>
+                  <Select value={String(draft.edFps)} onChange={(v) => set({ edFps: Number(v) })} options={['24', '25', '30', '50', '60'].map((f) => ({ value: f, label: L(`${f} 帧/秒`, `${f} fps`) }))} />
                 </Row>
-                <Row title="图片默认时长" desc="图片放上时间线时的长度。">
-                  <input className="input st-num" type="number" min={0.5} max={60} step={0.5} value={draft.edImageDuration} onChange={(e) => set({ edImageDuration: e.target.value })} /> 秒
+                <Row title={L('图片默认时长', 'Default Image Duration')} desc={L('图片放上时间线时的长度。', 'Duration used when placing images onto the timeline.')}>
+                  <input className="input st-num" type="number" min={0.5} max={60} step={0.5} value={draft.edImageDuration} onChange={(e) => set({ edImageDuration: e.target.value })} />{L(' 秒', ' s')}
                 </Row>
-                <Row title="转场默认时长" desc="转场面板添加转场时的默认时长（0.1–2 秒）。">
-                  <input className="input st-num" type="number" min={0.1} max={2} step={0.1} value={draft.edTransitionDuration} onChange={(e) => set({ edTransitionDuration: e.target.value })} /> 秒
+                <Row title={L('转场默认时长', 'Default Transition Duration')} desc={L('转场面板添加转场时的默认时长（0.1–2 秒）。', 'Default length when adding transitions (0.1–2s).')}>
+                  <input className="input st-num" type="number" min={0.1} max={2} step={0.1} value={draft.edTransitionDuration} onChange={(e) => set({ edTransitionDuration: e.target.value })} />{L(' 秒', ' s')}
                 </Row>
-                <Row title="预览质量" desc="电脑较慢时选「流畅」，预览更顺滑，不影响导出画质。">
-                  <Segmented value={draft.edPreviewQuality} onChange={(v) => set({ edPreviewQuality: v })} options={[{ value: 'auto', label: '自动' }, { value: 'full', label: '高清' }, { value: 'half', label: '流畅' }]} />
+                <Row title={L('预览质量', 'Preview Quality')} desc={L('电脑较慢时选「流畅」，预览更顺滑，不影响导出画质。', 'Choose "Smooth" on slower hardware for fluid playback—export quality is unaffected.')}>
+                  <Segmented
+                    value={draft.edPreviewQuality}
+                    onChange={(v) => set({ edPreviewQuality: v })}
+                    options={[
+                      { value: 'auto', label: L('自动', 'Auto') },
+                      { value: 'full', label: L('高清', 'Full HD') },
+                      { value: 'half', label: L('流畅', 'Smooth') },
+                    ]}
+                  />
                 </Row>
               </div>
             </>
@@ -842,17 +1580,45 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'export' && (
             <>
-              <PaneHead icon="export" title="导出" desc="打开导出窗口时预选这些选项，导出时仍可临时修改。" />
+              <PaneHead icon="export" title={t('settings.nav.export')} desc={L('打开导出窗口时预选这些选项，导出时仍可临时修改。', 'Preselected defaults in the Export dialog; you can override them per export.')} />
               <div className="sx-card">
-                <Row title="分辨率"><Select value={draft.exportResolution} onChange={(v) => set({ exportResolution: v })} options={[{ value: 'full', label: '原始尺寸' }, { value: '720p', label: '720p（更快更小）' }]} /></Row>
-                <Row title="帧率"><Select value={String(draft.exportFps)} onChange={(v) => set({ exportFps: Number(v) })} options={['24', '25', '30', '60'].map((f) => ({ value: f, label: `${f} 帧/秒` }))} /></Row>
-                <Row title="画质"><Segmented value={draft.exportQuality} onChange={(v) => set({ exportQuality: v })} options={[{ value: 'high', label: '高' }, { value: 'standard', label: '标准' }, { value: 'small', label: '小文件' }]} /></Row>
-                <Row title="硬件加速" desc="使用显卡编码，导出更快；遇到花屏或失败时请关闭。">
-                  <Segmented value={draft.exportHwaccel} onChange={(v) => set({ exportHwaccel: v })} options={[{ value: 'auto', label: '自动' }, { value: 'off', label: '关闭' }]} />
+                <Row title={L('分辨率', 'Resolution')}>
+                  <Select
+                    value={draft.exportResolution}
+                    onChange={(v) => set({ exportResolution: v })}
+                    options={[
+                      { value: 'full', label: L('原始尺寸', 'Original') },
+                      { value: '720p', label: L('720p（更快更小）', '720p (Faster & smaller)') },
+                    ]}
+                  />
                 </Row>
-                <Row title="默认保存位置" desc={draft.exportFolder || '文档文件夹'}>
-                  <Button size="sm" icon="folder" onClick={() => pickFolder('exportFolder')}>选择…</Button>
-                  {draft.exportFolder && <Button size="sm" variant="ghost" onClick={() => set({ exportFolder: '' })}>恢复默认</Button>}
+                <Row title={L('帧率', 'Frame Rate')}>
+                  <Select value={String(draft.exportFps)} onChange={(v) => set({ exportFps: Number(v) })} options={['24', '25', '30', '60'].map((f) => ({ value: f, label: L(`${f} 帧/秒`, `${f} fps`) }))} />
+                </Row>
+                <Row title={L('画质', 'Quality')}>
+                  <Segmented
+                    value={draft.exportQuality}
+                    onChange={(v) => set({ exportQuality: v })}
+                    options={[
+                      { value: 'high', label: L('高', 'High') },
+                      { value: 'standard', label: L('标准', 'Standard') },
+                      { value: 'small', label: L('小文件', 'Compact') },
+                    ]}
+                  />
+                </Row>
+                <Row title={L('硬件加速', 'Hardware Acceleration')} desc={L('使用显卡编码，导出更快；遇到花屏或失败时请关闭。', 'Uses GPU encoding for faster exports; turn off if you encounter artifacts or errors.')}>
+                  <Segmented
+                    value={draft.exportHwaccel}
+                    onChange={(v) => set({ exportHwaccel: v })}
+                    options={[
+                      { value: 'auto', label: L('自动', 'Auto') },
+                      { value: 'off', label: L('关闭', 'Off') },
+                    ]}
+                  />
+                </Row>
+                <Row title={L('默认保存位置', 'Default Output Folder')} desc={draft.exportFolder || L('文档文件夹', 'Documents folder')}>
+                  <Button size="sm" icon="folder" onClick={() => pickFolder('exportFolder')}>{L('选择…', 'Browse…')}</Button>
+                  {draft.exportFolder && <Button size="sm" variant="ghost" onClick={() => set({ exportFolder: '' })}>{t('app.reset')}</Button>}
                 </Row>
               </div>
             </>
@@ -860,27 +1626,37 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'cache' && (
             <>
-              <PaneHead icon="folder" title="存储与缓存" desc="项目、拆片库、AI 生成的视频、代理文件和缓存都放在数据目录。" />
+              <PaneHead icon="folder" title={t('settings.nav.cache')} desc={L('项目、拆片库、AI 生成的视频、代理文件和缓存都放在数据目录。', 'Projects, Breakdown Library, AI-generated clips, proxies, and cache live in your data folder.')} />
               <div className="sx-card">
-                <h4>数据目录</h4>
+                <h4>{L('数据目录', 'Data Folder')}</h4>
                 <div className="st-path">
                   <Icon name="folder" size={16} />
-                  <span className="selectable mono ellipsis" title={draft.dataRoot || currentRoot}>{draft.dataRoot || (rootChanged ? '默认位置（文档\\Frameflow）' : currentRoot) || '默认位置（文档\\Frameflow）'}</span>
+                  <span className="selectable mono ellipsis" title={draft.dataRoot || currentRoot}>
+                    {draft.dataRoot || (rootChanged ? L('默认位置（文档\\Frameflow）', 'Default (Documents\\Frameflow)') : currentRoot) || L('默认位置（文档\\Frameflow）', 'Default (Documents\\Frameflow)')}
+                  </span>
                 </div>
                 <div className="sx-actions">
-                  <Button size="sm" icon="folder" onClick={() => pickFolder('dataRoot')}>选择文件夹…</Button>
-                  <Button size="sm" icon="external" onClick={() => openPath(currentRoot)} disabled={!currentRoot}>打开当前目录</Button>
-                  {draft.dataRoot && <Button size="sm" variant="ghost" onClick={() => set({ dataRoot: '' })}>恢复默认位置</Button>}
+                  <Button size="sm" icon="folder" onClick={() => pickFolder('dataRoot')}>{L('选择文件夹…', 'Choose Folder…')}</Button>
+                  <Button size="sm" icon="external" onClick={() => openPath(currentRoot)} disabled={!currentRoot}>{L('打开当前目录', 'Open Current Folder')}</Button>
+                  {draft.dataRoot && <Button size="sm" variant="ghost" onClick={() => set({ dataRoot: '' })}>{L('恢复默认位置', 'Reset to Default')}</Button>}
                 </div>
-                {rootChanged && <div className="callout warn st-gap">保存后新的项目会放到新位置。已有数据不会自动搬移，需要时请把旧目录下的 <kbd>projects</kbd> 和 <kbd>library</kbd> 文件夹手动复制过去。</div>}
+                {rootChanged && (
+                  <div className="callout warn st-gap">
+                    {isEn ? (
+                      <>New projects will be saved to the new folder after saving. Existing data is not moved automatically—copy <kbd>projects</kbd> and <kbd>library</kbd> from the old folder if needed.</>
+                    ) : (
+                      <>保存后新的项目会放到新位置。已有数据不会自动搬移，需要时请把旧目录下的 <kbd>projects</kbd> 和 <kbd>library</kbd> 文件夹手动复制过去。</>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="sx-card">
-                <h4>缓存</h4>
-                <Row title="缓存文件夹" desc="缩略图、波形、代理文件。删除后会在需要时自动重新生成。">
-                  <Button size="sm" icon="external" onClick={() => openPath(currentRoot ? currentRoot + '\\cache' : '')} disabled={!currentRoot}>打开</Button>
+                <h4>{L('缓存', 'Cache')}</h4>
+                <Row title={L('缓存文件夹', 'Cache Folder')} desc={L('缩略图、波形、代理文件。删除后会在需要时自动重新生成。', 'Thumbnails, waveforms, and proxy files—safely regenerated as needed if cleared.')}>
+                  <Button size="sm" icon="external" onClick={() => openPath(currentRoot ? currentRoot + '\\cache' : '')} disabled={!currentRoot}>{t('app.open')}</Button>
                 </Row>
-                <Row title="运行日志" desc="遇到问题时可以把日志发给我们。">
-                  <Button size="sm" icon="log" onClick={() => api.call('app:openLogs').catch((e) => toast('打开日志失败：' + e.message, 'error'))}>打开日志</Button>
+                <Row title={L('运行日志', 'Application Logs')} desc={L('遇到问题时可以把日志发给我们。', 'Helpful diagnostic logs when troubleshooting issues.')}>
+                  <Button size="sm" icon="log" onClick={() => api.call('app:openLogs').catch((e) => toast(L('打开日志失败：', 'Failed to open logs: ') + e.message, 'error'))}>{L('打开日志', 'Open Logs')}</Button>
                 </Row>
               </div>
             </>
@@ -888,21 +1664,21 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'privacy' && (
             <>
-              <PaneHead icon={iconOr('shield', 'lock')} title="隐私与联网" desc="你的项目、素材和密钥默认保存在本机，不会自动上传。下面列出所有可能联网的功能及其发送的内容。" />
+              <PaneHead icon={iconOr('shield', 'lock')} title={t('settings.privacy.title')} desc={t('settings.privacy.desc')} />
               <div className="sx-card">
-                <h4>哪些功能会联网</h4>
+                <h4>{t('settings.privacy.netTitle')}</h4>
                 <ul className="sx-net">
                   {NET_USES.map((item) => (
-                    <li key={item.title}>
+                    <li key={item.key}>
                       <span className="sx-net-ico"><Icon name={item.icon} size={16} /></span>
                       <div>
                         <div className="sx-net-title">
-                          <span>{item.title}</span>
-                          <span className="sx-net-when">{item.when}</span>
+                          <span>{isEn ? item.titleEn : item.title}</span>
+                          <span className="sx-net-when">{isEn ? item.whenEn : item.when}</span>
                         </div>
                         <dl className="sx-net-kv">
-                          <dt>连接对象</dt><dd>{item.to}</dd>
-                          <dt>发送内容</dt><dd>{item.what}</dd>
+                          <dt>{t('settings.privacy.to')}</dt><dd>{isEn ? item.toEn : item.to}</dd>
+                          <dt>{t('settings.privacy.what')}</dt><dd>{isEn ? item.whatEn : item.what}</dd>
                         </dl>
                       </div>
                     </li>
@@ -910,27 +1686,44 @@ export default function SettingsDialog({ onClose, initialTab }) {
                 </ul>
               </div>
               <div className="sx-card">
-                <h4>视频站使用须知 {consentOk ? <Chip kind="ok" dot>已同意</Chip> : <Chip dot>未同意</Chip>}</h4>
+                <h4>{t('settings.privacy.consentTitle')} {consentOk ? <Chip kind="ok" dot>{t('settings.privacy.consented')}</Chip> : <Chip dot>{t('settings.privacy.notConsented')}</Chip>}</h4>
                 <div className="sx-consent">
                   <div className="sx-row-text">
-                    <b>{consentOk ? `已于 ${consentDate || '此前'} 同意视频站使用须知` : '尚未同意视频站使用须知'}</b>
-                    <span>{consentOk ? '使用 B 站、YouTube 等视频站搜索和下载参考素材时不再重复询问；随时可以撤回。' : '首次搜索或下载视频站参考素材前，需要先阅读并同意使用须知。'}</span>
+                    <b>
+                      {consentOk
+                        ? L(`已于 ${consentDate || '此前'} 同意视频站使用须知`, consentDate ? `Accepted on ${consentDate}` : 'Video site parsing notice accepted')
+                        : L('尚未同意视频站使用须知', 'Video site parsing notice not yet accepted')}
+                    </b>
+                    <span>
+                      {consentOk
+                        ? L(
+                            '使用 B 站、YouTube 等视频站搜索和下载参考素材时不再重复询问；随时可以撤回。',
+                            'You will not be prompted again when searching or downloading reference videos from YouTube, Bilibili, and other sites; you can revoke consent anytime.',
+                          )
+                        : L(
+                            '首次搜索或下载视频站参考素材前，需要先阅读并同意使用须知。',
+                            'You must review and accept the notice before searching or downloading online reference videos.',
+                          )}
+                    </span>
                   </div>
                   <div className="sx-row-ctl">
                     {consentOk ? (
-                      <Button size="sm" variant="ghost" onClick={revokeConsentAction} disabled={consentBusy}>撤回同意</Button>
+                      <Button size="sm" variant="ghost" onClick={revokeConsentAction} disabled={consentBusy}>{t('settings.privacy.revokeConsent')}</Button>
                     ) : (
-                      <Button size="sm" onClick={readConsent} disabled={consentBusy}>阅读并同意</Button>
+                      <Button size="sm" onClick={readConsent} disabled={consentBusy}>{t('settings.privacy.readConsent')}</Button>
                     )}
                   </div>
                 </div>
               </div>
               <div className="sx-card">
-                <h4>隐私说明与开源许可</h4>
-                <p className="sx-note" style={{ marginTop: 0 }}>所有密钥均通过系统加密存储在本机，不会写进项目文件。你可以随时查看完整的隐私说明和第三方开源许可清单。</p>
+                <h4>{L('隐私说明与开源许可', 'Privacy Notice & Open-Source Licenses')}</h4>
+                <p className="sx-note" style={{ marginTop: 0 }}>{L(
+                  '所有密钥均通过系统加密存储在本机，不会写进项目文件。你可以随时查看完整的隐私说明和第三方开源许可清单。',
+                  'All API keys are encrypted locally via OS credential storage and never written to project files. Review the full privacy notice and third-party licenses anytime.',
+                )}</p>
                 <div className="sx-links">
-                  <Button size="sm" icon="external" onClick={() => openPath(privacyPath)} disabled={!privacyPath}>打开隐私说明</Button>
-                  <Button size="sm" icon="external" onClick={() => openPath(licensesPath)} disabled={!licensesPath}>查看第三方开源许可</Button>
+                  <Button size="sm" icon="external" onClick={() => openPath(privacyPath)} disabled={!privacyPath}>{t('settings.privacy.openPrivacy')}</Button>
+                  <Button size="sm" icon="external" onClick={() => openPath(licensesPath)} disabled={!licensesPath}>{t('settings.privacy.openLicenses')}</Button>
                 </div>
               </div>
             </>
@@ -938,23 +1731,26 @@ export default function SettingsDialog({ onClose, initialTab }) {
 
           {tab === 'about' && (
             <>
-              <PaneHead icon="info" title="关于" />
+              <PaneHead icon="info" title={t('settings.about.title')} />
               <div className="sx-card">
                 <div className="sx-about">
-                  <div className="sx-logo">镜</div>
+                  <div className="sx-logo">{L('镜', 'F')}</div>
                   <div>
-                    <h4 style={{ margin: 0 }}>镜流 Frameflow</h4>
-                    <p className="sx-note" style={{ margin: '4px 0 0' }}>AI 视频工作站 · 创作 / 精修 / 拆片库</p>
+                    <h4 style={{ margin: 0 }}>{t('app.brand')}</h4>
+                    <p className="sx-note" style={{ margin: '4px 0 0' }}>{t('settings.about.subtitle')}</p>
                     <div className="sx-actions" style={{ marginTop: 8 }}>
-                      <span className="sx-badge">版本 {(appInfo && (appInfo.version || appInfo.appVersion)) || '—'}</span>
-                      {appInfo && appInfo.ffmpeg && appInfo.ffmpeg.ok && <span className="sx-badge">FFmpeg 已就绪</span>}
+                      <span className="sx-badge">{t('settings.about.version', { version: (appInfo && (appInfo.version || appInfo.appVersion)) || '—' })}</span>
+                      {appInfo && appInfo.ffmpeg && appInfo.ffmpeg.ok && <span className="sx-badge">{t('settings.about.ffmpegReady')}</span>}
                     </div>
                   </div>
                 </div>
               </div>
               <div className="sx-card">
-                <h4>素材与第三方服务</h4>
-                <p className="sx-note" style={{ marginTop: 0 }}>实拍素材来自 Wikimedia Commons、Openverse、Internet Archive、NASA 影像库以及 Pexels、Pixabay，遵循各自许可。AI 视频由你选择的服务商生成，费用与内容政策以服务商为准。</p>
+                <h4>{t('settings.about.thirdPartyTitle')}</h4>
+                <p className="sx-note" style={{ marginTop: 0 }}>{L(
+                  '实拍素材来自 Wikimedia Commons、Openverse、Internet Archive、NASA 影像库以及 Pexels、Pixabay，遵循各自许可。AI 文本、图片与视频由你选择的服务商或本地模型生成，费用与内容政策以对应服务商为准。',
+                  t('settings.about.thirdPartyDesc'),
+                )}</p>
               </div>
             </>
           )}

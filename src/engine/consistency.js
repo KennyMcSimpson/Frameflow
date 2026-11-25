@@ -1,4 +1,4 @@
-// 全片色彩一致性：基准色、统一色调操作、问题报告（CONTRACTS §B）。纯函数。
+// 全片色彩一致性：基准色、统一色调操作、问题报告。纯函数。
 import { LOOK_LABELS } from './model.js';
 import { clipDuration } from './timeline.js';
 import { colorParamsFromStats, statsWithColor } from './colormatch.js';

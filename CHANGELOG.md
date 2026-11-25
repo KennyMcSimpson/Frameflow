@@ -4,7 +4,23 @@ All notable changes to **Frameflow** are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v2.0.1 Stabilization & Open-Source Release Prep
+## [2.1.0] — 2026-11 — The Agent-Embeddable Desktop Video Workstation
+
+### Added — Phase 1: Neutral AI Ecosystem, Bilingual UI & Automated Releases
+- **Neutral Multi-API Presets (`electron/lib/aiPresets.cjs`):** First-class default presets for **OpenAI**, **DeepSeek**, **Anthropic Claude** (native `/v1/messages` API), **Google Gemini**, **OpenRouter**, **Volcengine Ark**, and keyless local **Ollama** / **LM Studio** (loopback-scoped via `isLocalKeylessUrl`), with clean protocol translation and automatic offline fallback.
+- **Equal-Footing Opt-In Local Agent CLIs (`electron/lib/agentCli.cjs`):** Unified opt-in support for **Claude Code (`claude`)**, **Codex CLI (`codex`)**, and **Gemini CLI (`gemini`)** with UNC/realpath executable validation, anti-flag-injection model validation, safe Windows `.cmd` shim resolution, and process-tree abort cleanup — treated on equal footing and strictly opt-in so configured API presets are never silently hijacked.
+- **Bilingual Desktop UI (`src/ui/i18n.js`):** Full live switching between **English (`en-US`)** and **Simplified Chinese (`zh-CN`)** from both the TopBar toggle and Settings dialog, persisted in `settings.json` with zero restart required.
+- **Automated Windows Release Pipeline (`.github/workflows/windows-release.yml`):** Tag-triggered (`v*`) and `workflow_dispatch` GitHub Actions workflow on `windows-latest` (Node 24) building and auditing the Windows x64 **NSIS installer**, **Portable `.exe`**, and **`SHA256SUMS.txt`** checksum manifest (including LGPL v3 FFmpeg verification, 5 Electron Fuses, and ASAR hygiene checks).
+
+### Added — Phase 2: Outside-In Coding-Agent Integration
+- **Headless Agent CLI (`bin/frameflow.mjs`):** Zero-dependency Node.js ESM CLI (`frameflow` bin) operating directly on `src/engine/` and `src/ai/` with deterministic `--json` output, `lintOps` → `applyOps` → `diffProject` → `needsConfirm` safety gates, atomic `.bak.ffproj` backups, and `meta.lastAgentEdit` stamps across `init`, `inspect`, `ops-schema`, `storyboard`, `apply`, `breakdown`, `stock search`, `export-srt`, `export-plan`, and `doctor`.
+- **Desktop Live Watch (`electron/lib/projectWatch.cjs`):** Pure Node.js watcher monitoring the active project's parent directory by exact filename (Windows atomic-rename compatible), suppressing self-write echoes via SHA-256 content digests, enforcing UNC/symlink rejection, hot-reloading the desktop timeline and preview in **`<100ms`**, and pushing a native undo snapshot so **`Ctrl+Z`** cleanly reverts any agent edit.
+- **Cross-Host Agent Skill & Opt-In Thin MCP (`skills/frameflow/SKILL.md`, `bin/frameflow-mcp.mjs`, `docs/AGENT-INTEGRATION.md`):** Zero-hardcoded-path `SKILL.md` for Antigravity, Claude Code, Codex CLI, Gemini CLI, OpenCode, and PI, paired with an optional zero-dependency thin stdio MCP server (`frameflow-mcp` bin; 6 minimal typed tools, `Content-Length` + `ndjson` framing, `--readonly` mode) and end-to-end integration guide.
+
+### Changed
+- **Documentation & Vector Architecture Diagrams:** Refreshed `README.md`, `README.zh-CN.md`, `docs/ARCHITECTURE.md`, and light/dark `docs/images/architecture-{dark,light}.svg` diagrams to reflect v2.1.0 Agent CLI/MCP, Live Watch, neutral AI/CLI providers, bilingual UI, and automated Windows releases.
+
+## [2.0.1] — 2026-11 — Stabilization & Open-Source Release Prep
 
 ### Added
 - **Repository & Bilingual Documentation Presence:** Flagship English `README.md` and Simplified Chinese `README.zh-CN.md`, `docs/ARCHITECTURE.md`, `docs/PRIVACY.en.md`, standard MIT `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, and theme-adaptive light/dark vector diagrams (`hero-{dark,light}.svg`, `workflow-{dark,light}.svg`, `architecture-{dark,light}.svg`).

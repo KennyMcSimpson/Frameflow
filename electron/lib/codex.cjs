@@ -24,6 +24,25 @@ function isUncPath(p) {
   return typeof p === 'string' && (UNC_RE.test(p) || UNC_RE.test(p.trim()));
 }
 
+function hasNtfsAdsColon(p) {
+  const rest = /^[A-Za-z]:/.test(p) ? p.slice(2) : p;
+  return rest.includes(':');
+}
+
+function hasTrailingDotOrSpaceSegment(p) {
+  const rest = /^[A-Za-z]:/.test(p) ? p.slice(2) : p;
+  for (const seg of rest.split(/[\\/]+/)) {
+    if (!seg || seg === '.' || seg === '..') continue;
+    if (/[. ]$/.test(seg)) return true;
+  }
+  return false;
+}
+
+function isAbsoluteCliPath(p) {
+  if (IS_WIN) return /^[A-Za-z]:[\\/]/.test(p);
+  return path.isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p);
+}
+
 function isFile(p) {
   try { return !!p && !isUncPath(p) && fs.statSync(p).isFile(); } catch { return false; }
 }
@@ -41,24 +60,25 @@ function validateModel(model) {
 }
 
 function isValidCodexPath(p, { allowTestBin = false } = {}) {
-  if (typeof p !== 'string') return false;
-  const s = p.trim();
-  if (!s) return false;
-  if (/[\r\n\0]/.test(s)) return false;
+  if (typeof p !== 'string' || !p) return false;
+  if (/[\r\n\0]/.test(p)) return false;
+  if (p !== p.trim()) return false;
   // 拒绝 UNC 及混用斜杠 UNC（\\、//、\/、/\）——在 path.resolve 与任何 fs.* 之前
-  if (isUncPath(p) || isUncPath(s)) return false;
-  const resolved = path.resolve(s);
-  if (isUncPath(resolved)) return false;
+  if (isUncPath(p)) return false;
+  if (!isAbsoluteCliPath(p)) return false;
+  if (hasNtfsAdsColon(p) || hasTrailingDotOrSpaceSegment(p)) return false;
+  const resolved = path.resolve(p);
+  if (isUncPath(resolved) || hasNtfsAdsColon(resolved) || hasTrailingDotOrSpaceSegment(resolved)) return false;
   if (allowTestBin) {
     try {
       const real = fs.realpathSync(resolved);
-      if (isUncPath(real)) return false;
+      if (isUncPath(real) || hasNtfsAdsColon(real) || hasTrailingDotOrSpaceSegment(real)) return false;
     } catch (e) {
       if (e && e.code !== 'ENOENT') return false;
     }
     return true;
   }
-  if (!CODEX_BIN_RE.test(path.basename(s)) || !CODEX_BIN_RE.test(path.basename(resolved))) return false;
+  if (!CODEX_BIN_RE.test(path.basename(p)) || !CODEX_BIN_RE.test(path.basename(resolved))) return false;
   let exists = false;
   try {
     fs.lstatSync(resolved);
@@ -69,7 +89,7 @@ function isValidCodexPath(p, { allowTestBin = false } = {}) {
   if (exists) {
     let real;
     try { real = fs.realpathSync(resolved); } catch { return false; }
-    if (isUncPath(real)) return false;
+    if (isUncPath(real) || hasNtfsAdsColon(real) || hasTrailingDotOrSpaceSegment(real)) return false;
     if (!CODEX_BIN_RE.test(path.basename(real))) {
       if (!(/\.cmd$/i.test(resolved) && resolveCmdShim(real))) return false;
     }
@@ -133,11 +153,11 @@ function resolveCmdShim(bin) {
     const shimDir = path.dirname(realBin);
     let explicitNode = null;
     let relScript = null;
-    const npmMatch = /"%_prog%"\s+"%(?:~)?dp0%[\\/]?([^"\r\n]+?\.(?:c?js|mjs))"\s+%\*/i.exec(content);
+    const npmMatch = /"%_prog%"\s+"%(?:~dp0|dp0%)[\\/]?([^"\r\n]+?\.(?:c?js|mjs))"\s+%\*/i.exec(content);
     if (npmMatch) {
       relScript = npmMatch[1];
     } else {
-      const directMatch = /"([^"\r\n]*node(?:\.exe)?)"\s+"%(?:~)?dp0%[\\/]?([^"\r\n]+?\.(?:c?js|mjs))"\s+%\*/i.exec(content);
+      const directMatch = /"([^"\r\n]*node(?:\.exe)?)"\s+"%(?:~dp0|dp0%)[\\/]?([^"\r\n]+?\.(?:c?js|mjs))"\s+%\*/i.exec(content);
       if (directMatch) {
         explicitNode = directMatch[1];
         relScript = directMatch[2];
@@ -592,7 +612,9 @@ function codexFailure(code, diag) {
 async function runCodex({ codexPath, model, system, prompt, schema, images, timeoutMs, signal, tmpRoot, effort, json = true, onEvent, _testBin = false } = {}) {
   if (!codexPath) throw new Error('未找到 Codex CLI：请安装 Codex，或在设置中填写 codex.exe 的路径');
   if (!isValidCodexPath(codexPath, { allowTestBin: !!_testBin })) throw new Error('Codex 路径无效：必须指向本地的 codex 可执行文件');
-  if (!isFile(codexPath)) throw new Error(`找不到 Codex 程序：${codexPath}`);
+  const validatedCodexPath = path.resolve(codexPath);
+  if (!isValidCodexPath(validatedCodexPath, { allowTestBin: !!_testBin })) throw new Error('Codex 路径无效：必须指向本地的 codex 可执行文件');
+  if (!isFile(validatedCodexPath)) throw new Error(`找不到 Codex 程序：${validatedCodexPath}`);
   const validModel = validateModel(model);
   if (!schema || typeof schema !== 'object') throw new Error('AI 调用缺少输出结构（schema）');
   if (signal && signal.aborted) throw cancelledError();
@@ -609,7 +631,7 @@ async function runCodex({ codexPath, model, system, prompt, schema, images, time
   const imgs = (Array.isArray(images) ? images : []).filter((p) => typeof p === 'string' && isFile(p));
 
   const emit = (ev) => { if (onEvent) { try { onEvent(ev); } catch {} } };
-  const capKey = String(codexPath).toLowerCase();
+  const capKey = String(validatedCodexPath).toLowerCase();
   const effortKey = `${capKey}|${validModel || ''}`;
   let useJson = json !== false && !capability.noJson.has(capKey);
   let useEffort = effort && EFFORTS.includes(effort) && !capability.noEffort.has(effortKey) ? effort : null;
@@ -623,7 +645,7 @@ async function runCodex({ codexPath, model, system, prompt, schema, images, time
     for (let round = 0; round < 4; round++) {
       if (signal && signal.aborted) throw cancelledError();
       const remaining = limit - (Date.now() - started);
-      if (remaining < 5000) {
+      if (round === 0 ? remaining <= 0 : remaining < 5000) {
         const e = new Error(`Codex 响应超时（超过 ${Math.round(limit / 1000)} 秒），请稍后重试或缩短请求`);
         e.code = 'TIMEOUT';
         throw e;
@@ -643,7 +665,7 @@ async function runCodex({ codexPath, model, system, prompt, schema, images, time
       } : undefined;
       let r;
       try {
-        r = await exec(codexPath, args, { input, timeoutMs: remaining, signal, cwd: tmpDir, onLine });
+        r = await exec(validatedCodexPath, args, { input, timeoutMs: remaining, signal, cwd: tmpDir, onLine });
       } catch (e) {
         throw new Error(`无法启动 Codex：${(e && e.message) || e}`);
       }
@@ -714,6 +736,6 @@ module.exports = {
   _internals: {
     parseJsonLoose, buildCodexArgs, killTree, exec, quoteForCmd, looksNotLoggedIn, clearDetectCache, candidatePaths, LOGIN_HINT,
     parseCodexEvent, normalizeUsage, addUsage, codexFailure, clearCapabilityCache, capability, JSON_FLAG_UNSUPPORTED, EFFORT_UNSUPPORTED,
-    validateModel, isValidCodexPath, resolveCmdShim, isUncPath,
+    validateModel, isValidCodexPath, resolveCmdShim, isUncPath, hasNtfsAdsColon, hasTrailingDotOrSpaceSegment, isAbsoluteCliPath,
   },
 };

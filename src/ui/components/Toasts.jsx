@@ -1,8 +1,9 @@
-// 右下角 Toast 堆叠（契约 C1）。kind: info / success（旧写法 ok 同义）/ warn / error。
+// 右下角 Toast 堆叠。kind: info / success（旧写法 ok 同义）/ warn / error。
 // 条目 { id, message, kind, key?, action? }：key 相同的由 store 原地替换，这里按 key 稳定渲染不闪动；
 // action = { label, run } 渲染成按钮，点击先执行 run() 再关闭。点提示条本身或 × 也会关闭。
 import React from 'react';
 import useStore from '../store.js';
+import { useLocale } from '../i18n.js';
 
 const GLYPH = {
   info: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 11v6M12 7.5h.01',
@@ -12,6 +13,7 @@ const GLYPH = {
 };
 
 const LABEL = { info: '提示', ok: '成功', warn: '注意', error: '出错了' };
+const LABEL_EN = { info: 'Info', ok: 'Success', warn: 'Warning', error: 'Error' };
 
 /** 统一 kind：success 与旧的 ok 视为同一种；未知值按 info */
 export function toastKind(kind) {
@@ -29,15 +31,18 @@ function dismiss(t) {
 }
 
 function ToastItem({ t }) {
+  const isEn = useLocale() === 'en-US';
   const kind = toastKind(t.kind);
+  const labels = isEn ? LABEL_EN : LABEL;
   const action = t.action && typeof t.action.run === 'function' && t.action.label ? t.action : null;
   const runAction = (e) => {
     e.stopPropagation();
+    const errPrefix = isEn ? 'Action failed: ' : '操作没有完成：';
     try {
       const r = action.run();
-      if (r && typeof r.catch === 'function') r.catch((err) => useStore.getState().toast?.('操作没有完成：' + (err?.message || err), 'error'));
+      if (r && typeof r.catch === 'function') r.catch((err) => useStore.getState().toast?.(errPrefix + (err?.message || err), 'error'));
     } catch (err) {
-      useStore.getState().toast?.('操作没有完成：' + (err?.message || err), 'error');
+      useStore.getState().toast?.(errPrefix + (err?.message || err), 'error');
     }
     dismiss(t);
   };
@@ -46,13 +51,13 @@ function ToastItem({ t }) {
       className={'toast ' + kind + (action ? ' has-action' : '')}
       role={kind === 'error' ? 'alert' : undefined}
       onClick={() => dismiss(t)}
-      title={action ? undefined : '点击关闭'}
+      title={action ? undefined : (isEn ? 'Click to dismiss' : '点击关闭')}
     >
       <svg className="toast-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d={GLYPH[kind]} />
       </svg>
       <div className="toast-text">
-        <span className="sr-only">{LABEL[kind]}：</span>
+        <span className="sr-only">{labels[kind]}{isEn ? ': ' : '：'}</span>
         {String(t.message == null ? '' : t.message)}
       </div>
       {action && (
@@ -61,7 +66,7 @@ function ToastItem({ t }) {
       <button
         type="button"
         className="toast-close"
-        aria-label="关闭提示"
+        aria-label={isEn ? 'Dismiss notification' : '关闭提示'}
         onClick={(e) => { e.stopPropagation(); dismiss(t); }}
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>

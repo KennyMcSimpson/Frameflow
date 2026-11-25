@@ -1,5 +1,5 @@
-// AI 结构化输出的严格 JSON Schema（SPEC §6）与 AI 操作规范化。
-// 约束（兼容 OpenAI strict / Codex --output-schema）：
+// AI 结构化输出的严格 JSON Schema 与 AI 操作规范化。
+// 严格模式约束（兼容 OpenAI Structured Outputs 等结构化输出接口）：
 //  - 所有 object 都 additionalProperties:false，且 properties 全部列入 required
 //  - 可空字段用 type:[x,'null']；可空枚举用 anyOf [{enum}, {type:'null'}]
 //  - 不使用 minItems/maxItems/minLength/pattern/format/minimum/maximum 等关键字（数量、范围在提示词里约束，解析时再夹紧）
@@ -50,7 +50,7 @@ export const AI_OP_TYPES = [
   'setColor', 'setLook', 'setMotion', 'setTransform', 'setFx', 'setTransition', 'setCaption', 'setSpeed', 'setVolume',
   'trim', 'setDuration', 'split', 'delete', 'duplicate', 'move', 'insertAsset', 'replaceAsset', 'lock', 'unlock',
   'addText', 'updateText', 'removeText', 'addAudio', 'updateAudio', 'removeAudio', 'harmonize', 'applyPacing', 'setProject',
-  // v3（PLAN-v3 §3）
+  // 扩展剪辑操作（倒放/镜像/曲线变速/定格/波纹删除/分轨/标记/自动闪避/节拍对齐等）
   'setClipProps', 'setSpeedCurve', 'freezeFrame', 'rippleDelete', 'detachAudio', 'addMarker', 'autoDuck', 'snapCutsToBeats',
   'setTransitionAll', 'clearCaptions',
 ];
@@ -211,7 +211,7 @@ export const STORYBOARD_SCHEMA = obj({
 });
 
 // ---------------------------------------------------------------------------
-// 精修 Schema（ROADMAP P0-10 L3/S3：先写计划，每步带理由，做不到的单独列出，不硬凑操作）
+// 精修 Schema（先写计划，每步带理由，做不到的单独列出，不硬凑操作）
 // ---------------------------------------------------------------------------
 /** 精修用的操作：在扁平操作上多一个 reason（只用于展示，执行时丢弃） */
 export const EDIT_OP_SCHEMA = obj({
@@ -301,7 +301,7 @@ export const TAGS_SCHEMA = obj({
 export const ALL_SCHEMAS = { DIRECTOR_SCHEMA, STORYBOARD_SCHEMA, SHOT_SCHEMA, EDIT_SCHEMA, EDIT_REPAIR_SCHEMA, ANALYZE_SCHEMA, TAGS_SCHEMA };
 
 // ---------------------------------------------------------------------------
-// normalizeAiOps：扁平 AI 操作 → SPEC §4 Op（丢弃非法值与无效操作）
+// normalizeAiOps：扁平 AI 操作 → 标准引擎 Op（丢弃非法值与无效操作）
 // ---------------------------------------------------------------------------
 function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
 function toNum(v) {
@@ -336,8 +336,8 @@ function compact(o) {
 }
 
 /**
- * 把单条扁平 AI 操作转为 SPEC §4 的 Op；无效返回 null。
- * 也接受已经是 §4 形状的 Op（兼容技法卡里存的 ops）。
+ * 把单条扁平 AI 操作转为标准引擎 Op；无效返回 null。
+ * 也接受已经是标准引擎 Op 结构的对象（兼容技法卡里存的 ops）。
  */
 export function normalizeAiOp(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -639,7 +639,7 @@ export function normalizeAiOps(rawOps) {
 }
 
 /**
- * 把 SPEC §4 Op 转成扁平 AI 字段（用于把技法卡示例给 AI 看，或回写成严格 schema 形状）。
+ * 把标准引擎 Op 转成扁平 AI 字段（用于把技法卡示例给 AI 看，或回写成严格 schema 形状）。
  */
 export function flattenOp(op) {
   const f = {};

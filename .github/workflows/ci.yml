@@ -42,3 +42,6 @@ jobs:
 
       - name: Build renderer
         run: npm run build:renderer
+
+      - name: Verify agent CLI entrypoint
+        run: node bin/frameflow.mjs doctor --json && node bin/frameflow.mjs ops-schema --json

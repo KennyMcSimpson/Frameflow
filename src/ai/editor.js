@@ -1,5 +1,5 @@
-// AI 精修（CONTRACTS §D editor.js）：带全片记忆构造精修请求，解析为可执行 Op。
-// 完整流程（runEditPipeline，ROADMAP P0-5 / P0-10）：
+// AI 精修：带全片记忆构造精修请求，解析为可执行 Op。
+// 完整流程（runEditPipeline）：
 //   挑选素材库候选 → 理解指令（1 次调用）→ 解析 → 预检 lint → 必要时定向修复（最多再 1 次）→ 改动对比 + 是否需要确认。
 // 调用模型的函数由调用方注入（界面里是 runAI，测试里是录制好的回复），本文件不直接依赖界面。
 import { LOOK_LABELS, MOTION_LABELS, TRANSITION_LABELS, TECHNIQUE_CATEGORY_LABELS, createBrief } from '../engine/model.js';
@@ -24,7 +24,7 @@ function fmt(t) {
 }
 function signed(n) { const v = r2(n); return v > 0 ? `+${v}` : String(v); }
 
-/** 私有布局计算（与 SPEC §3.3 一致），避免依赖其他模块的内部实现 */
+/** 私有布局计算（与主引擎时间线布局规则一致），避免依赖其他模块的内部实现 */
 export function simpleLayout(project) {
   const clips = (project && project.tracks && Array.isArray(project.tracks.video)) ? project.tracks.video : [];
   const out = [];
@@ -99,14 +99,14 @@ function tagList(a) {
   return typeof a.tags === 'string' ? a.tags.split(/[,，、\s]+/).filter(Boolean) : [];
 }
 
-/** 素材行：id｜名称｜类型｜时长｜标签｜描述（描述 60 字以内，P0-5 R1） */
+/** 素材行：id｜名称｜类型｜时长｜标签｜描述（描述 60 字以内） */
 function assetRow(a) {
   const desc = (typeof a.description === 'string' ? a.description : '').replace(/\s+/g, ' ').trim().slice(0, 60);
   return `${a.id}｜${text(a.name, 40)}｜${a.kind}｜${r2(a.duration)}秒｜${tagList(a).slice(0, 6).join('、')}${desc ? `｜${desc}` : ''}`;
 }
 
 // ---------------------------------------------------------------------------
-// 素材库候选（P0-5 R1 + P1-11 R2）：按指令检索 top 30，再补最新 10 条
+// 素材库候选：按指令检索 top 30，再补最新 10 条
 // 渲染端用简化 BM25 打分：名称权重 3、标签 2、描述 1；中文按单字 + 相邻两字切分，英文/数字按词。
 // 指令里直接出现素材名时额外加分，保证「把第二段换成海边日落」这类说法一定能找到那条素材。
 // ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ export function buildEditRequest({ project, command, selection, range, focus, te
   try { memoryText = memoryPromptBlock(memory); } catch { memoryText = '（暂无）'; }
   const techList = Array.isArray(techniques) ? techniques.filter((t) => t && t.id).slice(0, 20) : [];
 
-  // 几乎不变的内容放前面（技法卡 → 风格与记忆 → 全片情况 → 素材 → 选区），每次都变的用户指令放最后（P0-5 L5）
+  // 几乎不变的内容放前面（技法卡 → 风格与记忆 → 全片情况 → 素材 → 选区），每次都变的用户指令放最后（利于前缀缓存命中）
   const prompt = [
     '【可参考的技法卡】',
     techList.length ? techList.map((t) => {

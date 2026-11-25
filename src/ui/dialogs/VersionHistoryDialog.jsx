@@ -1,16 +1,16 @@
-// 历史版本（契约 C6）：列出编辑时自动保存的版本，选一个恢复。
-// 数据：project:listSnapshots { id } → [{ snapshotId, createdAt, size, name, clipCount, duration? }]（新的在前）
-// 恢复：先 saveNow 把当前修改写盘 → project:restoreSnapshot（主进程会先把当前版本也存一份）→ openProject 重新载入。
-// 由 TopBar 在 dialogs.versionHistory 为真时挂载；同一时刻只渲染一个实例。
+// Version History Dialog: browse auto-saved project snapshots and restore safely.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useStore from '../store.js';
 import api from '../api.js';
+import { useLocale, useT } from '../i18n.js';
 import { Modal, Button, Icon, Spinner, EmptyState, ICON_NAMES, fmtTime } from '../components/ui.jsx';
 import { normalizeSnapshots, fmtSnapshotTime, groupSnapshotsByDay, isMissingHandler } from './versionHistoryUtils.js';
 
 const iconOr = (name, fallback) => (ICON_NAMES.includes(name) ? name : fallback);
+const pad2 = (n) => String(n).padStart(2, '0');
+const EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// 单例：App 和 TopBar 若同时挂载，只让先挂上的那个渲染
+// Singleton guard so only one instance renders if mounted from multiple hosts
 let activeOwner = null;
 function useSingleton() {
   const me = useRef({});
@@ -22,12 +22,46 @@ function useSingleton() {
   return owner;
 }
 
-function clipsLabel(n) {
-  return n > 0 ? `${n} 个片段` : '时间线为空';
+function fmtSnapshotTimeLoc(iso, now, locale, tr) {
+  if (locale === 'zh-CN') return fmtSnapshotTime(iso, now);
+  const d = new Date(iso);
+  const ts = d.getTime();
+  if (!iso || !Number.isFinite(ts)) return { main: tr('history.timeUnknown'), rel: '' };
+  const n = new Date(now);
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((dayStart(n) - dayStart(d)) / 86400000);
+  let dayLabel;
+  if (dayDiff === 0) dayLabel = tr('history.today');
+  else if (dayDiff === 1) dayLabel = tr('history.yesterday');
+  else if (d.getFullYear() === n.getFullYear()) dayLabel = `${EN_MONTHS[d.getMonth()]} ${d.getDate()}`;
+  else dayLabel = `${EN_MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  const s = Math.max(0, Math.round((now - ts) / 1000));
+  let rel = '';
+  if (s < 60) rel = tr('start.time.justNow');
+  else if (s < 3600) rel = tr('start.time.minsAgo', { n: Math.floor(s / 60) });
+  else if (s < 86400) rel = tr('start.time.hoursAgo', { n: Math.floor(s / 3600) });
+  else if (s < 30 * 86400) rel = tr('start.time.daysAgo', { n: Math.floor(s / 86400) });
+  return { main: `${dayLabel} ${hm}`, rel };
+}
+
+function groupSnapshotsLoc(list, now, locale, tr) {
+  if (locale === 'zh-CN') return groupSnapshotsByDay(list, now);
+  const groups = [];
+  for (const s of list || []) {
+    const { main } = fmtSnapshotTimeLoc(s.createdAt, now, locale, tr);
+    const label = main.includes(' ') ? main.slice(0, main.lastIndexOf(' ')) : main;
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(s);
+    else groups.push({ label, items: [s] });
+  }
+  return groups;
 }
 
 export default function VersionHistoryDialog({ onClose }) {
   const isOwner = useSingleton();
+  const locale = useLocale();
+  const tr = useT();
   const projectId = useStore((s) => (s.project ? s.project.id : ''));
   const projectName = useStore((s) => (s.project ? s.project.name : ''));
   const currentClips = useStore((s) => (s.project && s.project.tracks && Array.isArray(s.project.tracks.video) ? s.project.tracks.video.length : 0));
@@ -41,6 +75,8 @@ export default function VersionHistoryDialog({ onClose }) {
   const [confirmId, setConfirmId] = useState(null);
   const [restoringId, setRestoringId] = useState(null);
   const [now, setNow] = useState(() => Date.now());
+
+  const clipsLabel = (n) => (n === 1 ? tr('history.clipsOne') : n > 0 ? tr('history.clips', { count: n }) : tr('history.emptyTimeline'));
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -58,7 +94,6 @@ export default function VersionHistoryDialog({ onClose }) {
 
   useEffect(() => { if (isOwner) load(); }, [isOwner, load]);
 
-  // 确认恢复时按 Esc 先取消确认，而不是直接关掉对话框
   useEffect(() => {
     if (!confirmId) return undefined;
     const onKey = (e) => {
@@ -77,35 +112,34 @@ export default function VersionHistoryDialog({ onClose }) {
     setRestoringId(snap.snapshotId); setError('');
     try {
       if (typeof st.setPlaying === 'function') st.setPlaying(false);
-      // 先把当前修改写盘：恢复前主进程会给磁盘上的当前版本拍快照，这样随时能换回来
       const saved = await st.saveNow();
       if (saved === false || useStore.getState().saveState === 'error') {
-        throw new Error('当前的修改还没保存成功，为避免丢失先不恢复。请检查磁盘空间后再试');
+        throw new Error(tr('history.saveBeforeRestoreErr'));
       }
       const prevMode = useStore.getState().mode;
       await api.call('project:restoreSnapshot', { id, snapshotId: snap.snapshotId });
       await useStore.getState().openProject(id);
       const after = useStore.getState();
       if (prevMode && after.mode !== prevMode && typeof after.setMode === 'function') after.setMode(prevMode);
-      after.toast(`已恢复到 ${fmtSnapshotTime(snap.createdAt).main} 的版本。恢复前的版本也已保存，可在「历史版本」里换回`, 'success', 4000, { key: 'version-restore' });
+      after.toast(tr('history.restoreSuccess', { time: fmtSnapshotTimeLoc(snap.createdAt, Date.now(), locale, tr).main }), 'success', 4000, { key: 'version-restore' });
       close();
     } catch (e) {
       const msg = (e && e.message) || String(e);
-      setError('恢复失败：' + msg);
+      setError(tr('history.restoreFailed', { error: msg }));
       setConfirmId(null);
     } finally {
       setRestoringId(null);
     }
   };
 
-  const groups = useMemo(() => groupSnapshotsByDay(list, now), [list, now]);
+  const groups = useMemo(() => groupSnapshotsLoc(list, now, locale, tr), [list, now, locale, tr]);
 
   if (!isOwner || !projectId) return null;
 
   const footer = (
     <>
-      <span className="hint grow vh-foot-hint">编辑时每 5 分钟（或每保存 30 次）自动存一份，保留最近 20 份。</span>
-      <Button onClick={close} disabled={!!restoringId}>关闭</Button>
+      <span className="hint grow vh-foot-hint">{tr('history.footerHint')}</span>
+      <Button onClick={close} disabled={!!restoringId}>{tr('app.close')}</Button>
     </>
   );
 
@@ -114,32 +148,32 @@ export default function VersionHistoryDialog({ onClose }) {
     body = (
       <div className="vh-state" role="status">
         <Spinner />
-        <span>正在读取历史版本…</span>
+        <span>{tr('history.loading')}</span>
       </div>
     );
   } else if (status === 'unsupported') {
     body = (
       <EmptyState
         icon={iconOr('history', 'clock')}
-        title="当前版本还不支持历史版本"
-        desc="更新到新版镜流后即可使用。项目仍会照常自动保存。"
+        title={tr('history.unsupportedTitle')}
+        desc={tr('history.unsupportedDesc')}
       />
     );
   } else if (status === 'error') {
     body = (
       <EmptyState
         icon="alert"
-        title="读取历史版本失败"
-        desc={error || '请稍后再试。'}
-        action={<Button icon="refresh" onClick={load}>重试</Button>}
+        title={tr('history.errorTitle')}
+        desc={error || tr('history.errorFallback')}
+        action={<Button icon="refresh" onClick={load}>{tr('app.retry')}</Button>}
       />
     );
   } else if (!list.length) {
     body = (
       <EmptyState
         icon={iconOr('history', 'clock')}
-        title="还没有历史版本"
-        desc="继续编辑一会儿，镜流会自动存下版本。以后改坏了，可以在这里回到之前的样子。"
+        title={tr('history.emptyTitle')}
+        desc={tr('history.emptyDesc')}
       />
     );
   } else {
@@ -147,11 +181,11 @@ export default function VersionHistoryDialog({ onClose }) {
       <div className="vh-list">
         <div className="vh-item current" aria-current="true">
           <div className="vh-when">
-            <span className="vh-main">当前版本</span>
-            <span className="vh-rel">{saveState === 'saved' ? '已保存' : saveState === 'error' ? '保存失败' : '正在编辑'}</span>
+            <span className="vh-main">{tr('history.currentVersion')}</span>
+            <span className="vh-rel">{saveState === 'saved' ? tr('history.stateSaved') : saveState === 'error' ? tr('history.stateError') : tr('history.stateEditing')}</span>
           </div>
           <div className="vh-meta">
-            <span className="ellipsis">{projectName || '未命名项目'}</span>
+            <span className="ellipsis">{projectName || tr('app.untitledProject')}</span>
             <span className="vh-dot" aria-hidden="true" />
             <span>{clipsLabel(currentClips)}</span>
           </div>
@@ -160,7 +194,7 @@ export default function VersionHistoryDialog({ onClose }) {
           <section key={g.label} className="vh-group" aria-label={g.label}>
             <h4 className="vh-group-label">{g.label}</h4>
             {g.items.map((s) => {
-              const tm = fmtSnapshotTime(s.createdAt, now);
+              const tm = fmtSnapshotTimeLoc(s.createdAt, now, locale, tr);
               const hm = tm.main.slice(tm.main.lastIndexOf(' ') + 1);
               const confirming = confirmId === s.snapshotId;
               const busy = restoringId === s.snapshotId;
@@ -175,21 +209,21 @@ export default function VersionHistoryDialog({ onClose }) {
                     <div className="vh-meta">
                       <span>{clipsLabel(s.clipCount)}</span>
                       {s.duration != null && (<><span className="vh-dot" aria-hidden="true" /><span className="mono">{fmtTime(s.duration)}</span></>)}
-                      {renamed && (<><span className="vh-dot" aria-hidden="true" /><span className="ellipsis" title={s.name}>当时叫「{s.name}」</span></>)}
+                      {renamed && (<><span className="vh-dot" aria-hidden="true" /><span className="ellipsis" title={s.name}>{tr('history.namedThen', { name: s.name })}</span></>)}
                     </div>
                     {!confirming && (
                       <Button size="sm" icon="refresh" onClick={() => { setError(''); setConfirmId(s.snapshotId); }} disabled={!!restoringId}>
-                        恢复
+                        {tr('history.restore')}
                       </Button>
                     )}
                   </div>
                   {confirming && (
-                    <div className="vh-confirm" role="group" aria-label="确认恢复">
+                    <div className="vh-confirm" role="group" aria-label={tr('history.confirmAria')}>
                       <Icon name="info" size={14} />
-                      <span className="grow">恢复后当前内容会被替换，撤销记录也会清空。当前版本会先自动存一份，之后可以在这里换回来。</span>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmId(null)} disabled={busy}>取消</Button>
+                      <span className="grow">{tr('history.confirmDesc')}</span>
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmId(null)} disabled={busy}>{tr('app.cancel')}</Button>
                       <Button size="sm" variant="primary" onClick={() => restore(s)} disabled={busy} autoFocus>
-                        {busy ? <><Spinner /> 正在恢复…</> : '恢复这个版本'}
+                        {busy ? <><Spinner /> {tr('history.restoring')}</> : tr('history.restoreThis')}
                       </Button>
                     </div>
                   )}
@@ -203,8 +237,8 @@ export default function VersionHistoryDialog({ onClose }) {
   }
 
   return (
-    <Modal title="历史版本" onClose={restoringId ? undefined : close} footer={footer} className="vh-modal">
-      <p className="vh-intro hint">选一个之前的版本恢复。恢复前，当前版本也会自动存一份，不怕改错。</p>
+    <Modal title={tr('history.title')} onClose={restoringId ? undefined : close} footer={footer} className="vh-modal">
+      <p className="vh-intro hint">{tr('history.intro')}</p>
       {error && status === 'ready' && (
         <div className="callout warn vh-error" role="alert">
           <Icon name="alert" size={14} /> <span>{error}</span>

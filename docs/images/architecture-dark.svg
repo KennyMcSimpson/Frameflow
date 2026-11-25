@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 396" width="1200" height="396" role="img" aria-labelledby="arch-dark-title arch-dark-desc">
-  <title id="arch-dark-title">Frameflow Electron Security and Media Architecture</title>
-  <desc id="arch-dark-desc">Four-layer Electron 45 architecture showing the sandboxed Renderer Process, Security Boundary with 5 protections, Main Process with 9 IPC modules and encrypted secret store, and 4 local and external media capability engines.</desc>
+  <title id="arch-dark-title">Frameflow v2.1 Electron Security, Media and Agent Architecture</title>
+  <desc id="arch-dark-desc">Four-layer Electron 45 architecture showing the sandboxed Renderer Process with bilingual i18n, Security Boundary with 5 protections, Main Process with 9 IPC modules, encrypted secret store, Live Watch and agent adapters, and 4 local, agent, and external capability engines.</desc>
   <defs>
     <linearGradient id="ad-bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0d0f12"/>
@@ -35,8 +35,8 @@
   <!-- Header -->
   <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
     <circle cx="31" cy="27" r="3.5" fill="#d4ff3f"/>
-    <text x="43" y="31" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#d4ff3f" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">ELECTRON SECURITY &amp; MEDIA ARCHITECTURE</text>
-    <text x="1172" y="31" text-anchor="end" font-size="11.5" font-weight="500" fill="#9aa6b8">Electron 45 · React 19 · Vite 7 · Zustand 5 · LGPL v3 FFmpeg</text>
+    <text x="43" y="31" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#d4ff3f" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">ELECTRON SECURITY, MEDIA &amp; AGENT ARCHITECTURE</text>
+    <text x="1172" y="31" text-anchor="end" font-size="11.5" font-weight="500" fill="#9aa6b8">Electron 45 · React 19 · i18n · Agent CLI/MCP · LGPL v3 FFmpeg</text>
   </g>
 
   <!-- LAYER 1: RENDERER PROCESS -->
@@ -48,8 +48,8 @@
     <rect x="0" y="0" width="1148" height="86" rx="13" fill="none" stroke="#6cb2ff" stroke-opacity="0.40" stroke-width="1.2"/>
 
     <text x="20" y="31" font-size="14.5" font-weight="700" fill="#f4f7fb">Renderer Process</text>
-    <text x="20" y="50" font-size="11.2" fill="#8fbef0">Sandboxed React 19 + Vite + Zustand</text>
-    <text x="20" y="68" font-size="10.2" fill="#9aa6b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">No Node · IPC APIs · HTTPS media</text>
+    <text x="20" y="50" font-size="11.2" fill="#8fbef0">Sandboxed React 19 · Vite · i18n</text>
+    <text x="20" y="68" font-size="10.2" fill="#9aa6b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">No Node · EN/ZH · IPC APIs</text>
 
     <!-- Renderer Module 1 -->
     <rect x="244" y="12" width="288" height="62" rx="9" fill="#0e131a" stroke="#6cb2ff" stroke-opacity="0.26"/>
@@ -124,7 +124,7 @@
 
     <text x="20" y="34" font-size="14.5" font-weight="700" fill="#f4f7fb">Main Process</text>
     <text x="20" y="54" font-size="11.2" fill="#c3b7ff">Electron 45 + Node.js (CommonJS)</text>
-    <text x="20" y="73" font-size="10.2" fill="#9aa6b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">Single-instance · Crash recovery</text>
+    <text x="20" y="73" font-size="10.2" fill="#9aa6b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">Live Watch · Crash recovery</text>
 
     <!-- Main Module 1 -->
     <rect x="244" y="11" width="316" height="70" rx="9" fill="#12111e" stroke="#9d8cff" stroke-opacity="0.28"/>
@@ -134,55 +134,55 @@
 
     <!-- Main Module 2 -->
     <rect x="574" y="11" width="274" height="70" rx="9" fill="#12111e" stroke="#9d8cff" stroke-opacity="0.28"/>
-    <text x="588" y="30" font-size="13" font-weight="700" fill="#eef3fa">Encrypted Secret Store</text>
-    <text x="588" y="49" font-size="11.3" fill="#9aa6b8">Electron safeStorage (Windows DPAPI)</text>
-    <text x="588" y="66" font-size="11.3" fill="#9aa6b8">Atomic JSON persistence + .bak</text>
+    <text x="588" y="30" font-size="13" font-weight="700" fill="#eef3fa">Encrypted Store &amp; Watch</text>
+    <text x="588" y="49" font-size="11.2" fill="#9aa6b8">DPAPI secrets · Atomic JSON + .bak</text>
+    <text x="588" y="66" font-size="11.2" fill="#9aa6b8">Live Watch (&lt;100ms) + Ctrl+Z sync</text>
 
     <!-- Main Module 3 -->
     <rect x="862" y="11" width="272" height="70" rx="9" fill="#12111e" stroke="#9d8cff" stroke-opacity="0.28"/>
-    <text x="876" y="30" font-size="13" font-weight="700" fill="#eef3fa">Jobs &amp; Subprocess Pool</text>
-    <text x="876" y="49" font-size="11.3" fill="#9aa6b8">Abortable job queue · worker_threads</text>
-    <text x="876" y="66" font-size="11.3" fill="#9aa6b8">Managed FFmpeg &amp; process cleanup</text>
+    <text x="876" y="30" font-size="13" font-weight="700" fill="#eef3fa">Jobs, Presets &amp; Agent CLIs</text>
+    <text x="876" y="49" font-size="11.2" fill="#9aa6b8">Abortable queue · worker_threads</text>
+    <text x="876" y="66" font-size="11.2" fill="#9aa6b8">aiPresets · agentCli · FFmpeg pool</text>
   </g>
 
   <!-- Vertical Connectors 3 <-> 4 -->
   <g stroke="#4cc38a" stroke-opacity="0.60" stroke-width="1.5">
-    <line x1="164" y1="296" x2="164" y2="310"/>
-    <line x1="454" y1="296" x2="454" y2="310"/>
-    <line x1="744" y1="296" x2="744" y2="310"/>
-    <line x1="1035" y1="296" x2="1035" y2="310"/>
+    <line x1="159" y1="296" x2="159" y2="310"/>
+    <line x1="455" y1="296" x2="455" y2="310"/>
+    <line x1="757" y1="296" x2="757" y2="310"/>
+    <line x1="1042" y1="296" x2="1042" y2="310"/>
   </g>
   <g fill="#4cc38a">
-    <circle cx="164" cy="310" r="2.2"/>
-    <circle cx="454" cy="310" r="2.2"/>
-    <circle cx="744" cy="310" r="2.2"/>
-    <circle cx="1035" cy="310" r="2.2"/>
+    <circle cx="159" cy="310" r="2.2"/>
+    <circle cx="455" cy="310" r="2.2"/>
+    <circle cx="757" cy="310" r="2.2"/>
+    <circle cx="1042" cy="310" r="2.2"/>
   </g>
 
   <!-- LAYER 4: 4 BOTTOM CAPABILITY CARDS -->
   <g transform="translate(26, 310)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
     <!-- Capability 1 -->
-    <rect x="0" y="0" width="276" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
+    <rect x="0" y="0" width="266" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
     <circle cx="18" cy="24" r="4" fill="#4cc38a"/>
-    <text x="30" y="28" font-size="13" font-weight="700" fill="#f1f7f4">Bundled LGPL v3 FFmpeg</text>
-    <text x="16" y="49" font-size="11.2" fill="#99b3a7">FFmpeg/FFprobe · NVENC/QSV/AMF/MF</text>
+    <text x="30" y="28" font-size="12.5" font-weight="700" fill="#f1f7f4">Bundled LGPL v3 FFmpeg</text>
+    <text x="16" y="49" font-size="10.9" fill="#99b3a7">FFmpeg/FFprobe · NVENC/QSV/AMF/MF</text>
 
     <!-- Capability 2 -->
-    <rect x="290" y="0" width="276" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
-    <circle cx="308" cy="24" r="4" fill="#4cc38a"/>
-    <text x="320" y="28" font-size="13" font-weight="700" fill="#f1f7f4">Local ASR &amp; Media Tools</text>
-    <text x="306" y="49" font-size="11.2" fill="#99b3a7">whisper.cpp / Whisper · Optional yt-dlp</text>
+    <rect x="280" y="0" width="298" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
+    <circle cx="298" cy="24" r="4" fill="#4cc38a"/>
+    <text x="310" y="28" font-size="12.5" font-weight="700" fill="#f1f7f4">Agent CLI · Live Watch · Thin MCP</text>
+    <text x="296" y="49" font-size="10.9" fill="#99b3a7">frameflow CLI · SKILL.md · MCP stdio</text>
 
     <!-- Capability 3 -->
-    <rect x="580" y="0" width="276" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
-    <circle cx="598" cy="24" r="4" fill="#4cc38a"/>
-    <text x="610" y="28" font-size="13" font-weight="700" fill="#f1f7f4">LLM &amp; VideoGen APIs</text>
-    <text x="596" y="49" font-size="11.2" fill="#99b3a7">OpenAI / Codex · Ark · 8 VideoGen APIs</text>
+    <rect x="592" y="0" width="278" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
+    <circle cx="610" cy="24" r="4" fill="#4cc38a"/>
+    <text x="622" y="28" font-size="12.5" font-weight="700" fill="#f1f7f4">Neutral LLM/CLI &amp; VideoGen</text>
+    <text x="608" y="49" font-size="10.9" fill="#99b3a7">8 API Presets · 3 CLIs · 8 VideoGen</text>
 
     <!-- Capability 4 -->
-    <rect x="870" y="0" width="278" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
-    <circle cx="888" cy="24" r="4" fill="#4cc38a"/>
-    <text x="900" y="28" font-size="13" font-weight="700" fill="#f1f7f4">Free &amp; Opt-In Stock APIs</text>
-    <text x="886" y="49" font-size="11.2" fill="#99b3a7">Wikimedia, Openverse, Archive, NASA</text>
+    <rect x="884" y="0" width="264" height="66" rx="11" fill="#111a17" stroke="#4cc38a" stroke-opacity="0.40" stroke-width="1.2"/>
+    <circle cx="902" cy="24" r="4" fill="#4cc38a"/>
+    <text x="914" y="28" font-size="12.5" font-weight="700" fill="#f1f7f4">Local ASR &amp; Free Stock APIs</text>
+    <text x="900" y="49" font-size="10.9" fill="#99b3a7">whisper.cpp · Zero-Key Stock · yt-dlp</text>
   </g>
 </svg>

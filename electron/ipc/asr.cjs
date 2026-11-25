@@ -1,5 +1,5 @@
 'use strict';
-// ASR IPC：asr:status、asr:transcribe（job 'asr'）、asr:installModel（job 'asr-install'）。见 PLAN-v3 §4。
+// ASR IPC：asr:status、asr:transcribe（job 'asr'）、asr:installModel（job 'asr-install'）。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');

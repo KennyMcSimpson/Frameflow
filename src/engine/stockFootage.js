@@ -248,7 +248,7 @@ export function pickVariant(variants, target = 1280) {
   return pool.slice().sort((a, b) => Math.abs(long(a) - target) - Math.abs(long(b) - target) || long(a) - long(b))[0];
 }
 
-/** 卡片上的署名：「Pexels / 作者」。v3 资产 source 为字符串 'stock'，详情在 asset.stock；兼容旧版对象 source 和契约 C3 的 source.provider。 */
+/** 卡片上的署名：「Pexels / 作者」。实拍资产 source 为字符串 'stock'，详情在 asset.stock；兼容对象形式 source 与 source.provider。 */
 const CREDIT_LABELS = {
   pexels: 'Pexels', pixabay: 'Pixabay', commons: 'Wikimedia Commons', mixkit: 'Mixkit',
   openverse: 'Openverse', archive: '互联网档案馆', nasa: 'NASA',
@@ -336,7 +336,7 @@ export function autoFootageSources(settings = {}) {
 }
 
 /**
- * 分镜画面来源优先级（PLAN-v3 §7）：用户素材 > AI 视频 > 实拍 > previz。
+ * 分镜画面来源优先级：用户素材 > AI 视频 > 实拍 > previz。
  * @returns {{kind:'local'|'ai'|'stock'|'previz'|null, assetId:string|null}}
  */
 export function shotMediaPick(shot, assets = {}) {

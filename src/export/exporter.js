@@ -1,10 +1,10 @@
-// 导出驱动：逐帧精确 seek → renderFrame(mode:'export') → JPEG → 主进程 ffmpeg 编码（SPEC §2.2、CONTRACTS §C）。
+// 导出驱动：逐帧精确 seek → renderFrame(mode:'export') → JPEG → 主进程 ffmpeg 编码。
 //
 // 流水线深度 1：第 i 帧在编码 / 传输时，第 i+1 帧已经在 seek 和合成，顺序严格保持。
 // 取消：signal 触发后立即通知主进程 export:cancel，并抛出 Error{cancelled:true}。
 // 进度：以 ffmpeg 实际编码的帧数为准（主进程在 job:progress 的 meta 里带上 encoded / outSec），
 // 画面全部编码完后进入收尾封装，剩余时间显示「即将完成」。
-// AI 标识（契约 C10）：工程用到 AI 素材时默认在画面角上加「AI 生成」并写入隐式元数据（GB 45438-2025）。
+// AI 标识：工程用到 AI 素材时默认在画面角上加「AI 生成」并写入隐式元数据（GB 45438-2025）。
 // 显卡编码中途出错时自动改用 CPU 重新导出一次。
 
 import api from '../ui/api.js';
@@ -82,7 +82,7 @@ function usedPaths(project, layout) {
   return [...paths];
 }
 
-/** 导出时的 AI 角标：显式传了按传的（false 关闭）；没传时工程用到 AI 素材就默认打开（契约 C10） */
+/** 导出时的 AI 角标：显式传了按传的（false 关闭）；没传时工程用到 AI 素材就默认打开 */
 export function resolveAiLabel(project, aiLabel) {
   if (aiLabel === undefined) {
     let uses = false;
@@ -101,7 +101,7 @@ export function resolveAigcMeta(project, aigc, label) {
   return uses || label || aigc === true ? buildAigcMeta({ produceId: makeProduceId() }) : null;
 }
 
-/** 署名文字（契约 C3）：传字符串就用它；false 不写；没传时按素材许可自动生成（没有需要署名的素材时为空） */
+/** 署名文字：传字符串就用它；false 不写；没传时按素材许可自动生成（没有需要署名的素材时为空） */
 export function resolveCredits(project, credits) {
   if (credits === false || credits === null) return '';
   if (typeof credits === 'string') return credits.trim() ? credits : '';
@@ -329,7 +329,7 @@ export function srtTimestamp(sec) {
   return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)},${pad(ms % 1000, 3)}`;
 }
 
-/** 文字 → SRT：优先用 W10 captions.textsToSrt，缺失时内联实现 */
+/** 文字 → SRT：优先用 captions.textsToSrt，缺失时内联实现 */
 export function toSrt(texts) {
   if (typeof Captions.textsToSrt === 'function') {
     try {

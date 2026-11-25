@@ -1,8 +1,8 @@
 'use strict';
 // 联网：yt-dlp 管理、多源搜索（维基共享资源 / Openverse / 互联网档案馆 / NASA 免 Key；Pexels / Pixabay 需 Key；B 站 / YouTube 仅供参考）、下载为素材。
-// 视频站（B 站 / YouTube / 粘贴链接）的搜索和下载需要先同意使用须知（契约 C4，consent:grant）。
-// 素材写入统一的 source / license / reference 字段（契约 C3）。
-// 见 SPEC §2.2 web.cjs。主进程模块，但不在顶层 require electron（ctx 提供一切），便于 node 直接测试搜索函数。
+// 视频站（B 站 / YouTube / 粘贴链接）的搜索和下载需要先同意使用须知（consent:grant）。
+// 素材写入统一的 source / license / reference 字段。
+// 主进程模块，但不在顶层 require electron（ctx 提供一切），便于 node 直接测试搜索函数。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -951,7 +951,7 @@ function sourceType(target, src) {
 }
 
 /**
- * 下载结果 → 素材上的 source / license / reference（契约 C3）。
+ * 下载结果 → 素材上的 source / license / reference。
  * 同时保留旧字段（type / platform / license 文字 / downloadUrl），老代码照常读取。
  */
 function assetProvenance({ target, srcName, result, pageUrl, direct, author, title, info }) {
@@ -1119,7 +1119,7 @@ module.exports = function register({ handle, ctx }) {
 
   handle('web:search', async (payload) => search(ctx, payload));
 
-  // 视频站使用须知（契约 C4）
+  // 视频站使用须知同意状态
   handle('consent:grant', async (payload) => consent.grantConsent(ctx.settings, (payload && payload.key) || 'videoSites'));
   handle('consent:revoke', async (payload) => consent.revokeConsent(ctx.settings, (payload && payload.key) || 'videoSites'));
   handle('consent:status', async () => consent.consentStatus(ctx.settings ? ctx.settings.get() : null));

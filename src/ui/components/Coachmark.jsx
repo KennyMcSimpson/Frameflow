@@ -1,9 +1,10 @@
-// 首次引导（PLAN-v3 §6）：遮罩高亮 data-tour 目标 + 一句话说明 + 下一步/跳过。
+// 首次引导：遮罩高亮 data-tour 目标 + 一句话说明 + 下一步/跳过。
 // 用法：<Coachmark mode="refine" steps={[{ target: '[data-tour=refine-media]', title, desc }]} />
 // 完成或跳过后写入 store.onboarding[mode]（持久化到 settings.ui），帮助里可「重新引导」。
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import useStore from '../store.js';
+import { useLocale } from '../i18n.js';
 import { Button } from './ui.jsx';
 
 /** 各模式默认引导步骤（App 统一挂载；目标不存在的步骤自动跳过） */
@@ -24,6 +25,23 @@ export const DEFAULT_TOURS = {
   ],
 };
 
+const DEFAULT_TOURS_EN = {
+  create: [
+    { target: '[data-tour=create-chat]', title: 'Share your idea with the AI Director', desc: 'Describe the video you want in plain language—AI will draft a storyboard and match real stock footage.' },
+    { target: '[data-tour=create-generate]', title: 'Generate all visuals in one click', desc: 'Once your storyboard is ready, click here to match stock clips or generate AI video for every shot.' },
+    { target: '[data-tour=create-go-refine]', title: 'Enter Refine Mode', desc: 'When visuals are ready, jump to the timeline to trim clips and add captions and music.' },
+  ],
+  refine: [
+    { target: '[data-tour=refine-media]', title: 'Media Bin', desc: 'Your imported videos, images, and music live here—drag them onto the timeline below.' },
+    { target: '[data-tour=refine-timeline]', title: 'Timeline', desc: 'Space to play, S to split, Q/W to trim to playhead, Delete to remove; drag edges to adjust length.' },
+    { target: '[data-tour=refine-inspector]', title: 'Inspector', desc: 'Select a clip to adjust framing, speed, color, and volume; use ◆ buttons to add keyframes.' },
+    { target: '[data-tour=export]', title: 'Export when ready', desc: 'Pick presets for TikTok, YouTube, Bilibili, or 4K and export in one click.' },
+  ],
+  library: [
+    { target: '[data-tour=library-add]', title: 'Add a reference video to study', desc: 'Paste a link or import a local video—AI breaks down shots, pacing, and techniques you can reuse.' },
+  ],
+};
+
 function findTarget(sel) {
   if (!sel || typeof document === 'undefined') return null;
   try {
@@ -40,10 +58,13 @@ const CARD_W = 300;
 const EMPTY_STEPS = [];
 
 export default function Coachmark({ mode, steps, force = false, onDone }) {
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   const done = useStore((s) => !!(s.onboarding && s.onboarding[mode]));
   const anyDialog = useStore((s) => Object.values(s.dialogs || {}).some(Boolean));
   const setOnboarding = useStore((s) => s.setOnboarding);
-  const list = steps || DEFAULT_TOURS[mode] || EMPTY_STEPS;
+  const defaultTours = isEn ? DEFAULT_TOURS_EN : DEFAULT_TOURS;
+  const list = steps || defaultTours[mode] || EMPTY_STEPS;
   const [idx, setIdx] = useState(0);
   const [rect, setRect] = useState(null);
   const [ready, setReady] = useState(false);
@@ -149,9 +170,9 @@ export default function Coachmark({ mode, steps, force = false, onDone }) {
         <h4>{step.title}</h4>
         {step.desc && <p>{step.desc}</p>}
         <div className="coach-actions">
-          <Button variant="ghost" size="sm" onClick={finish} className="coach-skip">跳过引导</Button>
+          <Button variant="ghost" size="sm" onClick={finish} className="coach-skip">{L('跳过引导', 'Skip Tour')}</Button>
           <span className="grow" />
-          <Button variant="secondary" size="sm" onClick={next} className="coach-next" autoFocus>{isLast ? '开始使用' : '下一步'}</Button>
+          <Button variant="secondary" size="sm" onClick={next} className="coach-next" autoFocus>{isLast ? L('开始使用', 'Get Started') : L('下一步', 'Next')}</Button>
         </div>
       </div>
     </div>,

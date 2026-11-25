@@ -1,4 +1,4 @@
-// 内置技法卡（SPEC §3.6 Technique，CONTRACTS §B）。离线可用，被创作/精修 AI 检索引用，也可一键套用到所选镜头。
+// 内置技法卡。离线可用，被创作/精修 AI 检索引用，也可一键套用到所选镜头。
 // 约定：id 前缀 bt_；builtin:true；apply.ops 的 target 统一 { mode:'selected', indices:[], ids:[] }。
 
 const sel = () => ({ mode: 'selected', indices: [], ids: [] });

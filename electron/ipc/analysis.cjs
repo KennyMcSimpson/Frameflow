@@ -585,7 +585,7 @@ async function startAnalysis(ctx, job, payload) {
       subtitlesFile = dl.subtitlesFile;
       if (!title) title = dl.info.title || '';
       job.throwIfCancelled();
-      // 视频作为素材加入素材库（契约 C3：视频站下载的素材标为 videosite + reference，仅供参考）
+      // 视频作为素材加入素材库（视频站下载的素材统一标为 videosite + reference，仅供参考）
       const author = dl.info.uploader || null;
       const asset = await web.buildAssetFromFile(ctx, file, {
         name: title || '拆片视频',
@@ -681,7 +681,7 @@ async function startAnalysis(ctx, job, payload) {
 
 // ───────────────────────── 注册 ─────────────────────────
 
-/** 契约 C4：视频站同意检查。consent.cjs 缺失（旧版本）时不拦截；未同意时抛出 code='NEED_CONSENT' 的错误。 */
+/** 视频站同意检查。consent.cjs 缺失时不拦截；未同意时抛出 code='NEED_CONSENT' 的错误。 */
 function requireVideoSiteConsent(ctx) {
   let consent = null;
   try { consent = require('../lib/consent.cjs'); } catch { return; }
@@ -702,7 +702,7 @@ module.exports = function register({ handle, ctx }) {
     }
     if (payload.url) {
       urlSafety.assertSafePublicUrl(String(payload.url).trim(), { allowedOrigins: (ctx && ctx.allowedOrigins) || [] });
-      // 契约 C4：带视频站链接时，联网之前先确认用户已同意使用须知（未同意 → NEED_CONSENT，渲染端弹同意框后重试）
+      // 带视频站链接时，联网之前先确认用户已同意使用须知（未同意 → NEED_CONSENT，渲染端弹同意框后重试）
       requireVideoSiteConsent(ctx);
     }
     const title = payload.title || payload.url || (payload.path ? path.basename(payload.path) : '拆片');

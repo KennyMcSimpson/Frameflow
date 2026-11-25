@@ -544,7 +544,7 @@ test('codex.cjs：quoteForCmd 拒绝 % 环境变量展开，isValidCodexPath 拦
   assert.equal(isValidCodexPath('/\\evil.com/share/codex.exe'), false);
   assert.equal(isValidCodexPath('\\\\evil.com\\share\\codex.exe'), false);
   assert.equal(isValidCodexPath('//evil.com/share/codex.exe'), false);
-  assert.equal(isValidCodexPath('C:\\Tools\\codex.exe'), true);
+  assert.equal(isValidCodexPath(process.platform === 'win32' ? 'C:\\Tools\\codex.exe' : '/usr/local/bin/codex'), true);
 });
 
 test('urlSafety.cjs & fal.cjs：拦截 CGNAT/NAT64/多播/广播/尾点 localhost、协议降级与非官方 fal.run 租户', async () => {

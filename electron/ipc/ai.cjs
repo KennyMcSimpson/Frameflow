@@ -1,19 +1,38 @@
 'use strict';
-// AI 提供方：codex（本机 Codex CLI）/ openai（OpenAI 兼容接口）/ local（本地规则，抛 NO_AI 由渲染端回退）。
-// channel：ai:status、ai:test、ai:run（job）、ai:image（job）、ai:imageTest、ai:metrics。见 SPEC §2.2 ai.cjs、CONTRACTS-w4 C9。
-// 进度（C9）：job:progress 的 stage/message 是中文阶段，meta 里带 { phase, phaseKey, elapsedMs, slow }；
-//   Codex 走 --json 真实事件，OpenAI 只有「等待回复 → 校验结果」两段；连续 90 秒没有新事件时提示「响应较慢，可以取消」。
+// AI 提供方：API 优先（OpenAI 兼容 / Anthropic Messages / 本地免密钥 Ollama & LM Studio），
+// 其次本机 Agent CLI（Claude Code / Codex CLI / Gemini CLI），最后 local（本地规则，抛 NO_AI 由渲染端回退）。
+// channel：ai:presets、ai:status、ai:test、ai:run（job）、ai:image（job）、ai:imageTest、ai:metrics。
+// 进度：job:progress 的 stage/message 是中文阶段，meta 里带 { phase, phaseKey, elapsedMs, slow }；
+//   Codex 走 --json 真实事件，API 与其他 CLI 走「等待回复 → 校验结果」；连续 90 秒没有新事件时提示「响应较慢，可以取消」。
 // 出图（ai:image）：即梦 Seedream（火山方舟 Ark，和即梦视频共用一个 API Key）或 OpenAI 兼容接口的图片模型，
 //   由 settings ai.imageProvider（auto / ark / openai）决定；都没配时抛 code = 'NO_IMAGE_AI'，创作模式退回示意画面。
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { detectCodex, runCodex, _internals: codexInternals } = require('../lib/codex.cjs');
+const { _internals: codexInternals } = require('../lib/codex.cjs');
+const {
+  API_PRESETS,
+  getPreset,
+  isLocalKeylessUrl,
+  anthropicMessagesUrl,
+  buildAnthropicHeaders,
+  buildAnthropicRequest,
+  parseAnthropicResponse,
+} = require('../lib/aiPresets.cjs');
+const {
+  AGENT_CLIS,
+  detectAgentCli,
+  detectAllAgentClis,
+  runAgentCli,
+} = require('../lib/agentCli.cjs');
 const { run } = require('../lib/proc.cjs');
 const urlSafety = require('../lib/urlSafety.cjs');
 
 const { parseJsonLoose, normalizeUsage } = codexInternals;
+
+const CLI_KINDS = Object.freeze(['claude', 'codex', 'gemini']);
+const CLI_SET = new Set(CLI_KINDS);
 
 const OPENAI_TIMEOUT_MS = 120 * 1000;
 const IMAGE_TIMEOUT_MS = 180 * 1000;
@@ -25,7 +44,7 @@ const TEST_SCHEMA = {
   properties: { ok: { type: 'boolean' }, echo: { type: 'string' } },
 };
 
-// ───────────────────── 进度阶段（P0-5 L1） ─────────────────────
+// ───────────────────── 进度阶段 ─────────────────────
 /** 阶段键 → 中文（简短，界面直接显示） */
 const PHASE_TEXT = {
   connecting: '连接 AI',
@@ -59,7 +78,7 @@ const SLOW_AFTER_MS = 90 * 1000;
 const SLOW_HINT = '响应较慢，可以取消';
 
 /**
- * 推理强度（Codex model_reasoning_effort，P0-5 L5）。简单任务 low，精修/对话 medium，出整套分镜 high。
+ * 推理强度（Codex model_reasoning_effort）。简单任务 low，精修/对话 medium，出整套分镜 high。
  * 对话（director）用 medium 而不是 high：每轮都要等，快一些更重要；整套分镜只出一次，质量优先。
  */
 const TASK_EFFORT = {
@@ -147,7 +166,7 @@ function createProgress(job, { task = '', now = Date.now, tickMs = 1000 } = {}) 
 }
 
 function noAIError(detail) {
-  // 消息里固定带「未连接 AI」：错误经过 contextBridge 时 code 会丢，渲染端靠这几个字兜底识别（C9）
+  // 消息里固定带「未连接 AI」：错误经过 contextBridge 时 code 会丢，渲染端靠这几个字兜底识别
   const d = String(detail || '').replace(/[。.\s]+$/, '');
   const e = new Error(d ? `未连接 AI（${d}），已使用本地规则` : '未连接 AI，已使用本地规则');
   e.code = 'NO_AI';
@@ -175,7 +194,7 @@ function normalizeBaseUrl(url) {
     return '';
   }
   s = s.replace(/\/+$/, '');
-  s = s.replace(/\/(chat\/completions|images\/generations)$/i, '');
+  s = s.replace(/\/(chat\/completions|images\/generations|messages)$/i, '');
   return s;
 }
 
@@ -189,18 +208,25 @@ const LOCAL_IMAGE_MIME = {
   '.bmp': 'image/bmp',
 };
 
-/** 校验本地图片路径：必须是允许的图片扩展名且为常规文件（软链目标扩展名亦须合法） */
+function hasNtfsAdsColon(p) {
+  const rest = /^[A-Za-z]:/.test(p) ? p.slice(2) : p;
+  return rest.includes(':');
+}
+
+/** 校验本地图片路径：必须是允许的图片扩展名且为常规文件（拒绝 UNC/空字节/ADS，软链目标扩展名亦须合法） */
 function isAllowedLocalImage(file) {
   if (typeof file !== 'string' || !file.trim()) return false;
+  if (/[\0\r\n]/.test(file)) return false;
+  if (urlSafety.isUncPath(file) || hasNtfsAdsColon(file)) return false;
   const ext = path.extname(file).toLowerCase();
   if (!ALLOWED_LOCAL_IMAGE_EXTS.has(ext)) return false;
   try {
     const lst = fs.lstatSync(file);
-    if (lst.isSymbolicLink()) {
-      const real = fs.realpathSync(file);
-      if (!ALLOWED_LOCAL_IMAGE_EXTS.has(path.extname(real).toLowerCase())) return false;
-    }
-    return fs.statSync(file).isFile();
+    const real = fs.realpathSync(file);
+    if (urlSafety.isUncPath(real) || hasNtfsAdsColon(real)) return false;
+    if (lst.isSymbolicLink() && !ALLOWED_LOCAL_IMAGE_EXTS.has(path.extname(real).toLowerCase())) return false;
+    if (!ALLOWED_LOCAL_IMAGE_EXTS.has(path.extname(real).toLowerCase())) return false;
+    return fs.statSync(real).isFile();
   } catch {
     return false;
   }
@@ -265,7 +291,7 @@ function schemaName(task) {
   return s || 'frameflow_result';
 }
 
-// ───────────────────── 本地用时统计（P0-5 验收：各任务 p50/p90 耗时与 cached_input_tokens） ─────────────────────
+// ───────────────────── 本地用时统计（各任务 p50/p90 耗时与 cached_input_tokens） ─────────────────────
 // 每次 AI 任务结束追加一行 JSONL（只记任务类型、耗时、token 数，不记任何提示词或结果内容），超过上限只保留最近的记录。
 const METRICS_FILE = 'ai-metrics.jsonl';
 const METRICS_MAX_BYTES = 512 * 1024;
@@ -621,8 +647,41 @@ function linkSignals(signal, timeoutMs) {
   return { combined, timeout };
 }
 
-async function readResponseCapped(res, maxBytes, signal) {
-  const tooLargeErr = () => { const e = new Error('生成的图片过大，无法保存'); e.tooLarge = true; return e; };
+const MAX_POST_JSON_REDIRECTS = 5;
+const MAX_POST_JSON_BYTES = 16 * 1024 * 1024;
+const POST_JSON_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const SENSITIVE_AUTH_HEADER_RE = /^(authorization|x-api-key|x-goog-api-key|api-key)$/i;
+const SENSITIVE_FORWARD_HEADER_RE = /^(authorization|proxy-authorization|cookie|x-api-key|x-goog-api-key|api-key)$/i;
+
+function hasSensitiveAuthHeader(headers) {
+  return Object.entries(headers || {}).some(
+    ([k, v]) => SENSITIVE_AUTH_HEADER_RE.test(k) && String(v || '').trim() !== '',
+  );
+}
+
+function stripSensitiveHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (!SENSITIVE_FORWARD_HEADER_RE.test(k)) out[k] = v;
+  }
+  return out;
+}
+
+function stripBodyHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (!/^(content-type|content-length)$/i.test(k)) out[k] = v;
+  }
+  return out;
+}
+
+async function readResponseCapped(res, maxBytes, signal, tooLargeMessage = '生成的图片过大，无法保存') {
+  const tooLargeErr = () => {
+    const e = new Error(tooLargeMessage);
+    e.tooLarge = true;
+    e.code = 'RESPONSE_TOO_LARGE';
+    return e;
+  };
   if (res.body && typeof res.body.getReader === 'function') {
     const reader = res.body.getReader();
     const chunks = [];
@@ -658,9 +717,17 @@ async function readResponseCapped(res, maxBytes, signal) {
     }
     return Buffer.concat(chunks, total);
   }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > maxBytes) throw tooLargeErr();
-  return buf;
+  if (typeof res.arrayBuffer === 'function') {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > maxBytes) throw tooLargeErr();
+    return buf;
+  }
+  if (typeof res.text === 'function') {
+    const buf = Buffer.from(String(await res.text()), 'utf8');
+    if (buf.length > maxBytes) throw tooLargeErr();
+    return buf;
+  }
+  return Buffer.alloc(0);
 }
 
 /** 下载生成好的图片。地址是服务商给的临时链接：下载失败只重新下载（最多 3 次），不重新生成，免得再扣一次费 */
@@ -757,22 +824,59 @@ module.exports = function register({ handle, ctx }) {
   function openaiKey() {
     const st = ctx.settings;
     if (!st || typeof st.getSecret !== 'function') return '';
-    try { return st.getSecret('openaiKey') || st.getSecret('openai') || ''; } catch { return ''; }
+    try { return String(st.getSecret('openaiKey') || st.getSecret('openai') || '').trim(); } catch { return ''; }
   }
 
-  function openaiConfig() {
+  function anthropicKey() {
+    const st = ctx.settings;
+    if (!st || typeof st.getSecret !== 'function') return '';
+    try {
+      return String(st.getSecret('anthropicKey') || st.getSecret('openaiKey') || st.getSecret('openai') || '').trim();
+    } catch {
+      return '';
+    }
+  }
+
+  function apiConfig(overrideProtocol) {
     const ai = aiSettings();
-    const key = openaiKey();
-    const baseUrl = normalizeBaseUrl(ai.openaiBaseUrl);
-    const model = String(ai.openaiModel || '').trim();
+    const preset = getPreset(ai.apiPreset);
+    const rawProto = overrideProtocol || ai.apiProtocol || (preset && preset.protocol) || 'openai';
+    const protocol = String(rawProto).trim().toLowerCase() === 'anthropic' ? 'anthropic' : 'openai';
+    const explicitBase = ai.openaiBaseUrl !== undefined && String(ai.openaiBaseUrl).trim() !== ''
+      ? ai.openaiBaseUrl
+      : '';
+    const rawBase = explicitBase
+      || (preset && preset.baseUrl)
+      || (protocol === 'anthropic' ? 'https://api.anthropic.com/v1' : '');
+    const baseUrl = normalizeBaseUrl(rawBase);
+    const keylessLocal = isLocalKeylessUrl(baseUrl);
+    const presetKeyless = !!(preset && preset.requiresKey === false);
+    const suppressAuth = presetKeyless;
+    const rawKey = protocol === 'anthropic' ? anthropicKey() : openaiKey();
+    const key = suppressAuth ? '' : rawKey;
+    const hasAuth = !!key || keylessLocal;
+    const explicitModel = String(ai.openaiModel || '').trim();
+    const model = explicitModel || (preset && preset.model && hasAuth ? String(preset.model).trim() : '');
+    const presetId = preset
+      ? preset.id
+      : (ai.apiPreset === undefined || ai.apiPreset === null
+        ? 'openai'
+        : String(ai.apiPreset).trim());
     return {
-      configured: !!key && !!baseUrl && !!model,
+      configured: !!baseUrl && !!model && hasAuth,
       key,
+      keylessLocal,
+      protocol,
+      preset: presetId,
       baseUrl,
       model,
       visionModel: String(ai.openaiVisionModel || '').trim(),
       imageModel: String(ai.openaiImageModel || '').trim(),
     };
+  }
+
+  function openaiConfig() {
+    return apiConfig('openai');
   }
 
   function tmpRoot() {
@@ -847,57 +951,212 @@ module.exports = function register({ handle, ctx }) {
 
   function wantedProvider(requested) {
     const ai = aiSettings();
-    return requested && requested !== 'auto' ? requested : (ai.provider || 'auto');
+    const raw = requested && requested !== 'auto' ? requested : (ai.provider || 'auto');
+    return String(raw || 'auto').trim().toLowerCase() || 'auto';
   }
 
-  /** 解析当前应使用的提供方 */
-  async function resolveProvider(requested, { force = false } = {}) {
+  function configuredCliAgent(ai) {
+    const c = String((ai && ai.cliAgent) || '').trim().toLowerCase();
+    return CLI_SET.has(c) ? c : 'claude';
+  }
+
+  function cliModelFor(kind, ai) {
+    if (kind === 'claude') return String((ai && ai.claudeModel) || '').trim();
+    if (kind === 'gemini') return String((ai && ai.geminiModel) || '').trim();
+    return String((ai && ai.codexModel) || '').trim();
+  }
+
+  function emptyCli(id) {
+    return { id, ok: false, path: null, version: null, loggedIn: false };
+  }
+
+  async function probeCli(kind, opts = {}) {
+    if (kind === 'codex' && typeof ctx.detectCodex === 'function') {
+      const r = await ctx.detectCodex(ctx.settings, opts);
+      return { id: 'codex', ok: !!(r && r.ok), path: (r && r.path) || null, version: (r && r.version) || null, loggedIn: !!(r && r.loggedIn) };
+    }
+    if (typeof ctx.detectAgentCli === 'function') {
+      const r = await ctx.detectAgentCli(kind, ctx.settings, opts);
+      return { id: kind, ok: !!(r && r.ok), path: (r && r.path) || null, version: (r && r.version) || null, loggedIn: !!(r && r.loggedIn) };
+    }
+    return detectAgentCli(kind, ctx.settings, opts);
+  }
+
+  async function probeAllClis(opts = {}) {
+    if (typeof ctx.detectCodex === 'function' || typeof ctx.detectAgentCli === 'function') {
+      const [claude, codex, gemini] = await Promise.all(CLI_KINDS.map((k) => probeCli(k, opts)));
+      return { claude, codex, gemini };
+    }
+    return detectAllAgentClis(ctx.settings, opts);
+  }
+
+  function cliDetail(kind, info) {
+    const meta = AGENT_CLIS[kind] || { name: kind, bin: kind, installHint: '' };
+    if (!info || !info.ok) {
+      return kind === 'codex'
+        ? '未找到 Codex CLI：请安装 Codex 或在设置中填写 codex.exe 路径'
+        : `未找到 ${meta.name}：请安装（${meta.installHint}）或在设置中填写可执行文件路径`;
+    }
+    if (!info.loggedIn) {
+      return kind === 'codex'
+        ? 'Codex 未登录：请在终端运行 codex login'
+        : `${meta.name} 未登录：请在终端运行 ${meta.bin} 完成登录`;
+    }
+    return kind === 'codex'
+      ? `Codex 已就绪（${info.version || '已安装'}，ChatGPT 登录）`
+      : `${meta.name} 已就绪（${info.version || '已安装'}）`;
+  }
+
+  function apiDetail(api, provider) {
+    const label = provider === 'anthropic' ? 'Anthropic 接口' : (api.keylessLocal ? '本地模型接口' : 'OpenAI 兼容接口');
+    if (api.configured) return `${label}已配置（${api.model}）`;
+    if (!api.key && !api.keylessLocal) return `未填写 API Key：请在设置中填写${label}的密钥`;
+    if (!api.baseUrl) return '接口地址格式无效：请填写 http:// 或 https:// 开头的地址';
+    return '未填写模型名称：请在设置中填写模型';
+  }
+
+  /** 解析当前应使用的提供方（API 优先；未配置 API 时按偏好探测本地 CLI，最后回退本地规则） */
+  async function resolveProvider(requested, { force = false, includeAllClis = false } = {}) {
     const ai = aiSettings();
     const want = wantedProvider(requested);
-    const codex = await detectCodex(ctx.settings, { force });
-    const openai = openaiConfig();
-    const codexReady = !!(codex.ok && codex.loggedIn);
-    const codexModel = String(ai.codexModel || '').trim();
-    const out = { want, codex, openai, codexReady, codexModel };
+    const codexModel = cliModelFor('codex', ai);
+    let clis = { claude: emptyCli('claude'), codex: emptyCli('codex'), gemini: emptyCli('gemini') };
+
+    const wrap = (fields) => ({
+      want,
+      clis,
+      codex: clis.codex,
+      codexReady: !!(clis.codex && clis.codex.ok && clis.codex.loggedIn),
+      codexModel,
+      ...fields,
+    });
 
     if (want === 'local' || want === 'none') {
-      return { ...out, provider: 'local', ready: false, model: '', detail: '本地规则模式：不连接 AI，使用内置规则处理指令与分镜' };
+      const api = apiConfig();
+      if (includeAllClis) clis = await probeAllClis({ force });
+      return wrap({
+        api,
+        openai: api,
+        provider: 'local',
+        ready: false,
+        model: '',
+        detail: '本地规则模式：不连接 AI，使用内置规则处理指令与分镜',
+      });
     }
-    if (want === 'codex') {
-      let detail;
-      if (!codex.ok) detail = '未找到 Codex CLI：请安装 Codex 或在设置中填写 codex.exe 路径';
-      else if (!codex.loggedIn) detail = 'Codex 未登录：请在终端运行 codex login';
-      else detail = `Codex 已就绪（${codex.version || '已安装'}，ChatGPT 登录）`;
-      return { ...out, provider: 'codex', ready: codexReady, model: codexModel || 'Codex 默认模型', detail };
+
+    if (want === 'api' || want === 'openai' || want === 'anthropic') {
+      const overrideProto = want === 'anthropic' ? 'anthropic' : want === 'openai' ? 'openai' : null;
+      const api = apiConfig(overrideProto);
+      const provider = api.protocol === 'anthropic' ? 'anthropic' : 'openai';
+      if (includeAllClis) clis = await probeAllClis({ force });
+      return wrap({
+        api,
+        openai: api,
+        provider,
+        ready: api.configured,
+        model: api.model,
+        detail: apiDetail(api, provider),
+      });
     }
-    if (want === 'openai') {
-      const detail = openai.configured
-        ? `OpenAI 兼容接口已配置（${openai.model}）`
-        : !openai.key ? '未填写 API Key：请在设置中填写 OpenAI 兼容接口的密钥'
-          : !openai.baseUrl ? '接口地址格式无效：请填写 http:// 或 https:// 开头的地址'
-            : '未填写模型名称：请在设置中填写模型';
-      return { ...out, provider: 'openai', ready: openai.configured, model: openai.model, detail };
+
+    if (want === 'cli' || CLI_SET.has(want)) {
+      const target = want === 'cli' ? configuredCliAgent(ai) : want;
+      const api = apiConfig();
+      if (includeAllClis) {
+        clis = await probeAllClis({ force });
+      } else {
+        clis[target] = await probeCli(target, { force });
+      }
+      const info = clis[target];
+      const ready = !!(info && info.ok && info.loggedIn);
+      const customModel = cliModelFor(target, ai);
+      const defaultLabel = target === 'codex' ? 'Codex 默认模型' : `${AGENT_CLIS[target].name} 默认模型`;
+      return wrap({
+        api,
+        openai: api,
+        provider: target,
+        ready,
+        model: customModel || defaultLabel,
+        detail: cliDetail(target, info),
+      });
     }
-    // auto
-    if (codexReady) {
-      return { ...out, provider: 'codex', ready: true, model: codexModel || 'Codex 默认模型', detail: `Codex 已就绪（${codex.version || '已安装'}，ChatGPT 登录）` };
+
+    // auto：1) API 优先（含 Anthropic 与本地免密钥 Ollama / LM Studio）
+    const api = apiConfig();
+    if (api.configured) {
+      const provider = api.protocol === 'anthropic' ? 'anthropic' : 'openai';
+      if (includeAllClis) clis = await probeAllClis({ force });
+      return wrap({
+        api,
+        openai: api,
+        provider,
+        ready: true,
+        model: api.model,
+        detail: apiDetail(api, provider),
+      });
     }
-    if (openai.configured) {
-      const why = codex.ok ? '（Codex 未登录，已改用 API）' : '';
-      return { ...out, provider: 'openai', ready: true, model: openai.model, detail: `使用 OpenAI 兼容接口（${openai.model}）${why}` };
+
+    // auto：2) 未配置 API 时探测本地 CLI
+    const order = [];
+    const pushKind = (k) => { if (CLI_SET.has(k) && !order.includes(k)) order.push(k); };
+    if (typeof ctx.detectCodex === 'function') pushKind('codex');
+    const explicitAgent = String(ai.cliAgent || '').trim().toLowerCase();
+    if (explicitAgent && CLI_SET.has(explicitAgent)) pushKind(explicitAgent);
+    else if (ai.codexPath) pushKind('codex');
+    for (const k of CLI_KINDS) pushKind(k);
+
+    let chosen = null;
+    if (includeAllClis) {
+      clis = await probeAllClis({ force });
+      for (const k of order) {
+        if (clis[k] && clis[k].ok && clis[k].loggedIn) { chosen = k; break; }
+      }
+    } else {
+      for (const k of order) {
+        clis[k] = await probeCli(k, { force });
+        if (clis[k] && clis[k].ok && clis[k].loggedIn) { chosen = k; break; }
+      }
     }
-    let detail = '未连接 AI，使用本地规则';
-    if (codex.ok && !codex.loggedIn) detail = '已找到 Codex 但未登录：在终端运行 codex login 后即可使用 AI';
-    else if (!codex.ok) detail = '未找到 Codex，也未配置 API：当前使用本地规则';
-    return { ...out, provider: 'local', ready: false, model: '', detail };
+
+    if (chosen) {
+      const info = clis[chosen];
+      const customModel = cliModelFor(chosen, ai);
+      const defaultLabel = chosen === 'codex' ? 'Codex 默认模型' : `${AGENT_CLIS[chosen].name} 默认模型`;
+      return wrap({
+        api,
+        openai: api,
+        provider: chosen,
+        ready: true,
+        model: customModel || defaultLabel,
+        detail: cliDetail(chosen, info),
+      });
+    }
+
+    // auto：3) 均不可用时回退本地规则
+    const unlogged = order.find((k) => clis[k] && clis[k].ok && !clis[k].loggedIn);
+    let detail = '未配置 API，也未找到可用的本地 CLI：当前使用本地规则';
+    if (unlogged === 'codex') {
+      detail = '已找到 Codex 但未登录：在终端运行 codex login 后即可使用 AI';
+    } else if (unlogged) {
+      const meta = AGENT_CLIS[unlogged];
+      detail = `已找到 ${meta.name} 但未登录：在终端运行 ${meta.bin} 登录后即可使用 AI`;
+    }
+    return wrap({
+      api,
+      openai: api,
+      provider: 'local',
+      ready: false,
+      model: '',
+      detail,
+    });
   }
 
-  // ───────────────────── OpenAI 兼容接口 ─────────────────────
+  // ───────────────────── OpenAI 兼容与 Anthropic 接口 ─────────────────────
   function httpError(status, bodyText) {
     let detail = '';
     try {
       const j = JSON.parse(bodyText);
-      detail = (j && j.error && (j.error.message || j.error.code)) || j.message || '';
+      detail = (j && j.error && (j.error.message || j.error.code || j.error.type)) || j.message || '';
     } catch {
       detail = String(bodyText || '').slice(0, 200);
     }
@@ -919,32 +1178,149 @@ module.exports = function register({ handle, ctx }) {
   /**
    * POST JSON。makeHttpError 可换成别家的错误翻译（即梦出图用 arkImageError）；service 是报错里对服务的称呼。
    * 连不上 / 超时抛的错带 code：NETWORK / TIMEOUT，方便上层决定要不要重试。
+   * 手动处理最多 5 跳重定向：带鉴权头的请求禁止跨域重定向（防凭据泄露）；非鉴权跨域重定向剥离敏感头并经 urlSafety.assertSafePublicUrlAsync 防 SSRF；响应体硬上限 16 MB。
    */
-  async function postJson(url, key, body, { signal, timeoutMs, makeHttpError = httpError, service = '' }) {
+  async function postJson(url, key, body, { signal, timeoutMs, makeHttpError = httpError, service = '', headers: customHeaders = null }) {
     const { combined, timeout } = linkSignals(signal, timeoutMs);
     const name = service || '模型服务';
-    let res;
+    let curParsed;
     try {
-      res = await fetchFn(url, {
-        method: 'POST',
-        signal: combined,
-        headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
-        body: JSON.stringify(body),
-      });
+      curParsed = new URL(String(url || ''));
+    } catch {
+      const e = new Error(`${name}接口地址无效`);
+      e.code = 'BAD_URL';
+      throw e;
+    }
+    if (curParsed.protocol !== 'http:' && curParsed.protocol !== 'https:') {
+      const e = new Error(`${name}仅支持 http 或 https 协议`);
+      e.code = 'UNSAFE_URL';
+      throw e;
+    }
+    const initialOrigin = curParsed.origin;
+    let curUrl = curParsed.toString();
+    let curMethod = 'POST';
+    let curBody = JSON.stringify(body);
+    let curHeaders = customHeaders
+      ? { 'Content-Type': 'application/json', ...customHeaders }
+      : { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
+    const carriedAuth = hasSensitiveAuthHeader(curHeaders);
+    const customLookup = typeof ctx.lookup === 'function' ? ctx.lookup : undefined;
+
+    let res;
+    for (let hop = 0; ; hop++) {
+      if (signal && signal.aborted) throw cancelledError();
+      try {
+        res = await fetchFn(curUrl, {
+          method: curMethod,
+          signal: combined,
+          headers: curHeaders,
+          ...(curBody !== undefined ? { body: curBody } : {}),
+          redirect: 'manual',
+        });
+      } catch (err) {
+        if (signal && signal.aborted) throw cancelledError();
+        if (timeout.aborted) {
+          const e = new Error(`${service || '模型接口'}响应超时（超过 ${Math.round(timeoutMs / 1000)} 秒），请稍后重试`);
+          e.code = 'TIMEOUT';
+          throw e;
+        }
+        const e = new Error(`无法连接${name}：请检查${service ? '' : '接口地址与'}网络（${(err && err.cause && err.cause.code) || (err && err.message) || '网络错误'}）`);
+        e.code = 'NETWORK';
+        throw e;
+      }
+
+      if (res && res.url) {
+        let resParsed;
+        try { resParsed = new URL(String(res.url)); } catch { resParsed = null; }
+        if (!resParsed || (resParsed.protocol !== 'http:' && resParsed.protocol !== 'https:')) {
+          try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+          const e = new Error(`${name}返回了不安全的重定向地址`);
+          e.code = 'UNSAFE_URL';
+          throw e;
+        }
+        if (resParsed.origin !== initialOrigin) {
+          try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+          if (carriedAuth) {
+            const e = new Error('API 请求发生跨域重定向，已拒绝以防凭据泄露');
+            e.code = 'UNSAFE_REDIRECT';
+            throw e;
+          }
+          await urlSafety.assertSafePublicUrlAsync(resParsed.toString(), customLookup ? { lookup: customLookup } : undefined);
+        }
+      }
+
+      const status = Number(res && res.status) || 0;
+      let loc = '';
+      try { loc = res && res.headers && typeof res.headers.get === 'function' ? (res.headers.get('location') || '') : ''; } catch {}
+      if (POST_JSON_REDIRECT_STATUSES.has(status) && loc) {
+        try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+        if (hop >= MAX_POST_JSON_REDIRECTS) {
+          const e = new Error(`${name}重定向次数过多（超过 ${MAX_POST_JSON_REDIRECTS} 次）`);
+          e.code = 'REDIRECT';
+          throw e;
+        }
+        let nextParsed;
+        try {
+          nextParsed = new URL(loc, curUrl);
+        } catch {
+          const e = new Error(`${name}重定向地址无效`);
+          e.code = 'BAD_URL';
+          throw e;
+        }
+        if (nextParsed.protocol !== 'http:' && nextParsed.protocol !== 'https:') {
+          const e = new Error(`${name}重定向协议不受支持`);
+          e.code = 'UNSAFE_URL';
+          throw e;
+        }
+        if (nextParsed.username || nextParsed.password) {
+          const e = new Error(`${name}重定向地址不允许包含凭据`);
+          e.code = 'UNSAFE_URL';
+          throw e;
+        }
+        const nextUrl = nextParsed.toString();
+        if (nextParsed.origin !== initialOrigin) {
+          curHeaders = stripSensitiveHeaders(curHeaders);
+          if (carriedAuth) {
+            const e = new Error('API 请求发生跨域重定向，已拒绝以防凭据泄露');
+            e.code = 'UNSAFE_REDIRECT';
+            throw e;
+          }
+          await urlSafety.assertSafePublicUrlAsync(nextUrl, customLookup ? { lookup: customLookup } : undefined);
+        }
+        if ((status === 303 && curMethod !== 'HEAD') || ((status === 301 || status === 302) && curMethod === 'POST')) {
+          curMethod = 'GET';
+          curBody = undefined;
+          curHeaders = stripBodyHeaders(curHeaders);
+        }
+        curParsed = nextParsed;
+        curUrl = nextUrl;
+        continue;
+      }
+      break;
+    }
+
+    let contentLen = 0;
+    try { contentLen = Number(res && res.headers && typeof res.headers.get === 'function' && res.headers.get('content-length')) || 0; } catch {}
+    if (contentLen > MAX_POST_JSON_BYTES) {
+      try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch {}
+      const e = new Error(`${name}响应体过大（超过 16 MB），已拒绝读取`);
+      e.code = 'RESPONSE_TOO_LARGE';
+      e.tooLarge = true;
+      throw e;
+    }
+
+    let text = '';
+    try {
+      const buf = await readResponseCapped(res, MAX_POST_JSON_BYTES, combined, `${name}响应体过大（超过 16 MB），已拒绝读取`);
+      text = buf.toString('utf8');
     } catch (err) {
       if (signal && signal.aborted) throw cancelledError();
+      if (err && err.tooLarge) throw err;
       if (timeout.aborted) {
         const e = new Error(`${service || '模型接口'}响应超时（超过 ${Math.round(timeoutMs / 1000)} 秒），请稍后重试`);
         e.code = 'TIMEOUT';
         throw e;
       }
-      const e = new Error(`无法连接${name}：请检查${service ? '' : '接口地址与'}网络（${(err && err.cause && err.cause.code) || (err && err.message) || '网络错误'}）`);
-      e.code = 'NETWORK';
-      throw e;
-    }
-    let text = '';
-    try { text = await res.text(); } catch (err) {
-      if (signal && signal.aborted) throw cancelledError();
       throw new Error(`读取${name}响应失败，请重试`);
     }
     if (!res.ok) throw makeHttpError(res.status, text, res.headers);
@@ -982,7 +1358,7 @@ module.exports = function register({ handle, ctx }) {
   }
 
   async function runOpenAI({ task, system, prompt, images, schema, timeoutMs, signal, onPhase }) {
-    const cfg = openaiConfig();
+    const cfg = apiConfig('openai');
     if (!cfg.configured) throw new Error('OpenAI 兼容接口未配置：请在设置中填写 API Key 与模型');
     const phase = (k) => { if (onPhase) { try { onPhase(k); } catch {} } };
     const imgs = (images || []).filter(isAllowedLocalImage);
@@ -1001,16 +1377,18 @@ module.exports = function register({ handle, ctx }) {
     const url = `${cfg.baseUrl}/chat/completions`;
     const sys = String(system || '');
     const makeBody = (mode) => {
-      const sysText = mode === 'json_object'
+      const sysText = mode !== 'json_schema'
         ? `${sys}\n\n请只输出一个 JSON 对象，不要输出其他文字。JSON 必须严格符合以下 JSON Schema：\n${JSON.stringify(schema)}`
         : sys;
       const messages = [];
       if (sysText.trim()) messages.push({ role: 'system', content: sysText });
       messages.push({ role: 'user', content: userContent });
       const body = { model, messages };
-      body.response_format = mode === 'json_object'
-        ? { type: 'json_object' }
-        : { type: 'json_schema', json_schema: { name: schemaName(task), strict: true, schema } };
+      if (mode === 'json_schema') {
+        body.response_format = { type: 'json_schema', json_schema: { name: schemaName(task), strict: true, schema } };
+      } else if (mode === 'json_object') {
+        body.response_format = { type: 'json_object' };
+      }
       return body;
     };
     const started = Date.now();
@@ -1022,7 +1400,16 @@ module.exports = function register({ handle, ctx }) {
       if (err && err.status === 400) {
         phase('retrying');
         const remaining = Math.max(15000, limit - (Date.now() - started));
-        result = await postJson(url, cfg.key, makeBody('json_object'), { signal, timeoutMs: remaining });
+        try {
+          result = await postJson(url, cfg.key, makeBody('json_object'), { signal, timeoutMs: remaining });
+        } catch (err2) {
+          if (cfg.keylessLocal && err2 && err2.status === 400) {
+            const rem2 = Math.max(15000, limit - (Date.now() - started));
+            result = await postJson(url, cfg.key, makeBody('plain'), { signal, timeoutMs: rem2 });
+          } else {
+            throw err2;
+          }
+        }
       } else {
         throw err;
       }
@@ -1043,6 +1430,40 @@ module.exports = function register({ handle, ctx }) {
     return { data, model, usage: normalizeUsage(result && result.usage) };
   }
 
+  async function runAnthropic({ system, prompt, images, schema, timeoutMs, signal, onPhase }) {
+    const cfg = apiConfig('anthropic');
+    if (!cfg.configured) throw new Error('Anthropic 接口未配置：请在设置中填写 API Key 与模型');
+    const phase = (k) => { if (onPhase) { try { onPhase(k); } catch {} } };
+    const imgs = (images || []).filter(isAllowedLocalImage);
+    const model = imgs.length && cfg.visionModel ? cfg.visionModel : cfg.model;
+    const limit = Number(timeoutMs) > 0 ? Math.min(Number(timeoutMs), 600000) : OPENAI_TIMEOUT_MS;
+    const imageDataUrls = [];
+    if (imgs.length) {
+      phase('reading');
+      for (const p of imgs) {
+        if (signal && signal.aborted) throw cancelledError();
+        imageDataUrls.push(await imageToDataUrl(p, signal));
+      }
+    }
+    const url = anthropicMessagesUrl(cfg.baseUrl);
+    const body = buildAnthropicRequest({ model, system, prompt, schema, images: imageDataUrls });
+    const headers = buildAnthropicHeaders(cfg.key);
+    phase('waiting');
+    const result = await postJson(url, '', body, {
+      signal,
+      timeoutMs: limit,
+      headers,
+      service: 'Anthropic',
+    });
+    phase('checking');
+    const parsed = parseAnthropicResponse(result);
+    const u = parsed.usage;
+    const usage = u && (u.input || u.output || u.cached)
+      ? { inputTokens: u.input, cachedInputTokens: u.cached, outputTokens: u.output, reasoningTokens: 0 }
+      : null;
+    return { data: parsed.data, model: parsed.model || model, usage };
+  }
+
   async function runCodexCall({ system, prompt, images, schema, timeoutMs, signal, effort, onEvent }, state) {
     if (!state.codex.ok || !state.codex.path) throw new Error('未找到 Codex CLI：请安装 Codex，或在设置中填写 codex.exe 的路径');
     if (!state.codex.loggedIn) {
@@ -1050,11 +1471,9 @@ module.exports = function register({ handle, ctx }) {
       e.code = 'CODEX_LOGIN';
       throw e;
     }
-    let usage = null;
-    let attempts = 1;
     const safeImages = Array.isArray(images) ? images.filter(isAllowedLocalImage) : [];
-    const data = await runCodex({
-      codexPath: state.codex.path,
+    return runAgentCli('codex', {
+      cliPath: state.codex.path,
       model: state.codexModel || undefined,
       system,
       prompt,
@@ -1064,29 +1483,74 @@ module.exports = function register({ handle, ctx }) {
       signal,
       tmpRoot: tmpRoot(),
       effort: effort || null,
-      onEvent: (ev) => {
-        if (ev && ev.type === 'ff.done') { usage = ev.usage || null; attempts = ev.attempts || 1; }
-        if (onEvent) onEvent(ev);
-      },
+      onEvent,
     });
-    return { data, model: state.codexModel || 'codex', usage, attempts };
+  }
+
+  async function runCliCall(kind, { system, prompt, images, schema, timeoutMs, signal, effort, onPhase, onEvent }, state) {
+    if (kind === 'codex') {
+      return runCodexCall({ system, prompt, images, schema, timeoutMs, signal, effort, onEvent }, state);
+    }
+    const meta = AGENT_CLIS[kind];
+    const info = state && state.clis ? state.clis[kind] : null;
+    if (!info || !info.ok || !info.path) {
+      throw new Error(`未找到 ${meta.name}：请安装（${meta.installHint}），或在设置中填写可执行文件路径`);
+    }
+    const ai = aiSettings();
+    const model = cliModelFor(kind, ai) || undefined;
+    const safeImages = Array.isArray(images) ? images.filter(isAllowedLocalImage) : [];
+    return runAgentCli(kind, {
+      cliPath: info.path,
+      model,
+      system,
+      prompt,
+      schema,
+      images: safeImages,
+      timeoutMs,
+      signal,
+      tmpRoot: tmpRoot(),
+      onPhase,
+      onEvent,
+    });
   }
 
   // ───────────────────── channels ─────────────────────
+  handle('ai:presets', async () => ({
+    api: API_PRESETS,
+    cli: Object.values(AGENT_CLIS),
+  }));
+
   handle('ai:status', async (payload) => {
-    const st = await resolveProvider(null, { force: !!(payload && payload.refresh) });
+    const refresh = !!(payload && payload.refresh);
+    const probeClis = !!(payload && payload.probeClis);
+    const st = await resolveProvider(null, { force: refresh, includeAllClis: probeClis });
     return {
       provider: st.provider,
       ready: st.ready,
       model: st.model,
       detail: st.detail,
+      protocol: st.api.protocol,
+      preset: st.api.preset,
+      api: {
+        configured: st.api.configured,
+        protocol: st.api.protocol,
+        preset: st.api.preset,
+        keylessLocal: st.api.keylessLocal,
+        baseUrl: st.api.baseUrl,
+        model: st.api.model,
+        visionModel: st.api.visionModel,
+        imageModel: st.api.imageModel,
+      },
+      clis: st.clis,
       codex: { ok: !!st.codex.ok, loggedIn: !!st.codex.loggedIn, path: st.codex.path || null, version: st.codex.version || null },
       openai: {
-        configured: st.openai.configured,
-        baseUrl: st.openai.baseUrl,
-        model: st.openai.model,
-        visionModel: st.openai.visionModel,
-        imageModel: st.openai.imageModel,
+        configured: st.api.configured,
+        protocol: st.api.protocol,
+        preset: st.api.preset,
+        baseUrl: st.api.baseUrl,
+        model: st.api.model,
+        visionModel: st.api.visionModel,
+        imageModel: st.api.imageModel,
       },
       // 出图现在走哪一家：{ want, provider:'ark'|'openai'|'none', ready, model, detail, hasArk, hasOpenai }
       image: imageStatus(),
@@ -1104,14 +1568,23 @@ module.exports = function register({ handle, ctx }) {
       schema: TEST_SCHEMA,
     };
     if (st.provider === 'local') {
-      return { ok: false, ms: 0, detail: '当前为本地规则模式，未连接 AI（可在上方选择 Codex 或 OpenAI 兼容接口）' };
+      return { ok: false, ms: 0, detail: '当前为本地规则模式，未连接 AI（可在上方选择 API 接口或本地 CLI）' };
     }
     try {
-      if (st.provider === 'codex') {
-        const { data } = await runCodexCall({ ...req, timeoutMs: 120000 }, st);
+      if (CLI_SET.has(st.provider)) {
+        const { data, model } = await runCliCall(st.provider, { ...req, timeoutMs: 120000 }, st);
         const ms = Date.now() - t0;
-        if (!data || data.ok !== true) return { ok: false, ms, detail: 'Codex 有响应，但返回内容不符合预期' };
-        return { ok: true, ms, detail: `Codex 连接正常（${st.codex.version || ''}，耗时 ${(ms / 1000).toFixed(1)} 秒）` };
+        const label = st.provider === 'codex' ? 'Codex' : AGENT_CLIS[st.provider].name;
+        if (!data || data.ok !== true) return { ok: false, ms, detail: `${label} 有响应，但返回内容不符合预期` };
+        const info = st.clis[st.provider] || {};
+        const tag = info.version || model || '';
+        return { ok: true, ms, detail: `${label} 连接正常（${tag}，耗时 ${(ms / 1000).toFixed(1)} 秒）` };
+      }
+      if (st.provider === 'anthropic') {
+        const { data, model } = await runAnthropic({ ...req, timeoutMs: 60000 });
+        const ms = Date.now() - t0;
+        if (!data || data.ok !== true) return { ok: false, ms, detail: 'Anthropic 接口有响应，但返回内容不符合预期' };
+        return { ok: true, ms, detail: `Anthropic 接口连接正常（${model}，耗时 ${(ms / 1000).toFixed(1)} 秒）` };
       }
       const { data, model } = await runOpenAI({ ...req, timeoutMs: 60000 });
       const ms = Date.now() - t0;
@@ -1128,15 +1601,18 @@ module.exports = function register({ handle, ctx }) {
     if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('AI 调用缺少提示词');
     const imgList = Array.isArray(images) ? images.filter((p) => typeof p === 'string' && p) : [];
 
-    // C9：本地规则 / 不用 AI 时立即失败（code = NO_AI），不检测 Codex、不建任务，渲染端马上走本地规则
+    // 本地规则 / 不用 AI 时立即失败（code = NO_AI），不检测本地 CLI、不建任务，渲染端马上走本地规则
     const want = wantedProvider(provider);
     if (want === 'local' || want === 'none') throw noAIError();
     const st = await resolveProvider(provider);
     if (st.provider === 'local') throw noAIError();
     if (!st.ready) {
-      // 指定的提供方不可用：codex 不可用时若 API 可用则改用 API，否则回退本地规则
-      if (st.provider === 'codex' && st.openai.configured) st.provider = 'openai';
-      else throw noAIError(st.detail);
+      // 指定的本地 CLI 不可用时，若 API 已配置则改用 API，否则回退本地规则
+      if (CLI_SET.has(st.provider) && st.api.configured) {
+        st.provider = st.api.protocol === 'anthropic' ? 'anthropic' : 'openai';
+      } else {
+        throw noAIError(st.detail);
+      }
     }
 
     const taskName = String(task || '');
@@ -1149,17 +1625,27 @@ module.exports = function register({ handle, ctx }) {
       let used = st.provider;
       try {
         let out;
-        if (st.provider === 'codex') {
+        if (CLI_SET.has(st.provider)) {
           try {
-            out = await runCodexCall({ ...req, effort: eff, onEvent: (ev) => prog.event(ev && ev.phase) }, st);
+            out = await runCliCall(st.provider, {
+              ...req,
+              effort: st.provider === 'codex' ? eff : null,
+              onPhase,
+              onEvent: (ev) => prog.event(ev && ev.phase),
+            }, st);
           } catch (err) {
             if (job.cancelled || isCancel(err)) throw cancelledError();
-            if (!st.openai.configured) throw err;
-            console.warn(`[ai ${taskName}] Codex 失败，回退 OpenAI：`, err && err.message);
-            used = 'openai';
+            if (!st.api.configured) throw err;
+            const fallbackProvider = st.api.protocol === 'anthropic' ? 'anthropic' : 'openai';
+            console.warn(`[ai ${taskName}] ${st.provider} 失败，回退 ${fallbackProvider}：`, err && err.message);
+            used = fallbackProvider;
             prog.event('fallback');
-            out = await runOpenAI({ ...req, onPhase });
+            out = fallbackProvider === 'anthropic'
+              ? await runAnthropic({ ...req, onPhase })
+              : await runOpenAI({ ...req, onPhase });
           }
+        } else if (st.provider === 'anthropic') {
+          out = await runAnthropic({ ...req, onPhase });
         } else {
           out = await runOpenAI({ ...req, onPhase });
         }
@@ -1307,7 +1793,7 @@ module.exports = function register({ handle, ctx }) {
   /**
    * 生成一张图片（后台任务）。
    * payload：{ prompt, projectId?, aspect?:'16:9'|'9:16'|'1:1'|'4:3'|'3:4'|…, size?:旧的 OpenAI 尺寸, provider?:'auto'|'ark'|'openai' }
-   * 结果：{ path, provider:'ark'|'openai', model, width, height, size, aspect }（provider / model 供调用方写 asset.ai，契约 C10）
+   * 结果：{ path, provider:'ark'|'openai', model, width, height, size, aspect }（provider / model 供调用方写 asset.ai）
    */
   handle('ai:image', async (payload) => {
     const { prompt, projectId, aspect, size, provider } = payload || {};

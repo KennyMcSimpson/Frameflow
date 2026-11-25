@@ -1,11 +1,11 @@
-// 快捷键面板：完全由注册表生成，可以改按键、去掉按键、恢复默认（自定义按键见契约 C11）。
-// 精修模式按 ? 打开 ShortcutsDialog；「帮助 → 快捷键」嵌入同一个 ShortcutsPanel，两处始终一致。
-// 录新按键时在 window 捕获阶段拦下所有按键，对话框、精修和全局快捷键都收不到，录完再交还。
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+// Keyboard Shortcuts Dialog & Panel: registry-driven customization, conflict detection, and reset.
+// Shared between the ? shortcut modal and Help -> Shortcuts tab.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DICTS, useLocale, useT } from '../i18n.js';
 import { Button, Icon, Modal } from '../components/ui.jsx';
 import {
   MAX_KEYS_PER_ACTION, assignCombo, checkAssign, comboFromEvent, comboParts, effectiveShortcuts, filterGroups,
-  findConflicts, firesInInput, formatCombo, getShortcutOverrides, groupedShortcuts, heldModifiers, keysOf,
+  findConflicts, firesInInput, getShortcutOverrides, groupedShortcuts, heldModifiers, keysOf,
   removeCombo, resetShortcut, shortcutById,
 } from '../shortcuts/registry.js';
 import { resetAllShortcuts, saveShortcutOverrides, useShortcutsVersion } from '../shortcuts/customKeys.js';
@@ -13,44 +13,103 @@ import '../shortcuts/shortcuts.css';
 
 const NOTE_ICON = { ok: 'checkCircle', info: 'info', warn: 'alertTriangle', error: 'alert' };
 
-function Keycaps({ combo }) {
-  return comboParts(combo).map((p, i) => <kbd key={i}>{p}</kbd>);
+const GROUP_KEYS = {
+  '播放': 'shortcuts.group.playback',
+  '剪辑': 'shortcuts.group.editing',
+  '选择与剪贴板': 'shortcuts.group.selection',
+  '时间线视图': 'shortcuts.group.timeline',
+  '通用': 'shortcuts.group.general',
+};
+
+const EN_KEY_PART = {
+  '空格': 'Space',
+  '退格': 'Backspace',
+  '回车': 'Enter',
+  '菜单键': 'Menu',
+  '播放/暂停键': 'Media Play/Pause',
+  '下一曲键': 'Media Next',
+  '上一曲键': 'Media Prev',
+  '停止键': 'Media Stop',
+};
+
+function locKeyPart(part, locale) {
+  if (locale === 'zh-CN') return part;
+  if (EN_KEY_PART[part]) return EN_KEY_PART[part];
+  return String(part || '').replace(/^小键盘\s*/, 'Num ');
 }
 
-function labelOf(id) {
+function locComboParts(combo, locale) {
+  return comboParts(combo).map((p) => locKeyPart(p, locale));
+}
+
+function locFormatCombo(combo, locale) {
+  return locComboParts(combo, locale).join('+');
+}
+
+function Keycaps({ combo, locale }) {
+  return locComboParts(combo, locale).map((p, i) => <kbd key={i}>{p}</kbd>);
+}
+
+function locLabelOf(id, tr) {
+  const k = `shortcuts.action.${id}`;
+  if (Object.prototype.hasOwnProperty.call(DICTS['zh-CN'], k)) return tr(k);
   const s = shortcutById(id);
   return s ? s.label : id;
 }
 
-/** 默认按键的文字，例如「Ctrl+B 或 S」；没有默认按键时为「无」 */
-function defaultText(id) {
-  const ks = keysOf(id, {});
-  return ks.length ? ks.map(formatCombo).join(' 或 ') : '无';
+function locGroupName(group, tr) {
+  const k = GROUP_KEYS[group];
+  return k ? tr(k) : group;
 }
 
-/** 「被改走」的按键说明：；「添加文字」不再使用 T */
-function takenText(taken) {
+function defaultText(id, locale, tr) {
+  const ks = keysOf(id, {});
+  const joiner = ` ${tr('shortcuts.or')} `;
+  return ks.length ? ks.map((c) => locFormatCombo(c, locale)).join(joiner) : tr('app.none');
+}
+
+function takenText(taken, locale, tr) {
   if (!taken || !taken.length) return '';
   const byId = new Map();
-  for (const t of taken) {
-    if (!byId.has(t.id)) byId.set(t.id, { label: t.label, combos: [] });
-    byId.get(t.id).combos.push(formatCombo(t.combo));
+  for (const item of taken) {
+    if (!byId.has(item.id)) byId.set(item.id, { id: item.id, combos: [] });
+    byId.get(item.id).combos.push(locFormatCombo(item.combo, locale));
   }
-  return '；' + Array.from(byId.values()).map((x) => `「${x.label}」不再使用 ${x.combos.join('、')}`).join('；');
+  const sep = locale === 'zh-CN' ? '、' : ', ';
+  const semi = tr('shortcuts.note.takenPrefix');
+  return semi + Array.from(byId.values()).map((x) => tr('shortcuts.note.takenItem', {
+    label: locLabelOf(x.id, tr),
+    combos: x.combos.join(sep),
+  })).join(semi);
 }
 
-/** 光标在输入框里也生效的按键，例如「Ctrl+S 保存、F1 打开帮助」 */
-function inInputHint(list) {
+function inInputHint(list, locale, tr) {
   const out = [];
   for (const s of list) {
     if (!s.allowInInput) continue;
     const k = (s.keys || []).find((c) => firesInInput(s, c));
-    if (k) out.push(`${formatCombo(k)} ${s.label}`);
+    if (k) out.push(`${locFormatCombo(k, locale)} ${locLabelOf(s.id, tr)}`);
   }
-  return out.join('、');
+  return out.join(locale === 'zh-CN' ? '、' : ', ');
 }
 
-/** 录完按键后把这个键松开的事件也吞掉，免得落到刚拿回焦点的按钮上 */
+function locAssignError(chk, id, locale, tr) {
+  const combo = locFormatCombo(chk.combo, locale);
+  switch (chk.reason) {
+    case 'unknown': return tr('shortcuts.err.unknown');
+    case 'fixed': return tr('shortcuts.err.fixed', { label: locLabelOf(id, tr) });
+    case 'invalid': return tr('shortcuts.err.invalid');
+    case 'reserved': return tr('shortcuts.err.reserved', { combo });
+    case 'full': return tr('shortcuts.err.full', { max: MAX_KEYS_PER_ACTION });
+    case 'taken-fixed': {
+      const owner = effectiveShortcuts().find((s) => s.fixed && (s.keys || []).includes(chk.combo));
+      return tr('shortcuts.err.takenFixed', { combo, label: owner ? locLabelOf(owner.id, tr) : '' });
+    }
+    default: return chk.message || tr('shortcuts.err.invalid');
+  }
+}
+
+/** Swallow the matching keyup after recording so it does not trigger the refocused button. */
 function swallowKeyUp(code) {
   if (typeof window === 'undefined' || !code) return;
   let timer = 0;
@@ -71,20 +130,34 @@ function focusQuiet(el) {
   return true;
 }
 
-/** 快捷键列表 + 改按键。可单独嵌入任何容器（帮助中心的「快捷键」页也用它） */
+/** Shortcut list and interactive key recorder (embeddable in Help or ShortcutsDialog). */
 export function ShortcutsPanel() {
   useShortcutsVersion();
+  const locale = useLocale();
+  const tr = useT();
   const all = effectiveShortcuts();
   const overrides = getShortcutOverrides();
   const customCount = Object.keys(overrides).length;
   const conflicts = findConflicts(all);
   const [query, setQuery] = useState('');
-  const groups = filterGroups(groupedShortcuts(all), query);
-  const inputHint = inInputHint(all);
 
-  const [rec, setRec] = useState(null); // 正在录：{ id, index（-1 = 新增）, held: ['Ctrl'], error }
-  const [pending, setPending] = useState(null); // 等用户确认抢用：{ id, index, combo, conflicts }
-  const [note, setNote] = useState(null); // { tone: ok|info|warn|error, text }
+  const localizedGroups = useMemo(() => groupedShortcuts(all).map((g) => ({
+    ...g,
+    rawGroup: g.group,
+    group: locGroupName(g.group, tr),
+    items: g.items.map((it) => ({
+      ...it,
+      label: locLabelOf(it.id, tr),
+      keys: (it.combos || []).map((c) => locFormatCombo(c, locale)),
+    })),
+  })), [all, locale, tr]);
+
+  const groups = filterGroups(localizedGroups, query);
+  const inputHint = inInputHint(all, locale, tr);
+
+  const [rec, setRec] = useState(null); // { id, index (-1 = add), held, error }
+  const [pending, setPending] = useState(null); // { id, index, combo, conflicts }
+  const [note, setNote] = useState(null); // { tone, text }
   const [confirmAll, setConfirmAll] = useState(false);
   const recRef = useRef(null);
   const triggerRef = useRef(null);
@@ -96,13 +169,12 @@ export function ShortcutsPanel() {
     return () => { alive.current = false; clearTimeout(confirmTimer.current); };
   }, []);
 
-  // 焦点还给点开录制的那个按钮；按钮已经不在了（按键被换掉）就给这一行的第一个按钮
   const restoreFocus = useCallback((id) => {
     setTimeout(() => {
       if (!alive.current) return;
-      const t = triggerRef.current;
+      const el = triggerRef.current;
       triggerRef.current = null;
-      if (focusQuiet(t)) return;
+      if (focusQuiet(el)) return;
       const row = id ? document.querySelector(`[data-sck-row="${id}"]`) : null;
       focusQuiet(row && row.querySelector('.sck-key-btn, .sck-add, .sck-reset'));
     }, 0);
@@ -113,27 +185,29 @@ export function ShortcutsPanel() {
     if (!alive.current) return;
     setNote(res.ok
       ? { tone: 'ok', text: okText }
-      : { tone: 'error', text: `${okText}，但没能保存下来，重启应用后会恢复原来的按键` });
-  }, []);
+      : { tone: 'error', text: tr('shortcuts.note.saveFail', { text: okText }) });
+  }, [tr]);
 
   const applyAssign = useCallback((id, index, combo) => {
     const before = getShortcutOverrides();
     const old = keysOf(id, before);
     const r = assignCombo(before, id, combo, index);
-    if (!r.ok) { setNote({ tone: 'error', text: r.message }); return; }
+    if (!r.ok) { setNote({ tone: 'error', text: locAssignError({ ...r, combo }, id, locale, tr) }); return; }
     if (r.same) return;
-    const fmt = formatCombo(combo);
-    const replaced = index >= 0 && index < old.length ? formatCombo(old[index]) : '';
-    const text = (replaced ? `「${labelOf(id)}」的 ${replaced} 已改为 ${fmt}` : `已为「${labelOf(id)}」加上 ${fmt}`) + takenText(r.taken);
-    persist(r.overrides, text);
-  }, [persist]);
+    const fmt = locFormatCombo(combo, locale);
+    const replaced = index >= 0 && index < old.length ? locFormatCombo(old[index], locale) : '';
+    const label = locLabelOf(id, tr);
+    const baseText = replaced
+      ? tr('shortcuts.note.replaced', { label, old: replaced, combo: fmt })
+      : tr('shortcuts.note.added', { label, combo: fmt });
+    persist(r.overrides, baseText + takenText(r.taken, locale, tr));
+  }, [persist, locale, tr]);
 
   const stopRec = useCallback((id) => {
     setRec(null);
     restoreFocus(id);
   }, [restoreFocus]);
 
-  // 录制：捕获阶段拦下按键（Esc 取消；只按修饰键时显示「Ctrl + …」）；点别处或切走窗口也取消
   const recId = rec ? rec.id : null;
   const recIndex = rec ? rec.index : -1;
   useEffect(() => {
@@ -149,17 +223,17 @@ export function ShortcutsPanel() {
       const mods = heldModifiers(e);
       if ((e.key === 'Escape' || e.code === 'Escape') && !mods.length) { finish(); stopRec(recId); return; }
       if (!e.code || e.code === 'Unidentified') {
-        setRec((r) => (r ? { ...r, held: [], error: '这个键识别不出来，请换一个按键' } : r));
+        setRec((r) => (r ? { ...r, held: [], error: tr('shortcuts.recUnidentified') } : r));
         return;
       }
       const combo = comboFromEvent(e);
       if (!combo) { setRec((r) => (r ? { ...r, held: mods } : r)); return; }
       const chk = checkAssign(recId, combo, getShortcutOverrides(), recIndex);
-      if (!chk.ok) { setRec((r) => (r ? { ...r, held: [], error: chk.message } : r)); return; }
+      if (!chk.ok) { setRec((r) => (r ? { ...r, held: [], error: locAssignError(chk, recId, locale, tr) } : r)); return; }
       finish();
       swallowKeyUp(e.code);
       if (chk.same) {
-        setNote({ tone: 'info', text: `${formatCombo(chk.combo)} 本来就是「${labelOf(recId)}」的按键` });
+        setNote({ tone: 'info', text: tr('shortcuts.note.same', { combo: locFormatCombo(chk.combo, locale), label: locLabelOf(recId, tr) }) });
         stopRec(recId);
         return;
       }
@@ -189,7 +263,7 @@ export function ShortcutsPanel() {
       window.removeEventListener('mousedown', onMouse, true);
       window.removeEventListener('blur', cancelQuiet);
     };
-  }, [recId, recIndex, stopRec, applyAssign]);
+  }, [recId, recIndex, stopRec, applyAssign, locale, tr]);
 
   const cancelPending = useCallback(() => {
     setPending((p) => {
@@ -198,7 +272,6 @@ export function ShortcutsPanel() {
     });
   }, [restoreFocus]);
 
-  // 确认框打开时 Esc 先关确认框，不关整个对话框
   const pendingKey = pending ? `${pending.id}|${pending.index}|${pending.combo}` : '';
   useEffect(() => {
     if (!pendingKey) return undefined;
@@ -239,7 +312,9 @@ export function ShortcutsPanel() {
     const next = removeCombo(getShortcutOverrides(), id, combo);
     const left = keysOf(id, next).length;
     triggerRef.current = null;
-    persist(next, `已去掉「${labelOf(id)}」的 ${formatCombo(combo)}` + (left ? '' : '，这个功能现在没有快捷键，需要时点 + 加一个'));
+    const msg = tr('shortcuts.note.removed', { label: locLabelOf(id, tr), combo: locFormatCombo(combo, locale) })
+      + (left ? '' : tr('shortcuts.note.removedNoneLeft'));
+    persist(next, msg);
     restoreFocus(id);
   };
 
@@ -247,7 +322,9 @@ export function ShortcutsPanel() {
     clearTransient();
     const r = resetShortcut(getShortcutOverrides(), id);
     triggerRef.current = null;
-    persist(r.overrides, `「${labelOf(id)}」已恢复默认按键 ${defaultText(id)}` + takenText(r.taken));
+    const msg = tr('shortcuts.note.resetOne', { label: locLabelOf(id, tr), keys: defaultText(id, locale, tr) })
+      + takenText(r.taken, locale, tr);
+    persist(r.overrides, msg);
     restoreFocus(id);
   };
 
@@ -264,18 +341,28 @@ export function ShortcutsPanel() {
     const res = await resetAllShortcuts();
     if (!alive.current) return;
     setNote(res.ok
-      ? { tone: 'ok', text: '已全部恢复默认按键' }
-      : { tone: 'error', text: '已恢复默认按键，但没能保存下来，重启应用后会回到之前的设置' });
+      ? { tone: 'ok', text: tr('shortcuts.note.resetAllOk') }
+      : { tone: 'error', text: tr('shortcuts.note.resetAllSaveFail') });
     focusQuiet(searchRef.current);
   };
 
   const recChip = rec && (
     <span className="sck-rec" ref={recRef} tabIndex={-1} role="status" aria-live="polite">
       <span className="sck-rec-dot" aria-hidden="true" />
-      {rec.held.length ? `${rec.held.join(' + ')} + …` : '请按新的按键'}
-      <span className="sck-rec-esc">Esc 取消</span>
+      {rec.held.length ? `${rec.held.join(' + ')} + …` : tr('shortcuts.recPrompt')}
+      <span className="sck-rec-esc">{tr('shortcuts.recEsc')}</span>
     </span>
   );
+
+  const conflictSep = locale === 'zh-CN' ? '；' : '; ';
+  const nameSep = locale === 'zh-CN' ? '、' : ', ';
+  const wrapName = (label) => (locale === 'zh-CN' ? `「${label}」` : `"${label}"`);
+  const conflictListText = conflicts.map((c) => {
+    const names = c.ids.map((id) => wrapName(locLabelOf(id, tr))).join(nameSep);
+    return locale === 'zh-CN'
+      ? `${locFormatCombo(c.combo, locale)}（${names}）`
+      : `${locFormatCombo(c.combo, locale)} (${names})`;
+  }).join(conflictSep);
 
   return (
     <div className="sck">
@@ -284,31 +371,31 @@ export function ShortcutsPanel() {
           <Icon name="search" size={14} />
           <input
             ref={searchRef} className="input sm" type="search" value={query} spellCheck={false}
-            placeholder="搜索功能或按键，例如 分割、Ctrl+B" aria-label="搜索快捷键"
+            placeholder={tr('shortcuts.searchPlaceholder')} aria-label={tr('shortcuts.searchAria')}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.preventDefault(); setQuery(''); } }}
           />
         </label>
         <span className="sck-spacer" />
-        {customCount > 0 && <span className="chip accent">已自定义 {customCount} 项</span>}
+        {customCount > 0 && <span className="chip accent">{tr('shortcuts.customCount', { count: customCount })}</span>}
         <Button
           size="sm" variant={confirmAll ? 'danger' : 'ghost'} icon="reset" onClick={onResetAll}
-          disabled={!customCount && !confirmAll} title="所有功能恢复成默认按键"
+          disabled={!customCount && !confirmAll} title={tr('shortcuts.resetAllTitle')}
         >
-          {confirmAll ? '再点一次，确认全部恢复' : '全部恢复默认'}
+          {confirmAll ? tr('shortcuts.resetAllConfirm') : tr('shortcuts.resetAll')}
         </Button>
       </div>
 
       <p className="sc-intro">
-        按物理键位识别，中文输入法下同样可用。点按键可以换成别的键，鼠标移上去点 × 去掉，点 + 再加一个（每个功能最多 {MAX_KEYS_PER_ACTION} 个）。
-        光标在输入框里时快捷键不触发{inputHint ? `（${inputHint} 除外）` : ''}。
+        {tr('shortcuts.intro', {
+          max: MAX_KEYS_PER_ACTION,
+          except: inputHint ? tr('shortcuts.introExcept', { hint: inputHint }) : '',
+        })}
       </p>
 
       {conflicts.length > 0 && (
         <div className="sc-conflict" role="alert">
-          这些按键同时设给了多个功能，按下时只会触发其中一个：
-          {conflicts.map((c) => `${formatCombo(c.combo)}（${c.ids.map((id) => `「${labelOf(id)}」`).join('、')}）`).join('；')}。
-          点对应的按键改掉其中一个即可。
+          {tr('shortcuts.conflictBanner', { list: conflictListText })}
         </div>
       )}
 
@@ -322,59 +409,63 @@ export function ShortcutsPanel() {
       </div>
 
       {groups.length === 0 ? (
-        <div className="sck-empty">没有找到和「{query.trim()}」有关的快捷键</div>
+        <div className="sck-empty">{tr('shortcuts.emptySearch', { query: query.trim() })}</div>
       ) : (
         <div className="sc-grid">
           {groups.map((g) => (
-            <section key={g.group} className="sc-group">
+            <section key={g.rawGroup} className="sc-group">
               <h4>{g.group}</h4>
               {g.items.map((it) => {
                 const isRec = !!rec && rec.id === it.id;
                 const isPending = !!pending && pending.id === it.id;
                 const adding = isRec && rec.index < 0;
+                const defKeys = defaultText(it.id, locale, tr);
                 return (
                   <div key={it.id} className={'sc-row sck-row' + (isRec ? ' recording' : '') + (isPending ? ' pending' : '')} data-sck-row={it.id}>
                     <span className="sc-label sck-label">
                       {it.label}
-                      {it.customized && <span className="sck-badge" title={`默认按键：${defaultText(it.id)}`}>已改</span>}
+                      {it.customized && <span className="sck-badge" title={tr('shortcuts.defaultTip', { keys: defKeys })}>{tr('shortcuts.badgeCustom')}</span>}
                     </span>
                     <span className="sc-keys sck-keys">
-                      {it.combos.map((combo, i) => (
-                        <React.Fragment key={combo}>
-                          {i > 0 && <span className="sc-or">或</span>}
-                          {isRec && rec.index === i ? recChip : it.fixed ? (
-                            <span className="sck-key fixed" title="固定按键，不能修改"><Keycaps combo={combo} /></span>
-                          ) : (
-                            <span className="sck-key">
-                              <button
-                                type="button" className="sck-key-btn" title="点一下，再按新的按键"
-                                aria-label={`「${it.label}」的按键 ${formatCombo(combo)}，点一下换成别的键`}
-                                onClick={(e) => startRec(it.id, i, e.currentTarget)}
-                              >
-                                <Keycaps combo={combo} />
-                              </button>
-                              <button
-                                type="button" className="sck-key-x" title="去掉这个按键"
-                                aria-label={`去掉「${it.label}」的按键 ${formatCombo(combo)}`}
-                                onClick={() => removeKey(it.id, combo)}
-                              >
-                                <Icon name="x" size={9} stroke={2.4} />
-                              </button>
-                            </span>
-                          )}
-                        </React.Fragment>
-                      ))}
-                      {!it.combos.length && !adding && <span className="sck-none">未设置</span>}
+                      {it.combos.map((combo, i) => {
+                        const fmt = locFormatCombo(combo, locale);
+                        return (
+                          <React.Fragment key={combo}>
+                            {i > 0 && <span className="sc-or">{tr('shortcuts.or')}</span>}
+                            {isRec && rec.index === i ? recChip : it.fixed ? (
+                              <span className="sck-key fixed" title={tr('shortcuts.fixedTitle')}><Keycaps combo={combo} locale={locale} /></span>
+                            ) : (
+                              <span className="sck-key">
+                                <button
+                                  type="button" className="sck-key-btn" title={tr('shortcuts.keyBtnTitle')}
+                                  aria-label={tr('shortcuts.keyBtnAria', { label: it.label, combo: fmt })}
+                                  onClick={(e) => startRec(it.id, i, e.currentTarget)}
+                                >
+                                  <Keycaps combo={combo} locale={locale} />
+                                </button>
+                                <button
+                                  type="button" className="sck-key-x" title={tr('shortcuts.removeTitle')}
+                                  aria-label={tr('shortcuts.removeAria', { label: it.label, combo: fmt })}
+                                  onClick={() => removeKey(it.id, combo)}
+                                >
+                                  <Icon name="x" size={9} stroke={2.4} />
+                                </button>
+                              </span>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                      {!it.combos.length && !adding && <span className="sck-none">{tr('shortcuts.unassigned')}</span>}
                       {adding && (
                         <>
-                          {it.combos.length > 0 && <span className="sc-or">或</span>}
+                          {it.combos.length > 0 && <span className="sc-or">{tr('shortcuts.or')}</span>}
                           {recChip}
                         </>
                       )}
                       {!it.fixed && !adding && it.combos.length < MAX_KEYS_PER_ACTION && (
                         <button
-                          type="button" className="sck-add" title="再加一个按键"
-                          aria-label={`给「${it.label}」再加一个按键`}
+                          type="button" className="sck-add" title={tr('shortcuts.addTitle')}
+                          aria-label={tr('shortcuts.addAria', { label: it.label })}
                           onClick={(e) => startRec(it.id, -1, e.currentTarget)}
                         >
                           <Icon name="plus" size={12} stroke={2} />
@@ -382,14 +473,14 @@ export function ShortcutsPanel() {
                       )}
                       {it.customized && (
                         <button
-                          type="button" className="sck-reset" title={`恢复默认：${defaultText(it.id)}`}
-                          aria-label={`「${it.label}」恢复默认按键 ${defaultText(it.id)}`}
+                          type="button" className="sck-reset" title={tr('shortcuts.resetOneTitle', { keys: defKeys })}
+                          aria-label={tr('shortcuts.resetOneAria', { label: it.label, keys: defKeys })}
                           onClick={() => resetOne(it.id)}
                         >
                           <Icon name="reset" size={13} />
                         </button>
                       )}
-                      {it.fixed && <span className="sck-lock" title="固定按键，不能修改"><Icon name="lock" size={12} /></span>}
+                      {it.fixed && <span className="sck-lock" title={tr('shortcuts.fixedTitle')}><Icon name="lock" size={12} /></span>}
                     </span>
                     {isRec && rec.error && (
                       <div className="sck-msg error" role="alert">
@@ -401,11 +492,14 @@ export function ShortcutsPanel() {
                       <div className="sck-msg warn" role="alert">
                         <Icon name="alertTriangle" size={14} />
                         <span className="sck-msg-text">
-                          {formatCombo(pending.combo)} 已用于{pending.conflicts.map((c) => `「${c.label}」`).join('、')}。
-                          改给「{it.label}」后，那边将不再使用这个按键。
+                          {tr('shortcuts.pendingConflict', {
+                            combo: locFormatCombo(pending.combo, locale),
+                            names: pending.conflicts.map((c) => wrapName(locLabelOf(c.id, tr))).join(nameSep),
+                            label: it.label,
+                          })}
                         </span>
-                        <Button size="sm" variant="primary" autoFocus onClick={confirmPending}>改用</Button>
-                        <Button size="sm" onClick={cancelPending}>取消</Button>
+                        <Button size="sm" variant="primary" autoFocus onClick={confirmPending}>{tr('shortcuts.pendingReassign')}</Button>
+                        <Button size="sm" onClick={cancelPending}>{tr('app.cancel')}</Button>
                       </div>
                     )}
                   </div>
@@ -420,8 +514,9 @@ export function ShortcutsPanel() {
 }
 
 export default function ShortcutsDialog({ onClose }) {
+  const tr = useT();
   return (
-    <Modal title="键盘快捷键" onClose={onClose} wide className="sc-dialog">
+    <Modal title={tr('shortcuts.title')} onClose={onClose} wide className="sc-dialog">
       <ShortcutsPanel />
     </Modal>
   );

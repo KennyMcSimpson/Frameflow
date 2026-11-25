@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import useStore from '../../store.js';
 import api from '../../api.js';
+import { getLocale, useLocale } from '../../i18n.js';
 import { uid } from '../../../engine/ids.js';
 import { parseCommand } from '../../../engine/localnlp.js';
 import { layoutVideo, itemsInRange } from '../../../engine/timeline.js';
@@ -15,8 +16,37 @@ import SideMaterialCard from './SideMaterialCard.jsx';
 import { allTechniques, queryLibraryAssets, fmtRange, readPref, writePref } from './SideData.js';
 
 const QUICK = ['整体暖一点', '节奏快一点', '统一全片色调', '第一个片段加标题', '转场都改成叠化', '加点颗粒感'];
+const QUICK_EN = ['Warmer overall', 'Faster pacing', 'Match color across clips', 'Add title to first clip', 'Use cross-dissolves', 'Add subtle film grain'];
 const EXAMPLES = ['第2个片段暖一点、对比度高一点', '所有转场改成叠化', '第一个片段加标题“春日咖啡”', '第3段慢放到0.5倍', '最后一段加电影黑边', '以后都不要用转场'];
-const PROVIDER_LABEL = { codex: 'AI', openai: 'AI', local: '本地规则' };
+const EXAMPLES_EN = ['Make clip 2 warmer with higher contrast', 'Change all transitions to dissolve', 'Add title "Morning Coffee" to clip 1', 'Slow clip 3 to 0.5x', 'Add cinema bars to the last clip', 'Never use transitions from now on'];
+const PRESET_LABEL = {
+  openai: { zh: 'OpenAI', en: 'OpenAI' },
+  deepseek: { zh: 'DeepSeek', en: 'DeepSeek' },
+  anthropic: { zh: 'Anthropic Claude', en: 'Anthropic Claude' },
+  gemini: { zh: 'Google Gemini', en: 'Google Gemini' },
+  openrouter: { zh: 'OpenRouter', en: 'OpenRouter' },
+  ark: { zh: '火山方舟', en: 'Volcengine Ark' },
+  ollama: { zh: 'Ollama 本地', en: 'Ollama (Local)' },
+  lmstudio: { zh: 'LM Studio', en: 'LM Studio' },
+};
+const PRESET_CHIP = {
+  openai: { zh: 'OpenAI', en: 'OpenAI' },
+  deepseek: { zh: 'DeepSeek', en: 'DeepSeek' },
+  anthropic: { zh: 'Anthropic Claude', en: 'Anthropic Claude' },
+  gemini: { zh: 'Gemini', en: 'Gemini' },
+  openrouter: { zh: 'OpenRouter', en: 'OpenRouter' },
+  ark: { zh: '火山方舟', en: 'Volcengine Ark' },
+  ollama: { zh: 'Ollama', en: 'Ollama' },
+  lmstudio: { zh: 'LM Studio', en: 'LM Studio' },
+};
+const PROVIDER_CHIP = {
+  claude: 'Claude Code',
+  codex: 'Codex CLI',
+  gemini: 'Gemini CLI',
+  anthropic: 'Anthropic Claude',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+};
 const MAX_MESSAGES = 200;
 const SLOW_AFTER_MS = 90000;
 /** 流程阶段（runEditPipeline 的 onPhase）→ 给人看的说法 */
@@ -26,8 +56,14 @@ const STEP_TEXT = {
   检查修改: '正在检查每一步能不能执行',
   修正细节: '有几步需要调整，AI 正在修正',
 };
+const STEP_TEXT_EN = {
+  整理上下文: 'Gathering project context',
+  理解指令: 'Understanding your request',
+  检查修改: 'Validating each edit step',
+  修正细节: 'Refining edit steps',
+};
 
-// 新增样式只用设计令牌；之后由 side 包并入 refine-side.css（见 handoff）
+// 局部样式仅使用设计令牌
 const STYLE = `
 .aie-msg .aie-reason { display: block; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.45; }
 .aie-confirm { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); border-radius: var(--radius-s); background: var(--warn-soft); color: var(--text-0); font-size: var(--fs-xs); line-height: 1.5; }
@@ -89,9 +125,16 @@ function safeDescribe(op, project) {
 }
 
 /** [1,2,3] → 「第 1–3 个片段」；[1,3,5] → 「第 1、3、5 个片段」；太多 → 「N 个片段」 */
-function describeClipIndices(nums) {
+function describeClipIndices(nums, isEn = false) {
   const arr = Array.from(new Set((nums || []).filter((n) => Number.isFinite(n)))).sort((a, b) => a - b);
   if (!arr.length) return '';
+  if (isEn) {
+    if (arr.length === 1) return `Clip ${arr[0]}`;
+    const contiguous = arr.every((n, i) => i === 0 || n === arr[i - 1] + 1);
+    if (contiguous) return `Clips ${arr[0]}–${arr[arr.length - 1]}`;
+    if (arr.length <= 5) return `Clips ${arr.join(', ')}`;
+    return `${arr.length} clips`;
+  }
   if (arr.length === 1) return `第 ${arr[0]} 个片段`;
   const contiguous = arr.every((n, i) => i === 0 || n === arr[i - 1] + 1);
   if (contiguous) return `第 ${arr[0]}–${arr[arr.length - 1]} 个片段`;
@@ -99,8 +142,9 @@ function describeClipIndices(nums) {
   return `${arr.length} 个片段`;
 }
 
-function fmtElapsed(ms) {
+function fmtElapsed(ms, isEn = false) {
   const s = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  if (isEn) return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
   return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒`;
 }
 
@@ -186,44 +230,100 @@ function appliedPatch(r) {
 }
 
 // ---------------- 上下文 ----------------
-function useScope() {
+function useScope(isEn) {
   const project = useStore((s) => s.project);
   const clipIds = useStore((s) => s.selection.clipIds);
   const focus = useStore((s) => s.focus);
   const range = useStore((s) => s.range);
   return useMemo(() => {
-    if (!project) return { kind: 'none', label: '没有打开的项目' };
+    if (!project) return { kind: 'none', label: isEn ? 'No project open' : '没有打开的项目' };
     const video = project.tracks.video;
     if (clipIds.length) {
       const idx = clipIds.map((id) => video.findIndex((c) => c.id === id)).filter((i) => i >= 0).map((i) => i + 1);
-      if (idx.length) return { kind: 'selection', label: '选中' + describeClipIndices(idx) };
+      if (idx.length) return { kind: 'selection', label: isEn ? `Selected: ${describeClipIndices(idx, true)}` : '选中' + describeClipIndices(idx, false) };
     }
     const span = focus || range;
     if (span) {
       let items = [];
       try { items = itemsInRange(layoutVideo(project), span.start, span.end) || []; } catch { items = []; }
       const idx = items.map((it) => it.index + 1);
-      return { kind: focus ? 'focus' : 'range', label: `${focus ? '聚焦' : '范围'} ${fmtRange(span)}${idx.length ? `（${describeClipIndices(idx)}）` : ''}` };
+      if (isEn) {
+        return { kind: focus ? 'focus' : 'range', label: `${focus ? 'Focus' : 'Range'} ${fmtRange(span)}${idx.length ? ` (${describeClipIndices(idx, true)})` : ''}` };
+      }
+      return { kind: focus ? 'focus' : 'range', label: `${focus ? '聚焦' : '范围'} ${fmtRange(span)}${idx.length ? `（${describeClipIndices(idx, false)}）` : ''}` };
+    }
+    if (isEn) {
+      return { kind: 'all', label: video.length ? `Full timeline (${video.length} ${video.length === 1 ? 'clip' : 'clips'})` : 'Full timeline (empty)' };
     }
     return { kind: 'all', label: video.length ? `全片（${video.length} 个片段）` : '全片（时间线为空）' };
-  }, [project, clipIds, focus, range]);
+  }, [project, clipIds, focus, range, isEn]);
 }
 
-function aiChip(aiStatus) {
-  if (!aiStatus) return { kind: '', text: 'AI 检测中…', title: '' };
-  if (aiStatus.ready && aiStatus.provider === 'codex') return { kind: 'ai', text: 'AI 已就绪', title: aiStatus.detail || '' };
-  if (aiStatus.ready && aiStatus.provider === 'openai') return { kind: 'ai', text: 'AI 已就绪', title: aiStatus.detail || '' };
-  return { kind: 'warn', text: '本地规则', title: (aiStatus.detail || '未连接 AI') + '：简单指令仍可本地理解' };
+function providerDisplayLabel(provider, isEn, preset = '') {
+  const p = String(provider || '').trim().toLowerCase();
+  const pr = String(preset || '').trim().toLowerCase();
+  if ((p === 'openai' || p === 'api') && pr && PRESET_LABEL[pr]) {
+    return isEn ? PRESET_LABEL[pr].en : PRESET_LABEL[pr].zh;
+  }
+  switch (p) {
+    case 'claude': return 'Claude Code';
+    case 'codex': return 'Codex CLI';
+    case 'gemini': return 'Gemini CLI';
+    case 'anthropic': return 'Anthropic Claude';
+    case 'openai':
+    case 'api':
+      return isEn ? 'OpenAI-Compatible API' : 'OpenAI 兼容 API';
+    case 'ollama': return isEn ? 'Ollama (Local)' : 'Ollama 本地';
+    case 'lmstudio': return 'LM Studio';
+    case 'local':
+    case 'none':
+      return isEn ? 'Local Rules' : '本地规则';
+    default:
+      return provider ? String(provider) : 'AI';
+  }
+}
+
+export function aiChip(aiStatus, locale = 'zh-CN') {
+  const isEn = locale === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
+  if (!aiStatus) return { kind: '', text: L('AI 检测中…', 'Checking AI…'), title: '' };
+  const p = String(aiStatus.provider || '').trim().toLowerCase();
+  if (aiStatus.ready && p && p !== 'local' && p !== 'none') {
+    const preset = String(aiStatus.preset || (aiStatus.api && aiStatus.api.preset) || '').trim().toLowerCase();
+    const label = providerDisplayLabel(p, isEn, preset);
+    let text;
+    if ((p === 'openai' || p === 'api') && preset && PRESET_CHIP[preset]) {
+      text = isEn ? PRESET_CHIP[preset].en : PRESET_CHIP[preset].zh;
+    } else if (p === 'openai' || p === 'api') {
+      text = L('API 已就绪', 'API Ready');
+    } else if (PROVIDER_CHIP[p]) {
+      text = PROVIDER_CHIP[p];
+    } else {
+      text = L('AI 已就绪', 'AI Ready');
+    }
+    const title = [label, aiStatus.model, aiStatus.detail].filter(Boolean).join(' · ');
+    return { kind: 'ai', text, title };
+  }
+  return {
+    kind: 'warn',
+    text: L('本地规则', 'Local Rules'),
+    title: isEn
+      ? `${aiStatus.detail || 'AI not connected'}: simple commands still work via local rules; connect a cloud/local API or local Agent CLI in Settings`
+      : `${aiStatus.detail || '未连接 AI'}：简单指令仍可本地理解；可在设置中连接在线/本地 API 或本机 Agent CLI`,
+  };
 }
 
 // ---------------- 组件 ----------------
 export default function AIEditPanel() {
+  const locale = useLocale();
+  const isEn = locale === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   const project = useStore((s) => s.project);
   const aiStatus = useStore((s) => s.aiStatus);
   const past = useStore((s) => s.past);
   const messages = (project && project.chats && project.chats.editor) || [];
-  const scope = useScope();
-  const chip = aiChip(aiStatus);
+  const scope = useScope(isEn);
+  const chip = aiChip(aiStatus, locale);
 
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(null); // { step, phase, startedAt, slow }
@@ -277,7 +377,7 @@ export default function AIEditPanel() {
     const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     abortRef.current = ctrl;
     setBusy({ step: '整理上下文', phase: '', startedAt: Date.now(), slow: false });
-    let provider = 'codex';
+    let provider = 'ai';
     try {
       const [techniques, library] = await Promise.all([
         allTechniques().then((all) => { try { return (searchTechniques(all, text, { limit: 12 }) || []).slice(0, 12); } catch { return []; } }).catch(() => []),
@@ -350,7 +450,7 @@ export default function AIEditPanel() {
         const hasLocal = local.ops.length > 0;
         pushMsg({
           id: uid('msg'), role: 'assistant', at: new Date().toISOString(), provider: 'local', command: text,
-          text: `未连接 AI，以下部分本地无法理解：「${unknown.join('」「')}」。${hasLocal ? '能理解的部分如下，确认后可以先应用。' : '可以换成下面这种写法，或在设置里连接 AI 服务。'}`,
+          text: `未连接 AI，以下部分本地无法理解：「${unknown.join('」「')}」。${hasLocal ? '能理解的部分如下，确认后可以先应用。' : '可以换成下面这种写法，或在设置里连接在线/本地 API 或本机 Agent CLI。'}`,
           ops: hasLocal ? local.ops : [], status: hasLocal ? 'proposed' : undefined, ctx, examples: true,
         });
         return;
@@ -461,41 +561,45 @@ export default function AIEditPanel() {
     setConfirmClear(false);
     if (!messages.length) return;
     useStore.getState().update((p) => ({ ...p, chats: { ...(p.chats || {}), editor: [] } }));
-    useStore.getState().toast('已清空 AI 精修对话记录（不影响时间线和撤销历史）');
+    useStore.getState().toast(getLocale() === 'en-US' ? 'AI Refine chat history cleared (timeline and undo history unchanged)' : '已清空 AI 精修对话记录（不影响时间线和撤销历史）');
   }
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent && e.nativeEvent.isComposing)) { e.preventDefault(); send(input); }
   };
 
-  if (!project) return <div className="aie-root"><div className="empty"><p>打开项目后可以用白话精修视频。</p></div></div>;
+  if (!project) return <div className="aie-root"><div className="empty"><p>{L('打开项目后可以用白话精修视频。', 'Open a project to refine your video in plain language.')}</p></div></div>;
 
   const scopeIcon = scope.kind === 'selection' ? 'layers' : scope.kind === 'focus' ? 'focus' : scope.kind === 'range' ? 'clock' : 'film';
+  const quickList = isEn ? QUICK_EN : QUICK;
 
   return (
     <div className="aie-root">
       <style>{STYLE}</style>
       <div className="aie-context">
-        <div className="aie-scope" title="AI 修改的作用对象。选中片段或在时间线上框选「聚焦此段」可以缩小范围；AI 仍会参考全片风格。">
+        <div className="aie-scope" title={L('AI 修改的作用对象。选中片段或在时间线上框选「聚焦此段」可以缩小范围；AI 仍会参考全片风格。', 'Target scope for AI edits. Select clips or focus a timeline range to narrow edits while keeping full-project style consistency.')}>
           <Icon name={scopeIcon} size={13} />
           <span className="ellipsis">{scope.label}</span>
         </div>
         <Chip kind={chip.kind} dot title={chip.title}>{chip.text}</Chip>
         {confirmClear ? (
           <span className="aie-actions">
-            <Button size="sm" variant="danger" onClick={doClearChat} title="仅清空对话记录，不影响时间线和撤销历史">确认清空</Button>
-            <Button size="sm" variant="ghost" onClick={() => setConfirmClear(false)}>取消</Button>
+            <Button size="sm" variant="danger" onClick={doClearChat} title={L('仅清空对话记录，不影响时间线和撤销历史', 'Clears chat history only; timeline and undo history stay intact')}>{L('确认清空', 'Confirm Clear')}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmClear(false)}>{L('取消', 'Cancel')}</Button>
           </span>
         ) : (
-          <Button size="sm" variant="ghost" icon="trash" title="清空对话（不影响时间线和撤销历史）" onClick={() => setConfirmClear(true)} disabled={!messages.length || !!busy} />
+          <Button size="sm" variant="ghost" icon="trash" title={L('清空对话（不影响时间线和撤销历史）', 'Clear chat (does not affect timeline or undo history)')} onClick={() => setConfirmClear(true)} disabled={!messages.length || !!busy} />
         )}
       </div>
 
       <div className="aie-list" ref={listRef}>
         {!messages.length && (
           <div className="aie-welcome">
-            <div className="aie-welcome-title"><Icon name="sparkles" size={16} />用白话告诉我想怎么改</div>
-            <p>简单的调整（调色、转场、速度、字幕、特效）本地立即生效；复杂的要求交给 AI，它记得全片的风格和你定下的规矩（比如「以后都不要用转场」）。大改动会先让你确认，每次修改都能撤销；缺素材时会自动去素材库和网上找。</p>
+            <div className="aie-welcome-title"><Icon name="sparkles" size={16} />{L('用白话告诉我想怎么改', 'Describe how you want to edit')}</div>
+            <p>{L(
+              '简单的调整（调色、转场、速度、字幕、特效）本地立即生效；复杂的要求交给 AI，它记得全片的风格和你定下的规矩（比如「以后都不要用转场」）。大改动会先让你确认，每次修改都能撤销；缺素材时会自动去素材库和网上找。',
+              'Simple edits (color, transitions, speed, titles, effects) apply immediately via local rules; complex requests go to AI while keeping your project style and preferences. Major changes ask for confirmation first, and every edit can be undone.',
+            )}</p>
           </div>
         )}
         {messages.map((m) => (
@@ -505,6 +609,7 @@ export default function AIEditPanel() {
             project={project}
             canUndo={!!(undoAnchors.get(m.id) && undoAnchors.get(m.id).entry === topEntry)}
             busy={!!busy}
+            isEn={isEn}
             onApply={() => applyProposed(m)}
             onReject={() => rejectProposed(m)}
             onUndo={() => undoMsg(m)}
@@ -512,12 +617,12 @@ export default function AIEditPanel() {
             onExample={(ex) => { setInput(ex); inputRef.current && inputRef.current.focus(); }}
           />
         ))}
-        {busy && <BusyRow busy={busy} onCancel={cancelAI} />}
+        {busy && <BusyRow busy={busy} isEn={isEn} onCancel={cancelAI} />}
       </div>
 
       <div className="aie-compose">
         <div className="aie-quick">
-          {QUICK.map((q) => (
+          {quickList.map((q) => (
             <button key={q} type="button" className="aie-chip" disabled={!!busy} onClick={() => send(q)}>{q}</button>
           ))}
         </div>
@@ -527,28 +632,30 @@ export default function AIEditPanel() {
             className="aie-input"
             rows={2}
             value={input}
-            placeholder={scope.kind === 'all' ? '例如：开头更抓人一点，整体色调统一成暖色胶片' : `对${scope.label}说点什么，例如：暖一点、慢放、加标题`}
+            placeholder={scope.kind === 'all'
+              ? L('例如：开头更抓人一点，整体色调统一成暖色胶片', 'e.g. Make the opening punchier and give the whole edit a warm film look')
+              : L(`对${scope.label}说点什么，例如：暖一点、慢放、加标题`, `Describe an edit for ${scope.label}, e.g. warmer tone, slow motion, add title`)}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={!!busy}
-            aria-label="告诉 AI 想怎么改"
+            aria-label={L('告诉 AI 想怎么改', 'Tell AI how to edit')}
           />
-          <Button variant="ai" icon="send" title="发送（Enter）" onClick={() => send(input)} disabled={!input.trim() || !!busy} />
+          <Button variant="ai" icon="send" title={L('发送（Enter）', 'Send (Enter)')} onClick={() => send(input)} disabled={!input.trim() || !!busy} />
         </div>
         <div className="aie-preview-toggle">
-          <span>AI 修改</span>
+          <span>{L('AI 修改', 'AI Edits')}</span>
           <Segmented
             size="sm"
-            label="AI 的修改什么时候先确认"
+            label={L('AI 的修改什么时候先确认', 'When to confirm AI edits')}
             value={confirmAll ? 'all' : 'big'}
             onChange={(v) => setConfirmAll(v === 'all')}
             options={[
-              { value: 'big', label: '大改动才确认', title: '小改动直接生效（随时可以撤销）；删除多个片段、改全片调色或转场、改画幅、总时长变化较大时，先让你确认' },
-              { value: 'all', label: '每次都确认', title: 'AI 的每次修改都先列出来，确认后才应用；本地能理解的简单指令总是立即生效' },
+              { value: 'big', label: L('大改动才确认', 'Confirm Major'), title: L('小改动直接生效（随时可以撤销）；删除多个片段、改全片调色或转场、改画幅、总时长变化较大时，先让你确认', 'Small edits apply immediately (undoable anytime); major changes ask for confirmation first') },
+              { value: 'all', label: L('每次都确认', 'Always Confirm'), title: L('AI 的每次修改都先列出来，确认后才应用；本地能理解的简单指令总是立即生效', 'Preview and confirm every AI edit before applying; simple local commands still apply immediately') },
             ]}
           />
           <span className="grow" />
-          <span className="xs muted">Enter 发送 · Shift+Enter 换行</span>
+          <span className="xs muted">{L('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for newline')}</span>
         </div>
       </div>
     </div>
@@ -556,7 +663,8 @@ export default function AIEditPanel() {
 }
 
 /** 等待 AI 时的进度行：阶段 + 已用时；超过 90 秒提示可以取消。自己每秒刷新，不带着整个面板重绘 */
-function BusyRow({ busy, onCancel }) {
+function BusyRow({ busy, isEn, onCancel }) {
+  const L = (zh, en) => (isEn ? en : zh);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -564,32 +672,33 @@ function BusyRow({ busy, onCancel }) {
   }, []);
   const elapsed = Math.max(0, now - (busy.startedAt || now));
   const slow = busy.slow || elapsed >= SLOW_AFTER_MS;
-  const step = STEP_TEXT[busy.step] || busy.step || 'AI 正在处理';
+  const step = (isEn ? STEP_TEXT_EN[busy.step] : STEP_TEXT[busy.step]) || busy.step || L('AI 正在处理', 'AI is working');
   return (
     <div className="aie-msg assistant pending">
       <div className="aie-msg-head">
         <Spinner ai />
         <span className="grow ellipsis" role="status" aria-live="polite">{step}{busy.phase ? ` · ${busy.phase}` : '…'}</span>
-        <span className="aie-elapsed" title="已用时间">{fmtElapsed(elapsed)}</span>
-        <Button size="sm" variant="ghost" onClick={onCancel}>取消</Button>
+        <span className="aie-elapsed" title={L('已用时间', 'Elapsed time')}>{fmtElapsed(elapsed, isEn)}</span>
+        <Button size="sm" variant="ghost" onClick={onCancel}>{L('取消', 'Cancel')}</Button>
       </div>
       <ProgressBar ai indeterminate />
       {slow && (
         <div className="aie-slow" role="note">
           <Icon name="clock" size={12} />
-          <span>AI 响应比平时慢，可以继续等待，也可以取消后换个简单点的说法。</span>
+          <span>{L('AI 响应比平时慢，可以继续等待，也可以取消后换个简单点的说法。', 'AI is taking longer than usual — you can keep waiting, or cancel and try a simpler request.')}</span>
         </div>
       )}
     </div>
   );
 }
 
-function StatusChip({ msg }) {
-  if (msg.undone) return <Chip>已撤销</Chip>;
-  if (msg.status === 'applied') return <Chip kind="ok">已应用</Chip>;
-  if (msg.status === 'proposed') return <Chip kind="warn">待确认</Chip>;
-  if (msg.status === 'rejected') return <Chip>已放弃</Chip>;
-  if (msg.status === 'error') return <Chip kind="danger">失败</Chip>;
+function StatusChip({ msg, isEn }) {
+  const L = (zh, en) => (isEn ? en : zh);
+  if (msg.undone) return <Chip>{L('已撤销', 'Undone')}</Chip>;
+  if (msg.status === 'applied') return <Chip kind="ok">{L('已应用', 'Applied')}</Chip>;
+  if (msg.status === 'proposed') return <Chip kind="warn">{L('待确认', 'Pending')}</Chip>;
+  if (msg.status === 'rejected') return <Chip>{L('已放弃', 'Dismissed')}</Chip>;
+  if (msg.status === 'error') return <Chip kind="danger">{L('失败', 'Failed')}</Chip>;
   return null;
 }
 
@@ -597,14 +706,15 @@ function strings(v) {
   return Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s.trim()) : [];
 }
 
-function MessageItem({ msg, project, canUndo, busy, onApply, onReject, onUndo, onRetry, onExample }) {
+function MessageItem({ msg, project, canUndo, busy, isEn, onApply, onReject, onUndo, onRetry, onExample }) {
+  const L = (zh, en) => (isEn ? en : zh);
   if (msg.role === 'user') {
     return <div className="aie-msg user"><div className="aie-msg-text selectable">{msg.text}</div></div>;
   }
   const ops = Array.isArray(msg.ops) ? msg.ops : [];
   const reasons = Array.isArray(msg.reasons) ? msg.reasons : [];
   const errors = Array.isArray(msg.errors) ? msg.errors.filter(Boolean) : [];
-  const provider = msg.local ? '本地理解' : PROVIDER_LABEL[msg.provider] || 'AI';
+  const provider = msg.local ? L('本地理解', 'Local Rules') : providerDisplayLabel(msg.provider, isEn, msg.preset);
   const proposed = msg.status === 'proposed';
   const dim = msg.status === 'rejected' || msg.undone;
   const plan = msg.plan && typeof msg.plan === 'object' ? msg.plan : null;
@@ -616,30 +726,31 @@ function MessageItem({ msg, project, canUndo, busy, onApply, onReject, onUndo, o
     .filter((s) => s && s.message);
   const unsupported = (Array.isArray(msg.unsupported) ? msg.unsupported : []).filter((u) => u && u.request);
   const repair = msg.repair && typeof msg.repair === 'object' ? msg.repair : null;
+  const examplesList = isEn ? EXAMPLES_EN : EXAMPLES;
   return (
     <div className={'aie-msg assistant' + (msg.status === 'error' ? ' error' : '')}>
       <div className="aie-msg-head">
         <Icon name={msg.local || msg.provider === 'local' ? 'bolt' : 'sparkles'} size={12} />
         <span className="aie-provider">{provider}</span>
         <span className="grow" />
-        <StatusChip msg={msg} />
+        <StatusChip msg={msg} isEn={isEn} />
       </div>
       {msg.text && <div className="aie-msg-text selectable">{msg.text}</div>}
       {confirmReasons.length > 0 && (
         <div className="aie-confirm" role="note">
           <Icon name="alertTriangle" size={13} />
-          <div><b>改动较大，确认后才会应用：</b>{confirmReasons.join('；')}</div>
+          <div><b>{L('改动较大，确认后才会应用：', 'Major edit — confirm before applying: ')}</b>{confirmReasons.join(L('；', '; '))}</div>
         </div>
       )}
       {summary.length > 0 && !dim && (proposed || msg.status === 'applied') && (
         <div className="aie-diff">
-          <div className="aie-ops-title">{proposed ? '应用后的变化' : '改动概览'}</div>
+          <div className="aie-ops-title">{proposed ? L('应用后的变化', 'Changes on Apply') : L('改动概览', 'Summary')}</div>
           <ul>{summary.map((s, i) => <li key={i}>{s}</li>)}</ul>
         </div>
       )}
       {ops.length > 0 && (
         <div className={'aie-ops' + (dim ? ' dim' : '')}>
-          <div className="aie-ops-title">{proposed ? '将执行的操作' : '执行的操作'}（{ops.length}）</div>
+          <div className="aie-ops-title">{proposed ? L('将执行的操作', 'Planned Operations') : L('执行的操作', 'Applied Operations')}{isEn ? ` (${ops.length})` : `（${ops.length}）`}</div>
           <ol>
             {ops.map((op, i) => (
               <li key={i}>
@@ -652,19 +763,19 @@ function MessageItem({ msg, project, canUndo, busy, onApply, onReject, onUndo, o
       )}
       {skipped.length > 0 && !dim && (
         <div className="aie-skip">
-          <div className="aie-ops-title">没有执行的部分（{skipped.length}）</div>
-          <ul>{skipped.map((s, i) => <li key={i}>{s.label ? `${s.label}：` : ''}{s.message}</li>)}</ul>
+          <div className="aie-ops-title">{L(`没有执行的部分（${skipped.length}）`, `Skipped (${skipped.length})`)}</div>
+          <ul>{skipped.map((s, i) => <li key={i}>{s.label ? `${s.label}${L('：', ': ')}` : ''}{s.message}</li>)}</ul>
         </div>
       )}
       {unsupported.length > 0 && (
         <div className="aie-unsup">
-          <div className="aie-ops-title">暂时做不到</div>
+          <div className="aie-ops-title">{L('暂时做不到', 'Not Supported Yet')}</div>
           {unsupported.map((u, i) => (
             <div key={i} className="aie-unsup-item">
-              <div><b>{u.request}</b>{u.why ? `：${u.why}` : ''}</div>
+              <div><b>{u.request}</b>{u.why ? `${L('：', ': ')}${u.why}` : ''}</div>
               {u.alternative && (
-                <button type="button" className="aie-example" title="填到输入框里，可以改一改再发送" onClick={() => onExample(u.alternative)}>
-                  换个做法：{u.alternative}
+                <button type="button" className="aie-example" title={L('填到输入框里，可以改一改再发送', 'Fill into input so you can tweak and send')} onClick={() => onExample(u.alternative)}>
+                  {L('换个做法：', 'Try instead: ')}{u.alternative}
                 </button>
               )}
             </div>
@@ -673,25 +784,30 @@ function MessageItem({ msg, project, canUndo, busy, onApply, onReject, onUndo, o
       )}
       {(planSteps.length > 0 || assumptions.length > 0) && (
         <details className="aie-plan">
-          <summary>AI 的思路{plan && plan.goal ? `：${plan.goal}` : ''}</summary>
+          <summary>{L('AI 的思路', 'AI Plan')}{plan && plan.goal ? `${L('：', ': ')}${plan.goal}` : ''}</summary>
           {planSteps.length > 0 && <ol>{planSteps.map((s, i) => <li key={i}>{s}</li>)}</ol>}
-          {assumptions.length > 0 && <div className="aie-plan-assume">我的理解：{assumptions.join('；')}</div>}
+          {assumptions.length > 0 && <div className="aie-plan-assume">{L('我的理解：', 'Assumptions: ')}{assumptions.join(L('；', '; '))}</div>}
         </details>
       )}
       {repair && (repair.fixed > 0 || repair.dropped > 0) && (
         <div className="aie-note">
           <Icon name="refresh" size={12} />
           <span>
-            {repair.fixed > 0 ? `有 ${repair.fixed} 步一开始没法执行，已自动修正。` : ''}
-            {repair.dropped > 0 ? `${repair.dropped} 步修不好，已放弃${strings(repair.notes).length ? `：${strings(repair.notes).join('；')}` : '。'}` : ''}
+            {repair.fixed > 0 ? L(`有 ${repair.fixed} 步一开始没法执行，已自动修正。`, `Auto-fixed ${repair.fixed} step(s) that could not run as drafted. `) : ''}
+            {repair.dropped > 0
+              ? L(
+                  `${repair.dropped} 步修不好，已放弃${strings(repair.notes).length ? `：${strings(repair.notes).join('；')}` : '。'}`,
+                  `Dropped ${repair.dropped} unfixable step(s)${strings(repair.notes).length ? `: ${strings(repair.notes).join('; ')}` : '.'}`,
+                )
+              : ''}
           </span>
         </div>
       )}
-      {errors.length > 0 && msg.status === 'error' && <div className="aie-err xs">{errors.join('；')}</div>}
+      {errors.length > 0 && msg.status === 'error' && <div className="aie-err xs">{errors.join(L('；', '; '))}</div>}
       {proposed && (
         <div className="aie-actions">
-          <Button size="sm" variant="primary" icon="check" onClick={onApply} disabled={busy}>应用</Button>
-          <Button size="sm" variant="ghost" onClick={onReject}>放弃</Button>
+          <Button size="sm" variant="primary" icon="check" onClick={onApply} disabled={busy}>{L('应用', 'Apply')}</Button>
+          <Button size="sm" variant="ghost" onClick={onReject}>{L('放弃', 'Dismiss')}</Button>
         </div>
       )}
       {msg.status === 'applied' && !msg.undone && (
@@ -701,19 +817,19 @@ function MessageItem({ msg, project, canUndo, busy, onApply, onReject, onUndo, o
             variant="ghost"
             icon="undo"
             className={canUndo ? '' : 'aie-undo-stale'}
-            title={canUndo ? '撤销这次修改' : '之后还有其它修改，请用撤销历史（Ctrl+Z）'}
+            title={canUndo ? L('撤销这次修改', 'Undo this edit') : L('之后还有其它修改，请用撤销历史（Ctrl+Z）', 'Later edits exist — use global Undo (Ctrl+Z)')}
             onClick={onUndo}
-          >撤销</Button>
+          >{L('撤销', 'Undo')}</Button>
         </div>
       )}
       {msg.status === 'error' && msg.retry && msg.command && (
         <div className="aie-actions">
-          <Button size="sm" variant="ghost" icon="refresh" onClick={onRetry} disabled={busy}>重试</Button>
+          <Button size="sm" variant="ghost" icon="refresh" onClick={onRetry} disabled={busy}>{L('重试', 'Retry')}</Button>
         </div>
       )}
       {msg.examples && (
         <div className="aie-examples">
-          {EXAMPLES.map((ex) => <button key={ex} type="button" className="aie-example" onClick={() => onExample(ex)}>{ex}</button>)}
+          {examplesList.map((ex) => <button key={ex} type="button" className="aie-example" onClick={() => onExample(ex)}>{ex}</button>)}
         </div>
       )}
       {Array.isArray(msg.materialRequests) && msg.materialRequests.map((req, i) => (

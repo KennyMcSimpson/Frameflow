@@ -1,4 +1,4 @@
-// AI 生成内容标识（契约 C10）：显式标识（画面角标）+ 隐式标识（文件元数据）。纯函数，node 可测。
+// AI 生成内容标识：显式标识（画面角标）+ 隐式标识（文件元数据）。纯函数，node 可测。
 //
 // 依据 GB 45438-2025《网络安全技术 人工智能生成合成内容标识方法》（2025-09-01 起实施）：
 //  - 视频显式标识：提示文字含「人工智能」或「AI」，并含「生成」和/或「合成」；位于画面的边或角；
@@ -7,7 +7,7 @@
 //    ContentPropagator、PropagateID、ReservedCode2。Label 取 "1"（属于）/"2"（可能）/"3"（疑似）。
 //    取值字符限 0x21、0x23–0x5B、0x5D–0x7E；同一文件只写一份。
 // 画面策略：开头 3 秒显示醒目标识（满足 5% 字高与 2 秒时长），随后 0.5 秒平滑缩成常驻角标
-// （字号约为画面高的 2.4%，白色 85% 不透明，柔和阴影，契约 C10）。
+// （字号约为画面高的 2.4%，白色 85% 不透明，柔和阴影）。
 
 import * as License from '../engine/license.js';
 
@@ -19,7 +19,7 @@ export const AI_LABEL_INTRO_SEC = 3;
 const SHRINK_SEC = 0.5;
 /** 醒目标识字号 / 画面最短边：汉字字面约占字号 90%，6% 字号 ≈ 5.4% 字高，满足「≥5%」 */
 const INTRO_RATIO = 0.06;
-/** 常驻角标字号 / 画面高（契约 C10：约 2.4%） */
+/** 常驻角标字号 / 画面高（约 2.4%） */
 const BADGE_RATIO = 0.024;
 const FONT_STACK = '"Microsoft YaHei UI","Microsoft YaHei","Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif';
 
@@ -32,7 +32,7 @@ const smooth = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 const AI_SOURCE_KINDS = new Set(['ai', 'ai-image', 'ai-video', 'videogen', 'generated']);
 const AI_TAGS = new Set(['AI 生成', 'AI生成', 'AI 画面', 'AI 视频', 'AI 配音']);
 
-/** 素材是否为 AI 生成：先问 license.isAiAsset（契约 C3），再认旧数据里的标记（videogen 字段、AI 标签等） */
+/** 素材是否为 AI 生成：先问 license.isAiAsset，再认旧数据里的标记（videogen 字段、AI 标签等） */
 export function isAiAssetLoose(asset) {
   if (!asset || typeof asset !== 'object') return false;
   try {

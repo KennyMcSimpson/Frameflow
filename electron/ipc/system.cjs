@@ -1,5 +1,5 @@
 'use strict';
-// 系统相关 IPC：app:info、文件对话框、shell、media:register、任务栏进度与通知（SPEC §2.2 system.cjs，契约 C19/C20）
+// 系统相关 IPC：app:info、文件对话框、shell、media:register、任务栏进度与通知
 const { dialog, shell, Notification } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -161,6 +161,31 @@ function optionalLib(name) {
   try { return require(`../lib/${name}.cjs`); } catch { return null; }
 }
 
+const CLI_PROVIDERS = new Set(['cli', 'claude', 'codex', 'gemini']);
+
+function hasConfiguredApi(store, sv, aiPresets) {
+  const ai = (sv && sv.ai && typeof sv.ai === 'object') ? sv.ai : {};
+  const preset = aiPresets && typeof aiPresets.getPreset === 'function' ? aiPresets.getPreset(ai.apiPreset) : null;
+  const protocol = String(ai.apiProtocol || (preset && preset.protocol) || 'openai').trim().toLowerCase();
+  const baseUrl = String(ai.openaiBaseUrl || (preset && preset.baseUrl) || '').trim();
+  const keylessLocal = !!(aiPresets && typeof aiPresets.isLocalKeylessUrl === 'function' && aiPresets.isLocalKeylessUrl(baseUrl));
+  const hasSecret = (name) => {
+    try {
+      if (store && typeof store.hasSecret === 'function') return !!store.hasSecret(name);
+      if (store && typeof store.getSecret === 'function') return !!String(store.getSecret(name) || '').trim();
+    } catch {}
+    return false;
+  };
+  const presetKeyless = !!(preset && preset.requiresKey === false);
+  const hasKey = protocol === 'anthropic'
+    ? (!presetKeyless && (hasSecret('anthropicKey') || hasSecret('openaiKey') || hasSecret('openai')))
+    : (!presetKeyless && (hasSecret('openaiKey') || hasSecret('openai')));
+  const hasAuth = hasKey || keylessLocal;
+  const model = String(ai.openaiModel || '').trim() || (preset && preset.model && hasAuth ? String(preset.model).trim() : '');
+  if (!baseUrl || !model) return false;
+  return hasAuth;
+}
+
 /** 同时兼容「设置仓库对象」和「普通设置数据」两种读法的 settings 视图 */
 function settingsView(store) {
   try {
@@ -227,20 +252,58 @@ module.exports = function register({ handle, ctx }) {
 
     const ytdlpLib = optionalLib('ytdlp');
     const codexLib = optionalLib('codex');
+    const aiPresetsLib = optionalLib('aiPresets');
+    const agentCliLib = optionalLib('agentCli');
 
     const ytdlpFallback = { installed: false, path: (() => { try { return paths.ytdlp; } catch { return null; } })(), version: null };
     const ytdlpP = ytdlpLib && typeof ytdlpLib.ytdlpStatus === 'function'
       ? withTimeout(ytdlpLib.ytdlpStatus(paths), 8000, ytdlpFallback)
       : Promise.resolve(ytdlpFallback);
-    const codexFallback = { ok: false, path: null, version: null, loggedIn: false };
-    const sv = settingsView(ctx.settings);
-    const aiProvider = String((sv && sv.ai && sv.ai.provider) || '').toLowerCase();
-    const skipCodexProbe = aiProvider === 'local' || aiProvider === 'openai' || aiProvider === 'none';
-    const codexP = !skipCodexProbe && codexLib && typeof codexLib.detectCodex === 'function'
-      ? withTimeout(codexLib.detectCodex(sv), 10000, codexFallback)
-      : Promise.resolve(codexFallback);
 
-    const [yt, cx] = await Promise.all([ytdlpP, codexP]);
+    const cliFallback = { ok: false, path: null, version: null, loggedIn: false };
+    const sv = settingsView(ctx.settings);
+    const aiProvider = String((sv && sv.ai && sv.ai.provider) || 'auto').trim().toLowerCase() || 'auto';
+    const shouldProbeCli = CLI_PROVIDERS.has(aiProvider)
+      || (aiProvider === 'auto' && !hasConfiguredApi(ctx.settings, sv, aiPresetsLib));
+
+    let cliProbeP = Promise.resolve({ codex: cliFallback, clis: null });
+    if (shouldProbeCli) {
+      if (aiProvider === 'codex') {
+        const p = codexLib && typeof codexLib.detectCodex === 'function'
+          ? withTimeout(codexLib.detectCodex(sv), 10000, cliFallback)
+          : Promise.resolve(cliFallback);
+        cliProbeP = p.then((cx) => ({ codex: cx, clis: { codex: { id: 'codex', ...cx } } }));
+      } else if (aiProvider === 'claude' || aiProvider === 'gemini') {
+        const p = agentCliLib && typeof agentCliLib.detectAgentCli === 'function'
+          ? withTimeout(agentCliLib.detectAgentCli(aiProvider, sv), 10000, { id: aiProvider, ...cliFallback })
+          : Promise.resolve({ id: aiProvider, ...cliFallback });
+        cliProbeP = p.then((info) => ({ codex: cliFallback, clis: { [aiProvider]: info } }));
+      } else if (aiProvider === 'cli') {
+        const target = String((sv && sv.ai && sv.ai.cliAgent) || 'claude').trim().toLowerCase();
+        const kind = (target === 'claude' || target === 'codex' || target === 'gemini') ? target : 'claude';
+        const p = agentCliLib && typeof agentCliLib.detectAgentCli === 'function'
+          ? withTimeout(agentCliLib.detectAgentCli(kind, sv), 10000, { id: kind, ...cliFallback })
+          : (kind === 'codex' && codexLib && typeof codexLib.detectCodex === 'function'
+            ? withTimeout(codexLib.detectCodex(sv), 10000, cliFallback).then((cx) => ({ id: 'codex', ...cx }))
+            : Promise.resolve({ id: kind, ...cliFallback }));
+        cliProbeP = p.then((info) => ({
+          codex: kind === 'codex' ? info : cliFallback,
+          clis: { [kind]: info },
+        }));
+      } else if (agentCliLib && typeof agentCliLib.detectAllAgentClis === 'function') {
+        cliProbeP = withTimeout(agentCliLib.detectAllAgentClis(sv), 10000, null)
+          .then((all) => ({
+            codex: (all && all.codex) || cliFallback,
+            clis: all || null,
+          }));
+      } else if (codexLib && typeof codexLib.detectCodex === 'function') {
+        cliProbeP = withTimeout(codexLib.detectCodex(sv), 10000, cliFallback)
+          .then((cx) => ({ codex: cx, clis: { codex: { id: 'codex', ...cx } } }));
+      }
+    }
+
+    const [yt, cliProbe] = await Promise.all([ytdlpP, cliProbeP]);
+    const cx = cliProbe && cliProbe.codex ? cliProbe.codex : cliFallback;
     const ytdlp = {
       ok: !!(yt && (yt.installed || yt.ok)),
       path: (yt && yt.path) || null,
@@ -252,7 +315,7 @@ module.exports = function register({ handle, ctx }) {
       version: (cx && cx.version) || null,
       loggedIn: !!(cx && cx.loggedIn),
     };
-    // 关于页用：许可清单、隐私说明（契约 C20，由 release 在 paths 里提供，可能为 null）
+    // 关于页用：许可清单、隐私说明（由 paths 提供，可能为 null）
     let licensesPath = null;
     let privacyPath = null;
     try { licensesPath = paths.licensesFile || null; } catch {}
@@ -266,6 +329,7 @@ module.exports = function register({ handle, ctx }) {
       ffprobe: { ok: fileOk(ffprobePath), path: ffprobePath || null },
       ytdlp,
       codex,
+      agentClis: (cliProbe && cliProbe.clis) || null,
       platform: process.platform,
       arch: process.arch,
       electron: process.versions.electron || null,
@@ -420,7 +484,7 @@ module.exports = function register({ handle, ctx }) {
     return true;
   });
 
-  // ---- 任务栏进度 / 闪烁 / 系统通知（契约 C19；导出等长任务用） ----
+  // ---- 任务栏进度 / 闪烁 / 系统通知（导出等长任务用） ----
   let lastProgress = -1;
   let flashing = false;
   let lastNotification = null; // 保留引用：通知对象被回收后点击就不会再把窗口叫回来

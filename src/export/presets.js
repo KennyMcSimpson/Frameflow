@@ -1,4 +1,4 @@
-// 导出预设（PLAN-v3 §5）：ExportDialog 与属性面板共用。纯数据 + 纯函数，node 可测。
+// 导出预设：ExportDialog 与属性面板共用。纯数据 + 纯函数，node 可测。
 // format：mp4（H.264 + AAC）、mov、gif（无声动图）、mp3 / wav（仅音频）。bitrate 单位 kbps，0 = 按质量（CRF）自动。
 
 export const EXPORT_PRESETS = [

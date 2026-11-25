@@ -1,5 +1,5 @@
 'use strict';
-// 编码器探测与选择（契约 C12）。纯 node 模块（不依赖 electron），便于单测。
+// 编码器探测与选择。纯 node 模块（不依赖 electron），便于单测。
 //
 // 为什么要“真编码 1 帧”：ffmpeg -encoders 只说明“编译进来了”，不代表这台机器能用。
 // 实测 AMF 会出现“列出来但用不了”（缺 amfrt64.dll），没有对应显卡的 nvenc/qsv 同理。
@@ -20,7 +20,7 @@ const CPU_H264 = ['libx264', 'libopenh264'];
 const QUALITIES = ['high', 'standard', 'small', 'proxy'];
 const PURPOSES = ['export', 'proxy', 'videogen', 'preview'];
 
-// 质量映射。high 对齐 x264 crf18（docs/research/export-perf.md §2.7 的初值，来自合成素材，待真实素材校准）
+// 质量档位映射：各硬件编码器按感知画质对齐 libx264 的 CRF 档位（high 对齐 crf 18）
 const X264_CRF = { high: 18, standard: 21, small: 26, proxy: 23 };
 const NVENC_CQ = { high: 26, standard: 28, small: 31, proxy: 30 };
 const QSV_GQ = { high: 21, standard: 24, small: 28, proxy: 26 };
@@ -349,7 +349,7 @@ async function withH264(pickOpts, fn) {
 /**
  * 设置项 media.encoder → 是否优先显卡编码。
  * 'cpu' 只用 CPU；'gpu' 有显卡编码就用；'auto'（默认）一般也优先显卡，
- * 唯一例外：导出 1080p 及以下、机器 ≥8 核且有 x264 时用 CPU——此时编码不是瓶颈，x264 同画质文件更小（export-perf §2.7）。
+ * 唯一例外：导出 1080p 及以下、机器 ≥8 核且有 x264 时用 CPU——此时编码不是瓶颈，x264 同画质文件更小。
  */
 function preferHwFor(setting, { purpose = 'export', width, height, available } = {}) {
   if (setting === 'cpu') return false;

@@ -1,4 +1,4 @@
-// 素材来源与许可（契约 C3）：纯函数，不依赖 ui。
+// 素材来源与许可：纯函数，不依赖 ui。
 // 统一读取新旧两套写法：
 //   新：asset.source = { kind, provider, id, url, pageUrl, author, authorUrl, title }，asset.license = { id, name, url } 或字符串 id
 //   旧：asset.source = 'stock' | 'previz' | 'videogen' | 'sample'（字符串）+ asset.stock = { platform, license, author, url }

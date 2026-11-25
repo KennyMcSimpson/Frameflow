@@ -8,6 +8,7 @@ import {
 import {
   VG_IDS, ovOf, toDraft, validate, toPatch, mergeVgProviders, applyArkKey,
   describeImageSource, arkTroubleshoot, stockTestResult, keyReady, providerReady,
+  cliStatusOf, applyApiPreset,
 } from '../src/ui/dialogs/settingsDialogUtils.js';
 import {
   fmtAgo, fmtSnapshotTime, normalizeSnapshots, isMissingHandler, groupSnapshotsByDay,
@@ -164,6 +165,89 @@ test('settingsDialogUtils：草稿校验、补丁转换、服务商合并与排�
   const seedance = merged[0];
   assert.equal(providerReady(seedance, { hasKey: (k) => k === 'arkKey' }), true);
   assert.equal(providerReady(merged[merged.length - 1], {}), false);
+});
+
+test('settingsDialogUtils：cliStatusOf 兼容真实 ai:status.clis 与 app:info.agentClis；applyApiPreset 支持 provider=api；toPatch 同步清理 anthropicKey', () => {
+  // 1) 真实 ai:status 载荷（{ clis: { claude, codex, gemini } }）：三家 CLI 均非空解析
+  const aiStatusPayload = {
+    provider: 'openai',
+    ready: true,
+    clis: {
+      claude: { id: 'claude', ok: true, path: '/usr/local/bin/claude', version: '1.0.24', loggedIn: true },
+      codex: { id: 'codex', ok: true, path: '/usr/local/bin/codex', version: '0.99.0', loggedIn: true },
+      gemini: { id: 'gemini', ok: true, path: '/usr/local/bin/gemini', version: '0.5.1', loggedIn: true },
+    },
+    codex: { ok: true, path: '/usr/local/bin/codex', version: '0.99.0', loggedIn: true },
+  };
+  for (const id of ['claude', 'codex', 'gemini']) {
+    const info = cliStatusOf(id, aiStatusPayload, null);
+    assert.ok(info, `ai:status 载荷下 cliStatusOf('${id}') 不应为 null`);
+    assert.equal(info.ok, true);
+    assert.equal(info.id, id);
+  }
+
+  // 2) 真实 app:info 载荷（{ agentClis: { claude, codex, gemini } }）：三家 CLI 均非空解析
+  const appInfoPayload = {
+    agentClis: {
+      claude: { id: 'claude', ok: true, path: '/opt/bin/claude', version: '1.1.0', loggedIn: true },
+      codex: { id: 'codex', ok: false, path: null, version: null, loggedIn: false },
+      gemini: { id: 'gemini', ok: true, path: '/opt/bin/gemini', version: '0.6.0', loggedIn: true },
+    },
+  };
+  for (const id of ['claude', 'codex', 'gemini']) {
+    const info = cliStatusOf(id, null, appInfoPayload);
+    assert.ok(info, `app:info 载荷下 cliStatusOf('${id}') 不应为 null`);
+    assert.equal(info.id, id);
+  }
+  assert.equal(cliStatusOf('claude', null, appInfoPayload).version, '1.1.0');
+  assert.equal(cliStatusOf('gemini', null, appInfoPayload).version, '0.6.0');
+  assert.equal(cliStatusOf('codex', null, appInfoPayload).ok, false);
+
+  // 3) aiStatus.clis 未探测时（ok: false），优先回退到 appInfo.agentClis 中已探测到的条目（RT2 P1-2）
+  const unprobedAiStatus = {
+    clis: {
+      claude: { id: 'claude', ok: false, path: null, version: null, loggedIn: false },
+      codex: { id: 'codex', ok: false, path: null, version: null, loggedIn: false },
+      gemini: { id: 'gemini', ok: false, path: null, version: null, loggedIn: false },
+    },
+  };
+  assert.equal(cliStatusOf('claude', unprobedAiStatus, appInfoPayload).ok, true);
+  assert.equal(cliStatusOf('gemini', unprobedAiStatus, appInfoPayload).ok, true);
+  assert.equal(cliStatusOf('', unprobedAiStatus, appInfoPayload), null);
+
+  // 4) applyApiPreset 当 provider === 'api' 时同步更新 provider 与 apiProtocol（RT2 P3-3）
+  const baseDraft = toDraft({ ai: { provider: 'api', apiProtocol: 'openai', openaiBaseUrl: 'https://api.openai.com/v1' } });
+  const toAnthropic = applyApiPreset(baseDraft, 'anthropic');
+  assert.equal(toAnthropic.provider, 'anthropic');
+  assert.equal(toAnthropic.apiProtocol, 'anthropic');
+  assert.equal(toAnthropic.apiPreset, 'anthropic');
+  assert.equal(toAnthropic.openaiBaseUrl, 'https://api.anthropic.com/v1');
+
+  const toDeepseek = applyApiPreset({ ...baseDraft, provider: 'api', apiProtocol: 'anthropic' }, 'deepseek');
+  assert.equal(toDeepseek.provider, 'openai');
+  assert.equal(toDeepseek.apiProtocol, 'openai');
+  assert.equal(toDeepseek.apiPreset, 'deepseek');
+
+  // 非 API 模式（auto）下应用预设不强改 provider
+  const autoPreset = applyApiPreset(toDraft({ ai: { provider: 'auto' } }), 'anthropic');
+  assert.equal(autoPreset.provider, 'auto');
+  assert.equal(autoPreset.apiProtocol, 'anthropic');
+
+  // 5) toPatch 清理 anthropicKey：清除 openaiKey 或在 anthropic 协议下录入新 Key 时同步清空旧 anthropicKey（RT2 P3-2）
+  const patchClearOpenai = toPatch(baseDraft, { openaiKey: true });
+  assert.equal(patchClearOpenai.openaiKey, '');
+  assert.equal(patchClearOpenai.anthropicKey, '');
+
+  const patchNewAnthropicKey = toPatch({ ...baseDraft, apiProtocol: 'anthropic', openaiKey: 'sk-ant-fresh-123' }, {});
+  assert.equal(patchNewAnthropicKey.openaiKey, 'sk-ant-fresh-123');
+  assert.equal(patchNewAnthropicKey.anthropicKey, '');
+
+  const patchClearAnthropic = toPatch(baseDraft, { anthropicKey: true });
+  assert.equal(patchClearAnthropic.anthropicKey, '');
+
+  const patchNewOpenaiKey = toPatch({ ...baseDraft, apiProtocol: 'openai', openaiKey: 'sk-openai-fresh-456' }, {});
+  assert.equal(patchNewOpenaiKey.openaiKey, 'sk-openai-fresh-456');
+  assert.equal('anthropicKey' in patchNewOpenaiKey, false, 'openai 协议录入新 Key 时不应误清 anthropicKey');
 });
 
 // ───────────────────────── versionHistoryUtils.js ─────────────────────────

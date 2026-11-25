@@ -1,6 +1,6 @@
-// 示例项目「示例：咖啡店宣传片」（CONTRACTS §B sample.js）。
+// 示例项目「示例：咖啡店宣传片」。
 // 启动页「从示例创建」使用；tracks 为空，由启动页再调用 buildFirstCut 生成初剪。
-// v3：每个镜头引用随安装包附带的真人实拍素材（build/sample-media → resources/sample-media，PLAN-v3 §7），
+// 每个镜头引用随安装包附带的真人实拍素材（build/sample-media → resources/sample-media），
 // 时间线用实拍；只有素材目录未知或文件缺失时才由 buildFirstCut 回退到 previz 占位。
 import { createProject, createBrief, createShot, createPrevizSpec, createAsset } from './model.js';
 import { uid } from './ids.js';
@@ -334,7 +334,7 @@ export function sampleMediaAssets(resources, { missing = [] } = {}) {
       height: m.height,
       fps: 25,
       hasAudio: false,
-      // source 保留旧字符串（多处按 'stock' 判断实拍）；许可按契约 C3 显式写上，导出署名和商用检查直接可用
+      // source 保留旧字符串（多处按 'stock' 判断实拍）；显式写入许可字段，导出署名和商用检查直接可用
       source: 'stock',
       credit: m.credit,
       stock: { platform: 'mixkit', url: m.url, license: m.license, author: '', sample: true },
@@ -347,7 +347,7 @@ export function sampleMediaAssets(resources, { missing = [] } = {}) {
 
 /**
  * @param {{resources?: string, appInfo?: {resources?: string}, missing?: string[]}} [opts]
- *   resources：api.appInfo().resources（W12 提供）；missing：已确认不存在的素材文件名。
+ *   resources：api.appInfo().resources；missing：已确认不存在的素材文件名。
  */
 export function createSampleProject(opts = {}) {
   const project = createProject({ name: '示例：咖啡店宣传片', aspect: '16:9' });

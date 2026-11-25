@@ -52,7 +52,7 @@ function buildLicense(dir) {
   } catch { return 'unknown'; }
 }
 
-// 定位 ffmpeg / ffprobe（契约 C8）。依次：
+// 定位 ffmpeg / ffprobe。查找顺序依次为：
 //   1. 环境变量 FF_FFMPEG / FF_FFPROBE（仅开发模式，文件存在才采用）
 //   2. <resources>/ffmpeg/（安装版随包的 LGPL 构建）
 //   3. <项目>/vendor/ffmpeg/bin/（开发，scripts/fetch-ffmpeg.mjs 的产物）
@@ -87,7 +87,7 @@ function locateBinary(name, ctx = {}) {
   return null;
 }
 
-// 只记一次日志，避免每次调用都刷屏。log.cjs 由 stability 提供（契约 C7），这里防御式调用。
+// 只记一次日志，避免每次调用都刷屏。防御式按需加载 ./log.cjs，避免循环依赖或模块缺失时报错。
 const warned = new Set();
 function warnMissing(name) {
   if (warned.has(name)) return;
@@ -162,12 +162,12 @@ function createPaths(settingsStore) {
     },
     get ytdlp() { return path.join(paths.bin, 'yt-dlp.exe'); },
 
-    // 内置音乐与音效目录（内含 manifest.json），没有时为 null（契约 C16）
+    // 内置音乐与音效目录（内含 manifest.json），没有时为 null
     get builtinAudio() {
       const hit = firstFile(resourceCandidates(path.join('builtin-audio', 'manifest.json'), path.join('builtin-audio', 'manifest.json')));
       return hit ? path.dirname(hit) : null;
     },
-    // 第三方许可与隐私说明（契约 C20），绝对路径或 null
+    // 第三方许可与隐私说明，绝对路径或 null
     get licensesFile() {
       return firstFile(resourceCandidates(path.join('licenses', 'THIRD_PARTY_LICENSES.txt'), 'THIRD_PARTY_LICENSES.txt'));
     },

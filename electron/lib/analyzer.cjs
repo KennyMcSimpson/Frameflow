@@ -299,7 +299,7 @@ function hexToRgb(hex) {
 }
 function rgbDist(a, b) { return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2); }
 
-/** rgb24 像素 → ColorStats（与 SPEC §3.6 一致）。主色用 MMCQ，实现在 shotdetect.cjs。 */
+/** rgb24 像素 → ColorStats。主色用 MMCQ，实现在 shotdetect.cjs。 */
 const { statsFromRgb } = shotdetect;
 
 async function privateColorStats(paths, imagePath, signal) {

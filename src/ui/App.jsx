@@ -1,10 +1,11 @@
 // 应用外壳：启动、首页/模式路由、全局快捷键、拖放提示、错误边界、对话框与通知挂载。
 import React, { Component, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import '../styles/shell.css';
-// PLAN-v3 §6：App 负责引入全部模块样式（新增的 css 文件自动包含）
+// App 负责引入全部模块样式（新增的 css 文件自动包含）
 import.meta.glob('../styles/*.css', { eager: true });
 import useStore from './store.js';
 import api from './api.js';
+import { getLocale, setLocale, t, useLocale, useT } from './i18n.js';
 import { Button, Icon, ProgressBar } from './components/ui.jsx';
 import { DND_ASSET, importFilesDialog, importPaths } from './assetActions.js';
 import TopBar, { Logo, goHome } from './components/TopBar.jsx';
@@ -36,7 +37,8 @@ function prefetchModes() {
 }
 
 function ModeLoading() {
-  return <div className="mode-loading"><span className="spinner" /><span>正在加载…</span></div>;
+  const tr = useT();
+  return <div className="mode-loading"><span className="spinner" /><span>{tr('app.loading')}</span></div>;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,29 +96,34 @@ class ErrorBoundary extends Component {
   render() {
     const { error, stack, saved } = this.state;
     if (!error) return this.props.children;
+    const isEn = (this.props.locale || getLocale()) === 'en-US';
+    const L = (zh, en) => (isEn ? en : zh);
     const savedText = {
-      saving: '正在保存项目…',
-      ok: '项目已保存，数据没有丢失。',
-      none: '当前没有打开的项目，无需保存。',
-      failed: '项目保存失败。修改还在内存里，请先点「重新加载界面」回到编辑，再按 Ctrl+S 保存。',
+      saving: L('正在保存项目…', 'Saving project…'),
+      ok: L('项目已保存，数据没有丢失。', 'Project saved — no data was lost.'),
+      none: L('当前没有打开的项目，无需保存。', 'No open project to save.'),
+      failed: L(
+        '项目保存失败。修改还在内存里，请先点「重新加载界面」回到编辑，再按 Ctrl+S 保存。',
+        'Failed to save project. Your changes are still in memory — click "Reload View" to return to editing, then press Ctrl+S to save.',
+      ),
     }[saved];
     return (
       <div className="err-screen" role="alert">
         <div className="err-card">
           <div className="err-mark"><Icon name="bolt" size={22} /></div>
-          <h2>这部分界面出了点问题</h2>
+          <h2>{L('这部分界面出了点问题', 'Something went wrong in this view')}</h2>
           <p className={'err-saved ' + saved}>{savedText}</p>
           <pre className="err-message selectable">{String((error && error.message) || error)}</pre>
           {stack && (
             <details className="err-details">
-              <summary>技术详情</summary>
+              <summary>{L('技术详情', 'Technical details')}</summary>
               <pre className="selectable">{stack.trim()}</pre>
             </details>
           )}
           <div className="err-actions">
-            <Button variant="primary" icon="refresh" onClick={this.reset} disabled={saved === 'saving'}>重新加载界面</Button>
-            {this.props.allowHome && useStore.getState().project && <Button icon="home" onClick={this.home} disabled={saved === 'saving'}>返回首页</Button>}
-            <Button variant="ghost" onClick={this.reload} disabled={saved === 'saving'}>重启应用界面</Button>
+            <Button variant="primary" icon="refresh" onClick={this.reset} disabled={saved === 'saving'}>{L('重新加载界面', 'Reload View')}</Button>
+            {this.props.allowHome && useStore.getState().project && <Button icon="home" onClick={this.home} disabled={saved === 'saving'}>{L('返回首页', 'Back to Home')}</Button>}
+            <Button variant="ghost" onClick={this.reload} disabled={saved === 'saving'}>{L('重启应用界面', 'Restart App UI')}</Button>
           </div>
         </div>
       </div>
@@ -128,11 +135,13 @@ class ErrorBoundary extends Component {
 // 启动画面
 // ---------------------------------------------------------------------------
 function Splash() {
+  const locale = useLocale();
+  const tr = useT();
   return (
     <div className="splash">
       <Logo size={64} />
-      <div className="splash-name">镜流 <b>Frameflow</b></div>
-      <div className="splash-sub">AI 视频工作站</div>
+      <div className="splash-name">{locale === 'zh-CN' ? <>镜流 <b>Frameflow</b></> : <b>Frameflow</b>}</div>
+      <div className="splash-sub">{tr('app.tagline')}</div>
       <div className="splash-bar"><ProgressBar indeterminate /></div>
     </div>
   );
@@ -170,7 +179,7 @@ function useGlobalShortcuts() {
         if (!st.project || e.repeat) return;
         st.saveNow().then(() => {
           const s = useStore.getState();
-          if (s.saveState === 'saved') s.toast('已保存', 'ok', 1400);
+          if (s.saveState === 'saved') s.toast(t('top.save.saved'), 'ok', 1400);
         });
         return;
       }
@@ -259,19 +268,26 @@ function useExternalFileDrop() {
       if (!isExternal(e)) return;
       if (e.defaultPrevented) return; // 内层模块已经处理
       e.preventDefault();
+      const isEn = getLocale() === 'en-US';
       const st = useStore.getState();
       if (!st.project) {
-        st.toast('请先新建或打开一个项目，再导入素材', 'warn');
+        st.toast(isEn ? 'Create or open a project before importing media' : '请先新建或打开一个项目，再导入素材', 'warn');
         return;
       }
       const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
       const paths = files.map((f) => api.pathForFile(f)).filter(Boolean);
       if (paths.length) {
-        importPaths(paths).catch((err) => useStore.getState().toast('导入失败：' + err.message, 'error'));
+        importPaths(paths).catch((err) => useStore.getState().toast((getLocale() === 'en-US' ? 'Import failed: ' : '导入失败：') + err.message, 'error'));
         return;
       }
-      st.toast('拖入的文件无法直接读取路径，已打开导入窗口，请在里面选择文件', 'info', 4500);
-      importFilesDialog().catch((err) => useStore.getState().toast('导入失败：' + err.message, 'error'));
+      st.toast(
+        isEn
+          ? 'Could not read the dropped file path directly — opened the import dialog instead'
+          : '拖入的文件无法直接读取路径，已打开导入窗口，请在里面选择文件',
+        'info',
+        4500,
+      );
+      importFilesDialog().catch((err) => useStore.getState().toast((getLocale() === 'en-US' ? 'Import failed: ' : '导入失败：') + err.message, 'error'));
     };
     // 捕获阶段复位提示：内层模块 stopPropagation 时冒泡阶段收不到 drop
     const onDropCapture = () => { depth = 0; setDragging(false); };
@@ -292,12 +308,14 @@ function useExternalFileDrop() {
 }
 
 function DropHint({ hasProject }) {
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   return (
     <div className="drop-hint" aria-hidden="true">
       <div className="drop-hint-card">
         <Icon name="upload" size={26} />
-        <b>{hasProject ? '松开即可导入素材' : '请先打开一个项目'}</b>
-        <span>{hasProject ? '视频、图片和音频会直接加入当前项目的素材箱' : '打开或新建项目后，就可以导入素材了'}</span>
+        <b>{hasProject ? L('松开即可导入素材', 'Drop to Import Media') : L('请先打开一个项目', 'Open a Project First')}</b>
+        <span>{hasProject ? L('视频、图片和音频会直接加入当前项目的素材箱', 'Videos, images, and audio will be added to your current project') : L('打开或新建项目后，就可以导入素材了', 'Open or create a project to import media files')}</span>
       </div>
     </div>
   );
@@ -330,9 +348,12 @@ function Dialogs() {
 
 export default function App() {
   const ready = useStore((s) => s.ready);
+  const settingsLocale = useStore((s) => s.settings && s.settings.ui && s.settings.ui.locale);
   const projectId = useStore((s) => (s.project ? s.project.id : null));
   const projectName = useStore((s) => (s.project ? s.project.name : ''));
   const mode = useStore((s) => s.mode);
+  const locale = useLocale();
+  const tr = useT();
   const [libraryOnly, setLibraryOnly] = useState(false);
   const started = useRef(false);
 
@@ -344,13 +365,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!ready && !settingsLocale) return;
+    setLocale(settingsLocale || 'zh-CN');
+  }, [ready, settingsLocale]);
+
+  useEffect(() => {
     const onOpenShortcuts = () => useStore.getState().openDialog('shortcuts');
     window.addEventListener('ff:open-shortcuts', onOpenShortcuts);
     return () => window.removeEventListener('ff:open-shortcuts', onOpenShortcuts);
   }, []);
 
   useEffect(() => { if (projectId) setLibraryOnly(false); }, [projectId]);
-  useEffect(() => { document.title = projectId ? `${projectName || '未命名项目'} — 镜流 Frameflow` : '镜流 Frameflow'; }, [projectId, projectName]);
+  useEffect(() => {
+    const brand = tr('app.brand');
+    document.title = projectId ? `${projectName || tr('app.untitledProject')} — ${brand}` : brand;
+  }, [projectId, projectName, locale, tr]);
 
   useGlobalShortcuts();
   const dragging = useExternalFileDrop();
@@ -363,7 +392,7 @@ export default function App() {
       <>
         <TopBar />
         <main className="app-main">
-          <ErrorBoundary resetKey={`${projectId}:${mode}`} allowHome>
+          <ErrorBoundary resetKey={`${projectId}:${mode}`} allowHome locale={locale}>
             <div className="mode-host" key={`${projectId}:${mode}`}><ModeView mode={mode} /></div>
           </ErrorBoundary>
         </main>
@@ -376,7 +405,7 @@ export default function App() {
       <>
         <TopBar standalone onExitStandalone={() => setLibraryOnly(false)} />
         <main className="app-main">
-          <ErrorBoundary resetKey="library-only">
+          <ErrorBoundary resetKey="library-only" locale={locale}>
             <div className="mode-host"><Suspense fallback={<ModeLoading />}><LibraryMode /></Suspense></div>
           </ErrorBoundary>
         </main>
@@ -388,7 +417,7 @@ export default function App() {
   }
 
   return (
-    <ErrorBoundary resetKey="root">
+    <ErrorBoundary resetKey="root" locale={locale}>
       <div className="app-shell">
         {body}
         <Dialogs />

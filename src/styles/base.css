@@ -1,4 +1,4 @@
-/* 基础样式 + 通用组件类（W1 设计系统；Frameflow4 · design：全部改用 tokens.css 令牌，控件高度 24/30/38 三档，键盘焦点环统一）。
+/* 基础样式 + 通用组件类（统一使用 tokens.css 设计令牌，控件高度 24/30/38 三档，键盘焦点环统一）。
    各模块 css 在此基础上扩展。 */
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }

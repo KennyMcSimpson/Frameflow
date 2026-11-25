@@ -1,4 +1,4 @@
-// 自定义快捷键的读写（契约 C11：settings.shortcuts.overrides = { [actionId]: string[] }）。
+// 自定义快捷键的读写（settings.shortcuts.overrides = { [actionId]: string[] }）。
 // 合并、校验、冲突处理都在 registry.js（纯函数）；这里只管「从哪读、往哪写」和 React 订阅。
 // 主进程的 settings:set 只接受 DEFAULTS 里有的顶层键：设置里还没有 shortcuts 这一项时会被丢掉，
 // 所以每次保存同时在本机 localStorage 留一份，读取时设置里没有就用本机这份，保证改过的按键重启后还在。

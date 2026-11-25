@@ -16,10 +16,10 @@ const { createPaths } = require('./lib/paths.cjs');
 const { createJobs } = require('./lib/jobs.cjs');
 const { createSettings } = require('./lib/settings.cjs');
 
-const APP_ID = 'com.frameflow.desktop'; // 与 package.json 的 build.appId 一致（契约 C17）
+const APP_ID = 'com.frameflow.desktop'; // 与 package.json 的 build.appId 保持一致
 const RENDERER_DIR = path.join(__dirname, '..', 'dist-renderer');
 const RENDERER_INDEX = path.join(RENDERER_DIR, 'index.html');
-const CLOSE_FLUSH_MS = 5000;          // 关窗时等界面保存的上限（契约 C14）
+const CLOSE_FLUSH_MS = 5000;          // 关窗时等界面保存的上限
 const UNRESPONSIVE_GRACE_MS = 10000;  // 界面没响应多久之后才询问用户
 const CRASH_WINDOW_MS = 5 * 60 * 1000;
 const CRASH_LOOP_COUNT = 3;           // 5 分钟内第 3 次崩溃：不再直接重载，建议关闭硬件加速
@@ -36,7 +36,7 @@ function safeDevUrl(raw) {
 }
 
 const isPackaged = !!app.isPackaged;
-// FF_DEV_URL 只在未打包时生效：发行版设置了也不会加载外部页面（a-gates R3：曾可借此调用全部 IPC）
+// FF_DEV_URL 只在未打包时生效：发行版设置了也不会加载外部页面，防止外部页面调用主进程 IPC
 const devUrl = isPackaged ? null : safeDevUrl(process.env.FF_DEV_URL);
 const devOrigin = devUrl ? new URL(devUrl).origin : null;
 const isDev = !!devUrl;
@@ -57,7 +57,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 // 单实例：第二个进程只把命令行（例如双击的 .ffproj）转交给第一个，然后立刻退出——
-// 不做任何初始化，也不碰 running.lock（pkg 报告 #6）。真正的初始化在文件末尾的 bootstrap()。
+// 不做任何初始化，也不碰 running.lock，避免误删主实例的运行锁。真正的初始化在文件末尾的 bootstrap()。
 const gotLock = isE2E || app.requestSingleInstanceLock();
 if (!gotLock) app.exit(0);
 
@@ -115,7 +115,7 @@ function sampleMediaDir() {
   return app.isPackaged ? path.join(process.resourcesPath, 'sample-media') : path.join(__dirname, '..', 'build', 'sample-media');
 }
 
-// running.lock：启动时写入、正常退出时删除；启动时还在说明上次没有正常退出（P0-8.5）。
+// running.lock：启动时写入、正常退出时删除；启动时还在说明上次没有正常退出。
 // 运行中每分钟刷新一次 lastSeenAt，下次启动就能告诉用户大概是什么时候出的问题。
 const lockFile = () => path.join(app.getPath('userData'), 'running.lock');
 let lastCrash = null;
@@ -185,7 +185,7 @@ let pendingOpenFile = null;
 function openProjectFile(file) {
   if (!file) return;
   log.info('[main] 打开工程文件', file);
-  // 页面还在加载时先记下，did-finish-load 时再发；preload 也会替还没订阅的界面暂存（契约 C13）
+  // 页面还在加载时先记下，did-finish-load 时再发；preload 也会替还没订阅的界面暂存
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) send('app:openFile', { path: file });
   else pendingOpenFile = file;
 }
@@ -624,7 +624,7 @@ function onWebContentsCreated(_e, contents) {
 }
 
 // ---------------------------------------------------------------------------
-// 关窗前保存（契约 C14）
+// 关窗前保存
 // ---------------------------------------------------------------------------
 let flushSeq = 0;
 const pendingFlush = new Map();
@@ -800,7 +800,7 @@ function createWindow() {
   let dialogOpen = false;
   let crashTimes = [];
   let selfKilledAt = 0;    // 我们主动结束卡死的界面时，不再弹崩溃提示
-  let recoverInfo = null;  // 重新载入后要告诉界面的恢复信息（契约 C13 app:crashRecovered）
+  let recoverInfo = null;  // 重新载入后要通过 app:crashRecovered 告诉界面的恢复信息
   let unresponsiveTimer = null;
   let unresponsiveAbort = null;
 
@@ -839,7 +839,7 @@ function createWindow() {
     (level === 'error' ? log.error : log.warn)(`[renderer] ${msg}${where}`);
   });
 
-  // 关窗：先确认任务，再让界面存盘，失败时询问（契约 C14）
+  // 关窗：先确认任务，再让界面存盘，失败时询问
   win.on('close', (e) => {
     if (allowClose || sessionEnding) return;
     e.preventDefault();
@@ -964,7 +964,7 @@ function createWindow() {
   wc.on('did-navigate', () => { flushSubscribed = false; });
   wc.on('did-finish-load', () => {
     state.pageLoaded = true;
-    // 上次没有正常退出：只在本次启动第一次载入时告诉界面（契约 C13，载荷 { at, kind:'app', ... }）
+    // 上次没有正常退出：只在本次启动第一次载入时告诉界面（载荷 { at, kind:'app', ... }）
     if (lastCrash && !appCrashNotified) { appCrashNotified = true; send('app:crashRecovered', { ...lastCrash, kind: 'app' }); }
     if (recoverInfo) { const info = recoverInfo; recoverInfo = null; send('app:crashRecovered', info); }
     if (pendingOpenFile) { const f = pendingOpenFile; pendingOpenFile = null; send('app:openFile', { path: f }); }
@@ -1118,7 +1118,7 @@ function bootstrap() {
   log.init({ dir: path.join(app.getPath('userData'), 'logs'), echo: isDev ? 'info' : 'warn' });
   log.takeOverConsole();
   if (process.env.FF_DEV_URL && !devUrl) log.warn('[main] 已忽略 FF_DEV_URL', isPackaged ? '（安装版不加载开发地址）' : '（只允许本机地址）');
-  if (process.platform === 'win32') app.setAppUserModelId(APP_ID); // 任务栏分组、系统通知归属（契约 C17）
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID); // 任务栏分组、系统通知归属
   app.enableSandbox();
   try { settingsRef = createSettings(); } catch (e) { log.error('[main] 读取设置失败', e); }
   applyGpuPrefs();

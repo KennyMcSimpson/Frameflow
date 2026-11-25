@@ -1,4 +1,4 @@
-// 渲染端 IPC 包装。所有模块通过它访问主进程（SPEC §2）。
+// 渲染端 IPC 包装。所有模块通过它访问主进程。
 const ff = typeof window !== 'undefined' ? window.ff : null;
 
 const waiters = new Map(); // jobId -> {resolve, reject, onProgress}
@@ -86,7 +86,7 @@ export const api = {
 
   /**
    * 主进程要求立即保存时调用 cb（关窗、关机前）。cb 返回 false 或抛错表示没保存成功，
-   * 主进程会据此询问用户要不要直接关闭（契约 C14）；返回其它值都算成功。
+   * 主进程会据此询问用户要不要直接关闭；返回其它值都算成功。
    */
   onFlush(cb) {
     if (!ff) return () => {};
@@ -106,7 +106,7 @@ export const api = {
   },
 
   /**
-   * 订阅系统事件（契约 C13），返回取消订阅函数：
+   * 订阅系统事件，返回取消订阅函数：
    * - 'app:openFile'       { path }：双击 .ffproj 或从命令行打开工程
    * - 'app:crashRecovered' { at, kind:'app'|'renderer', reason? }：上次没正常退出 / 界面刚从崩溃中恢复
    * 页面刚载入时就到达的事件会暂存，订阅后补发。
@@ -116,20 +116,38 @@ export const api = {
     try { return ff.on(name, cb) || (() => {}); } catch { return () => {}; }
   },
 
+  /** 订阅外部工程热同步事件（Live Watch）：cb({ id, filePath, project, meta }) */
+  onProjectExternalChange(cb) {
+    if (!ff || typeof cb !== 'function') return () => {};
+    try { return ff.on('project:externalChange', cb) || (() => {}); } catch { return () => {}; }
+  },
+
+  /** 启动当前工程文件的实时监听：{ id, filePath? } -> { ok, filePath } */
+  watchProject(payload) {
+    if (!ff) return Promise.reject(new Error('不在桌面环境中运行'));
+    return ff.invoke('project:watch', payload || {});
+  },
+
+  /** 停止当前工程文件的实时监听 */
+  unwatchProject() {
+    if (!ff) return Promise.reject(new Error('不在桌面环境中运行'));
+    return ff.invoke('project:unwatch');
+  },
+
   /** 拖进来的文件 → 本机绝对路径，取不到时为 '' */
   pathForFile(file) {
     if (!ff || !file || typeof ff.pathForFile !== 'function') return '';
     try { return ff.pathForFile(file) || ''; } catch { return ''; }
   },
 
-  /** 任务栏进度、闪烁和系统通知（契约 C19）：{ progress?:0–1 或 -1 清除, mode?, flash?, notify?:{title, body} } */
+  /** 任务栏进度、闪烁和系统通知：{ progress?:0–1 或 -1 清除, mode?, flash?, notify?:{title, body} } */
   taskbar(opts) {
     if (!ff) return Promise.resolve(false);
     return ff.invoke('app:taskbar', opts || {}).catch(() => false);
   },
 };
 
-// ---- PLAN-v3 §4：AI 真人视频生成 / 语音识别 / 导出单帧 ----
+// ---- AI 真人视频生成 / 语音识别 / 导出单帧 ----
 api.videogen = {
   /** -> [{id,label,vendor,caps,configured,priceHint,needs,keyUrl,defaultModel,isMock}] */
   providers: () => api.call('videogen:providers'),

@@ -1,26 +1,196 @@
-// 设置对话框用的纯函数与常量（不依赖 React / store，便于单测）。
-// 草稿 ⇄ 设置补丁的换算、AI 视频服务商列表合并、即梦（火山方舟）相关的提示文字都在这里。
+// 设置对话框纯函数与常量（不依赖 React / store，便于单测）。
+// 包含多服务商 API 预设、本地 Agent CLI 定义、草稿 ⇄ 设置补丁换算、AI 视频服务商合并与排错辅助。
 
 export const SECRET_KEYS = ['openaiKey', 'pexelsKey', 'pixabayKey'];
 /** 与 electron/lib/settings.cjs 的 VIDEOGEN_SECRETS 保持一致（加密保存，不写进 settings.json） */
 export const VG_SECRETS = ['arkKey', 'klingAk', 'klingSk', 'minimaxKey', 'runwayKey', 'geminiKey', 'soraKey', 'lumaKey', 'falKey', 'jimengAk', 'jimengSk'];
-/** 默认展示顺序：即梦排第一 */
+/** 默认展示顺序 */
 export const VG_IDS = ['seedance', 'kling', 'minimax', 'runway', 'veo', 'sora', 'luma', 'fal', 'mock'];
-/** 只有主进程报告了才展示的服务商（对应的后端可能还没合入） */
+/** 只有主进程报告了才展示的服务商 */
 export const VG_OPTIONAL_IDS = ['jimeng-visual'];
 
 export const ARK_CONSOLE_URL = 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey';
 export const ARK_IMAGE_MODEL = 'doubao-seedream-4-0-250828';
 export const ARK_VIDEO_MODEL = 'doubao-seedance-1-0-pro-250528';
 
+/** 界面支持语言 */
+export const SUPPORTED_LOCALES = [
+  { value: 'zh-CN', label: '简体中文' },
+  { value: 'en-US', label: 'English' },
+];
+
+/** 8 组主流在线与本地大模型 API 预设（与主进程 electron/lib/aiPresets.cjs 对齐） */
+export const AI_API_PRESETS = [
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    labelEn: 'OpenAI',
+    protocol: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4.1-mini',
+    visionModel: 'gpt-4.1-mini',
+    imageModel: 'gpt-image-1',
+    requiresKey: true,
+    keyPlaceholder: 'sk-…',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    hint: 'OpenAI 官方接口，支持文本、视觉与图片生成',
+    hintEn: 'Official OpenAI API (text, vision & image generation)',
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    labelEn: 'DeepSeek',
+    protocol: 'openai',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    visionModel: '',
+    imageModel: '',
+    requiresKey: true,
+    keyPlaceholder: 'sk-…',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    hint: 'DeepSeek OpenAI 兼容接口，中文与推理性价比高',
+    hintEn: 'DeepSeek OpenAI-compatible reasoning & chat API',
+  },
+  {
+    id: 'anthropic',
+    label: 'Claude',
+    labelEn: 'Claude',
+    protocol: 'anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+    model: 'claude-sonnet-4-20250514',
+    visionModel: 'claude-sonnet-4-20250514',
+    imageModel: '',
+    requiresKey: true,
+    keyPlaceholder: 'sk-ant-…',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    hint: 'Anthropic Claude 原生 Messages API，支持视觉理解',
+    hintEn: 'Anthropic Claude native Messages API with vision',
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini',
+    labelEn: 'Gemini',
+    protocol: 'openai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    model: 'gemini-2.5-flash',
+    visionModel: 'gemini-2.5-flash',
+    imageModel: '',
+    requiresKey: true,
+    keyPlaceholder: 'AIza…',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    hint: 'Google Gemini 官方 OpenAI 兼容端点，支持多模态视觉',
+    hintEn: 'Google Gemini OpenAI-compatible endpoint with vision',
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    labelEn: 'OpenRouter',
+    protocol: 'openai',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'openai/gpt-4.1-mini',
+    visionModel: 'openai/gpt-4.1-mini',
+    imageModel: '',
+    requiresKey: true,
+    keyPlaceholder: 'sk-or-…',
+    keyUrl: 'https://openrouter.ai/keys',
+    hint: '多模型聚合网关，一个 Key 调用 Claude / GPT / Gemini / DeepSeek',
+    hintEn: 'Unified gateway for Claude, GPT, Gemini, DeepSeek & more',
+  },
+  {
+    id: 'ark',
+    label: '火山方舟',
+    labelEn: 'Volcengine Ark',
+    protocol: 'openai',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-seed-1-6-250615',
+    visionModel: 'doubao-seed-1-6-250615',
+    imageModel: '',
+    requiresKey: true,
+    keyPlaceholder: '火山方舟 API Key',
+    keyUrl: ARK_CONSOLE_URL,
+    hint: '火山方舟 OpenAI 兼容接口（豆包 / Seedream）',
+    hintEn: 'Volcengine Ark OpenAI-compatible API (Doubao / Seedream)',
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama 本地',
+    labelEn: 'Ollama (Local)',
+    protocol: 'openai',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    model: 'qwen2.5:14b',
+    visionModel: '',
+    imageModel: '',
+    requiresKey: false,
+    local: true,
+    keyPlaceholder: '本机 Ollama 无需填写 API Key',
+    keyUrl: 'https://ollama.com/',
+    hint: '本机离线 Ollama 服务，无需 API Key，数据不出本机',
+    hintEn: 'Local offline Ollama server — no API key required',
+  },
+  {
+    id: 'lmstudio',
+    label: 'LM Studio 本地',
+    labelEn: 'LM Studio (Local)',
+    protocol: 'openai',
+    baseUrl: 'http://127.0.0.1:1234/v1',
+    model: 'local-model',
+    visionModel: '',
+    imageModel: '',
+    requiresKey: false,
+    local: true,
+    keyPlaceholder: '本机 LM Studio 无需填写 API Key',
+    keyUrl: 'https://lmstudio.ai/',
+    hint: '本机 LM Studio 推理服务，无需 API Key，数据不出本机',
+    hintEn: 'Local LM Studio server — no API key required',
+  },
+];
+
+/** 平等可选的本机 Agent CLI 定义（按需启用，不绑定单一厂商） */
+export const CLI_AGENTS = [
+  {
+    id: 'claude',
+    label: 'Claude Code',
+    command: 'claude',
+    pathField: 'claudePath',
+    modelField: 'claudeModel',
+    loginHint: 'claude',
+    docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
+    desc: '调用本机已登录的 Anthropic Claude Code CLI',
+    descEn: 'Use your locally signed-in Anthropic Claude Code CLI',
+  },
+  {
+    id: 'codex',
+    label: 'Codex CLI',
+    command: 'codex',
+    pathField: 'codexPath',
+    modelField: 'codexModel',
+    loginHint: 'codex login',
+    docsUrl: 'https://developers.openai.com/codex',
+    desc: '调用本机已登录的 OpenAI Codex CLI',
+    descEn: 'Use your locally signed-in OpenAI Codex CLI',
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    command: 'gemini',
+    pathField: 'geminiPath',
+    modelField: 'geminiModel',
+    loginHint: 'gemini',
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    desc: '调用本机已登录的 Google Gemini CLI',
+    descEn: 'Use your locally signed-in Google Gemini CLI',
+  },
+];
+const CLI_AGENT_IDS = CLI_AGENTS.map((a) => a.id);
+
 // 渲染端兜底元数据（主进程 videogen:providers 不可用时）
 export const VG_FALLBACK = {
-  seedance: { label: '即梦（火山方舟）', vendor: '字节跳动', needs: ['key'], keyFields: { key: 'arkKey' }, priceHint: '约 ¥1.5–3.7 / 5 秒', keyUrl: ARK_CONSOLE_URL, defaultModel: ARK_VIDEO_MODEL },
+  seedance: { label: '即梦（火山方舟）', vendor: '火山方舟 / 字节跳动', needs: ['key'], keyFields: { key: 'arkKey' }, priceHint: '约 ¥1.5–3.7 / 5 秒', keyUrl: ARK_CONSOLE_URL, defaultModel: ARK_VIDEO_MODEL },
   'jimeng-visual': { label: '即梦AI（火山引擎视觉服务）', vendor: '字节跳动', needs: ['ak', 'sk'], keyFields: { ak: 'jimengAk', sk: 'jimengSk' }, priceHint: '按火山引擎价格计费', keyUrl: 'https://console.volcengine.com/iam/keymanage/' },
   kling: { label: '可灵 Kling', vendor: '快手', needs: ['ak', 'sk'], keyFields: { ak: 'klingAk', sk: 'klingSk' }, priceHint: '约 ¥1–3.5 / 5 秒', keyUrl: 'https://app.klingai.com/cn/dev/console/application' },
   minimax: { label: '海螺 Hailuo（MiniMax）', vendor: 'MiniMax', needs: ['key'], keyFields: { key: 'minimaxKey' }, priceHint: '约 ¥2–3.5 / 6 秒', keyUrl: 'https://platform.minimaxi.com/' },
   runway: { label: 'Runway Gen-4', vendor: 'Runway', needs: ['key'], keyFields: { key: 'runwayKey' }, priceHint: '约 $0.25–0.5 / 5 秒', keyUrl: 'https://dev.runwayml.com/' },
-  veo: { label: 'Google Veo', vendor: 'Google', needs: ['key'], keyFields: { key: 'geminiKey' }, priceHint: '约 $0.15–0.4 / 秒', keyUrl: 'https://aistudio.google.com/apikey' },
+  veo: { label: 'Google Veo (Gemini)', vendor: 'Google', needs: ['key'], keyFields: { key: 'geminiKey' }, priceHint: '约 $0.15–0.4 / 秒', keyUrl: 'https://aistudio.google.com/apikey' },
   sora: { label: 'OpenAI Sora 2', vendor: 'OpenAI', needs: ['key'], keyFields: { key: 'soraKey', fallback: 'openaiKey' }, priceHint: '约 $0.1 / 秒', keyUrl: 'https://platform.openai.com/api-keys' },
   luma: { label: 'Luma Ray 2', vendor: 'Luma AI', needs: ['key'], keyFields: { key: 'lumaKey' }, priceHint: '约 $0.4–1.6 / 5 秒', keyUrl: 'https://lumalabs.ai/dream-machine/api/keys' },
   fal: { label: 'fal.ai 聚合', vendor: 'fal.ai', needs: ['key'], keyFields: { key: 'falKey' }, priceHint: '按所选模型计价', keyUrl: 'https://fal.ai/dashboard/keys' },
@@ -32,7 +202,7 @@ export const FIELD_LABEL = { key: 'API Key', ak: 'AccessKey', sk: 'SecretKey' };
 export const IMAGE_PROVIDERS = [
   { value: 'auto', label: '自动' },
   { value: 'openai', label: 'OpenAI 兼容接口' },
-  { value: 'ark', label: '即梦' },
+  { value: 'ark', label: '火山方舟（即梦）' },
 ];
 const IMAGE_PROVIDER_VALUES = IMAGE_PROVIDERS.map((p) => p.value);
 
@@ -44,8 +214,181 @@ export const FREE_SOURCES = [
   { id: 'nasa', name: 'NASA 影像库', en: 'NASA Image and Video Library', kinds: '视频 · 图片', license: '公有领域' },
 ];
 
-const emptyOv = () => ({ baseUrl: '', model: '' });
 const str = (v) => String(v == null ? '' : v);
+const normUrl = (u) => str(u).trim().replace(/\/+$/, '').toLowerCase();
+
+function normalizeUiLocale(v) {
+  const s = str(v).trim().toLowerCase();
+  if (s === 'en' || s.startsWith('en-')) return 'en-US';
+  return 'zh-CN';
+}
+
+/** 合并主进程 ai:presets 返回的预设列表与本地兜底列表 */
+export function mergeApiPresets(remote) {
+  const source = remote && typeof remote === 'object' && !Array.isArray(remote)
+    ? (remote.presets || remote.apiPresets || remote.api || remote)
+    : remote;
+  const byId = new Map();
+  if (Array.isArray(source)) {
+    for (const item of source) {
+      if (item && typeof item === 'object' && typeof item.id === 'string' && item.id) byId.set(item.id, item);
+    }
+  } else if (source && typeof source === 'object') {
+    for (const [id, item] of Object.entries(source)) {
+      if (item && typeof item === 'object') byId.set(item.id || id, { id, ...item });
+    }
+  }
+  return AI_API_PRESETS.map((base) => {
+    const r = byId.get(base.id);
+    if (!r) return base;
+    const protocol = (r.protocol === 'anthropic' || r.apiProtocol === 'anthropic')
+      ? 'anthropic'
+      : (r.protocol === 'openai' || r.apiProtocol === 'openai')
+        ? 'openai'
+        : base.protocol;
+    const requiresKey = typeof r.requiresKey === 'boolean'
+      ? r.requiresKey
+      : typeof r.needsKey === 'boolean'
+        ? r.needsKey
+        : typeof r.noKey === 'boolean'
+          ? !r.noKey
+          : typeof r.keyOptional === 'boolean'
+            ? !r.keyOptional
+            : base.requiresKey;
+    return {
+      ...base,
+      protocol,
+      baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : base.baseUrl,
+      model: typeof r.model === 'string' && r.model.trim() ? r.model.trim() : (typeof r.defaultModel === 'string' && r.defaultModel.trim() ? r.defaultModel.trim() : base.model),
+      visionModel: typeof r.visionModel === 'string' ? r.visionModel : base.visionModel,
+      imageModel: typeof r.imageModel === 'string' ? r.imageModel : base.imageModel,
+      requiresKey,
+    };
+  });
+}
+
+/**
+ * 一键应用 API 预设：填充 apiPreset、apiProtocol、openaiBaseUrl、openaiModel、
+ * openaiVisionModel、openaiImageModel；若当前处于 API 模式则同步协议对应的 provider。
+ */
+export function applyApiPreset(draft, presetId, presets = AI_API_PRESETS) {
+  const list = Array.isArray(presets) && presets.length ? presets : AI_API_PRESETS;
+  const preset = list.find((p) => p && p.id === presetId) || AI_API_PRESETS.find((p) => p.id === presetId);
+  const cur = draft && typeof draft === 'object' ? draft : {};
+  if (!preset) return { ...cur };
+  const protocol = preset.protocol === 'anthropic' ? 'anthropic' : 'openai';
+  const next = {
+    ...cur,
+    apiPreset: preset.id,
+    apiProtocol: protocol,
+    openaiBaseUrl: str(preset.baseUrl),
+    openaiModel: str(preset.model),
+    openaiVisionModel: str(preset.visionModel),
+    openaiImageModel: str(preset.imageModel),
+  };
+  if (aiModeOf(cur.provider) === 'api') {
+    next.provider = protocol;
+  }
+  return next;
+}
+
+/** 将 ai.provider 归入设置页四个顶层模式：auto / api / cli / local */
+export function aiModeOf(provider) {
+  if (provider === 'api' || provider === 'openai' || provider === 'anthropic') return 'api';
+  if (CLI_AGENT_IDS.includes(provider) || provider === 'cli') return 'cli';
+  if (provider === 'local' || provider === 'none') return 'local';
+  return 'auto';
+}
+
+/** 根据选中的顶层模式与草稿计算要写入的 ai.provider */
+export function providerForAiMode(mode, draft) {
+  if (mode === 'api') return draft && draft.apiProtocol === 'anthropic' ? 'anthropic' : 'openai';
+  if (mode === 'cli') return draft && CLI_AGENT_IDS.includes(draft.cliAgent) ? draft.cliAgent : 'claude';
+  if (mode === 'local') return 'local';
+  return 'auto';
+}
+
+/** 当前 API 配置是否需要 API Key（Ollama / LM Studio 与本机回环地址免 Key） */
+export function apiRequiresKey(draft, presets = AI_API_PRESETS) {
+  const list = Array.isArray(presets) && presets.length ? presets : AI_API_PRESETS;
+  const preset = draft && draft.apiPreset ? list.find((p) => p && p.id === draft.apiPreset) : null;
+  if (preset && preset.requiresKey === false) return false;
+  const url = str(draft && draft.openaiBaseUrl).trim();
+  if (/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(\/|$)/i.test(url)) return false;
+  return true;
+}
+
+/** 识别草稿当前匹配的预设 ID（优先 apiPreset，其次按 Base URL 匹配） */
+export function detectActivePreset(draft, presets = AI_API_PRESETS) {
+  const list = Array.isArray(presets) && presets.length ? presets : AI_API_PRESETS;
+  if (draft && draft.apiPreset && list.some((p) => p && p.id === draft.apiPreset)) return draft.apiPreset;
+  const cur = normUrl(draft && draft.openaiBaseUrl);
+  if (!cur) return '';
+  const hit = list.find((p) => p && normUrl(p.baseUrl) === cur);
+  return hit ? hit.id : '';
+}
+
+const PRESET_DISPLAY_LABELS = {
+  openai: { zh: 'OpenAI', en: 'OpenAI' },
+  deepseek: { zh: 'DeepSeek', en: 'DeepSeek' },
+  anthropic: { zh: 'Anthropic Claude', en: 'Anthropic Claude' },
+  gemini: { zh: 'Google Gemini', en: 'Google Gemini' },
+  openrouter: { zh: 'OpenRouter', en: 'OpenRouter' },
+  ark: { zh: '火山方舟', en: 'Volcengine Ark' },
+  ollama: { zh: 'Ollama 本地', en: 'Ollama (Local)' },
+  lmstudio: { zh: 'LM Studio', en: 'LM Studio' },
+};
+
+function isPlainObject(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function isDetectedCliEntry(v) {
+  return !!(isPlainObject(v) && (v.ok || v.installed || v.available || v.path));
+}
+
+/** 从 aiStatus 与 appInfo 提取某个本机 Agent CLI 的探测状态（优先 aiStatus.clis 与 appInfo.agentClis） */
+export function cliStatusOf(id, aiStatus, appInfo) {
+  if (!id || typeof id !== 'string') return null;
+  const candidates = [
+    aiStatus && aiStatus.clis && aiStatus.clis[id],
+    appInfo && appInfo.agentClis && appInfo.agentClis[id],
+    aiStatus && aiStatus.cli && aiStatus.cli[id],
+    aiStatus && aiStatus.agents && aiStatus.agents[id],
+    aiStatus && aiStatus[id],
+    appInfo && appInfo.cli && appInfo.cli[id],
+    appInfo && appInfo.agents && appInfo.agents[id],
+    appInfo && appInfo[id],
+  ].filter(isPlainObject);
+  if (!candidates.length) return null;
+  return candidates.find(isDetectedCliEntry) || candidates[0];
+}
+
+/** AI 提供方中性展示名 */
+export function aiProviderLabel(provider, locale = 'zh-CN', preset = '') {
+  const isEn = normalizeUiLocale(locale) === 'en-US';
+  const p = str(provider).trim().toLowerCase();
+  const pr = str(preset).trim().toLowerCase();
+  if ((p === 'openai' || p === 'api') && pr && PRESET_DISPLAY_LABELS[pr]) {
+    return isEn ? PRESET_DISPLAY_LABELS[pr].en : PRESET_DISPLAY_LABELS[pr].zh;
+  }
+  switch (p) {
+    case 'claude': return 'Claude Code';
+    case 'codex': return 'Codex CLI';
+    case 'gemini': return 'Gemini CLI';
+    case 'anthropic': return 'Anthropic Claude';
+    case 'openai':
+    case 'api':
+      return isEn ? 'OpenAI-Compatible API' : 'OpenAI 兼容 API';
+    case 'ollama': return 'Ollama';
+    case 'lmstudio': return 'LM Studio';
+    case 'local':
+    case 'none':
+      return isEn ? 'Local Rules' : '本地规则';
+    default:
+      return provider ? String(provider) : (isEn ? 'Local Rules' : '本地规则');
+  }
+}
 
 /** 某个服务商的覆盖项（草稿里没有时给空值，保证输入框始终受控） */
 export function ovOf(draft, id) {
@@ -64,10 +407,22 @@ export function toDraft(s) {
   const vg = (s && s.videogen) || {};
   const ov = (vg.overrides && typeof vg.overrides === 'object') ? vg.overrides : {};
   const ids = [...new Set([...VG_IDS, ...VG_OPTIONAL_IDS, ...Object.keys(ov)])];
+  const provider = ai.provider || 'auto';
+  const apiProtocol = ai.apiProtocol === 'anthropic' || provider === 'anthropic' ? 'anthropic' : 'openai';
+  const cliAgent = CLI_AGENT_IDS.includes(ai.cliAgent)
+    ? ai.cliAgent
+    : (CLI_AGENT_IDS.includes(provider) ? provider : 'claude');
   const d = {
-    provider: ai.provider || 'auto',
+    provider,
+    apiPreset: str(ai.apiPreset),
+    apiProtocol,
+    cliAgent,
+    claudePath: ai.claudePath || '',
+    claudeModel: ai.claudeModel || '',
     codexPath: ai.codexPath || '',
     codexModel: ai.codexModel || '',
+    geminiPath: ai.geminiPath || '',
+    geminiModel: ai.geminiModel || '',
     openaiBaseUrl: ai.openaiBaseUrl || 'https://api.openai.com/v1',
     openaiModel: ai.openaiModel || '',
     openaiVisionModel: ai.openaiVisionModel || '',
@@ -82,6 +437,7 @@ export function toDraft(s) {
     exportFolder: ex.folder || '',
     exportHwaccel: ex.hwaccel || 'auto',
     uiScale: Number(ui.scale) || 1,
+    locale: normalizeUiLocale(ui.locale),
     autosave: g.autosave !== false,
     openLastProject: g.openLastProject !== false,
     edAspect: ed.aspect || '16:9',
@@ -139,8 +495,15 @@ export function toPatch(d, clear = {}) {
     dataRoot: str(d.dataRoot).trim(),
     ai: {
       provider: d.provider,
+      apiPreset: str(d.apiPreset).trim(),
+      apiProtocol: d.apiProtocol === 'anthropic' ? 'anthropic' : 'openai',
+      cliAgent: CLI_AGENT_IDS.includes(d.cliAgent) ? d.cliAgent : 'claude',
+      claudePath: str(d.claudePath).trim(),
+      claudeModel: str(d.claudeModel).trim(),
       codexPath: str(d.codexPath).trim(),
       codexModel: str(d.codexModel).trim(),
+      geminiPath: str(d.geminiPath).trim(),
+      geminiModel: str(d.geminiModel).trim(),
       openaiBaseUrl: str(d.openaiBaseUrl).trim().replace(/\/+$/, ''),
       openaiModel: str(d.openaiModel).trim(),
       openaiVisionModel: str(d.openaiVisionModel).trim(),
@@ -150,7 +513,7 @@ export function toPatch(d, clear = {}) {
     },
     web: { maxDownloadSeconds: Math.round(Number(d.maxDownloadSeconds)) },
     export: { quality: d.exportQuality, fps: Number(d.exportFps) || 30, resolution: d.exportResolution, folder: d.exportFolder, hwaccel: d.exportHwaccel },
-    ui: { scale: Number(d.uiScale) || 1 },
+    ui: { scale: Number(d.uiScale) || 1, locale: normalizeUiLocale(d.locale) },
     general: { autosave: !!d.autosave, openLastProject: !!d.openLastProject },
     editing: { aspect: d.edAspect, fps: Number(d.edFps) || 30, imageDuration: Number(d.edImageDuration), transitionDuration: Number(d.edTransitionDuration), previewQuality: d.edPreviewQuality },
     videogen: { provider: d.vgProvider, overrides, ...(Object.keys(keys).length ? { keys } : {}) },
@@ -159,14 +522,17 @@ export function toPatch(d, clear = {}) {
     const v = str(d[k]).trim();
     if (v) patch[k] = v; else if (clear[k]) patch[k] = '';
   }
+  const newOpenaiKey = str(d.openaiKey).trim();
+  if (clear.openaiKey || clear.anthropicKey || (newOpenaiKey && d.apiProtocol === 'anthropic')) {
+    patch.anthropicKey = '';
+  }
   return patch;
 }
 
 /**
  * 合并主进程返回的服务商列表与本地兜底元数据。
- * - 顺序：即梦第一，其余按 VG_IDS；主进程多报的服务商插在「演示模式」之前
+ * - 顺序按 VG_IDS；主进程多报的服务商插在「演示模式」之前
  * - VG_OPTIONAL_IDS 里的只有主进程报告了才出现
- * - 即梦统一叫「即梦（火山方舟）」并带「推荐」标记
  */
 export function mergeVgProviders(vgList) {
   const list = (Array.isArray(vgList) ? vgList : []).filter((x) => x && typeof x.id === 'string' && x.id);
@@ -184,8 +550,8 @@ export function mergeVgProviders(vgList) {
 }
 
 /**
- * 用户在「即梦（火山方舟）」里填了 Key：视频服务商还停在「演示模式」时顺手切到即梦，
- * 否则填完 Key 生成的仍是演示片段，用户会以为 Key 没生效。已选了别家就不动。
+ * 用户在火山方舟（即梦）里填了 Key：视频服务商还停在「演示模式」时顺手切到即梦，
+ * 避免填完 Key 仍生成演示片段。已选了别家就不动。
  */
 export function applyArkKey(draft, value) {
   const v = str(value);
@@ -204,21 +570,21 @@ export function describeImageSource({ imageProvider = 'auto', hasArk = false, ha
   const openaiMissing = hasOpenaiKey && !hasOpenai ? 'OpenAI 兼容接口还没有填写图片模型' : '还没有填写 OpenAI 兼容接口的 Key';
   if (imageProvider === 'ark') {
     return hasArk
-      ? { source: 'ark', text: '画面由即梦（Seedream）生成。', warn: false }
-      : { source: 'none', text: '还没有填写火山方舟 API Key，现在生成不了画面，镜头会先用示意画面占位。请在上方「即梦（火山方舟）」里填写。', warn: true };
+      ? { source: 'ark', text: '画面由火山方舟（即梦 Seedream）生成。', warn: false }
+      : { source: 'none', text: '还没有填写火山方舟 API Key，镜头会先用示意画面占位。请在下方服务商中选择「即梦（火山方舟）」填写密钥。', warn: true };
   }
   if (imageProvider === 'openai') {
     return hasOpenai
       ? { source: 'openai', text: '画面由「AI 助手」里的 OpenAI 兼容接口生成（需要该接口支持图片模型）。', warn: false }
-      : { source: 'none', text: openaiMissing + '，现在生成不了画面，镜头会先用示意画面占位。请到「AI 助手」里填写，或改选「即梦」。', warn: true };
+      : { source: 'none', text: openaiMissing + '，镜头会先用示意画面占位。请到「AI 助手」里填写，或改用其他出图服务。', warn: true };
   }
-  if (hasArk) return { source: 'ark', text: '已填写火山方舟 API Key，画面由即梦（Seedream）生成。', warn: false };
-  if (hasOpenai) return { source: 'openai', text: '没有填写火山方舟 API Key，画面由「AI 助手」里的 OpenAI 兼容接口生成。', warn: false };
-  return { source: 'none', text: '还没有可用的出图服务，镜头会先用示意画面占位。在上方填写火山方舟 API Key 后即可用即梦出图。', warn: true };
+  if (hasArk) return { source: 'ark', text: '已配置火山方舟 API Key，画面由即梦（Seedream）生成。', warn: false };
+  if (hasOpenai) return { source: 'openai', text: '画面由「AI 助手」里的 OpenAI 兼容接口生成。', warn: false };
+  return { source: 'none', text: '还没有可用的出图服务，镜头会先用示意画面占位。可在「AI 助手」配置 OpenAI 兼容图片模型，或在下方配置火山方舟密钥。', warn: true };
 }
 
 /**
- * 即梦（火山方舟）测试连接失败后，按报错内容给出「下一步怎么办」。
+ * 火山方舟（即梦）测试连接失败后，按报错内容给出排查建议。
  * @param {string} detail 主进程返回的错误文字
  * @returns {string[]} 1–3 条建议，每条一句话
  */

@@ -1,4 +1,4 @@
-// 时间线布局与时间查询（SPEC §3.3、CONTRACTS §B）。纯函数，不修改入参。
+// 时间线布局与时间查询。纯函数，不修改入参。
 //
 // 主轨是磁吸顺序排列的：第 i 个镜头开始时间 start_i = end_{i-1} - overlap_i，
 // 其中非 cut 转场 overlap_i = min(转场时长, dur_i/2, dur_{i-1}/2)，cut 为 0；第 0 个镜头 overlap 恒为 0。
@@ -437,14 +437,14 @@ function changeHead(clip, asset, dt) {
 }
 function withVideo(project, video) { return { ...project, tracks: { ...project.tracks, video } }; }
 function checkUnlocked(clip, n) { if (clip && clip.locked) throw new Error(`第 ${n} 镜已锁定`); }
-/** 轨道锁定的统一提示（C15）：kind video|text|audio|overlay，overlay 需给 n */
+/** 轨道锁定的统一提示：kind video|text|audio|overlay，overlay 需给 n */
 export function trackLockMessage(kind, n) {
   const name = kind === 'video' ? '主轨' : kind === 'text' ? '文字轨' : kind === 'audio' ? '音频轨' : `画中画 ${n || 1} 轨`;
   return `${name}已锁定，先在轨道头解锁再修改`;
 }
 function videoLocked(project) { if (trackFlags(project, 'video').locked) throw new Error(trackLockMessage('video')); }
 
-/** 联动是否开启（timeline.linked 缺省为 true，PLAN-v3 R2） */
+/** 联动是否开启（timeline.linked 缺省为 true） */
 export function isLinked(project) {
   return !(project && project.timeline && project.timeline.linked === false);
 }

@@ -5,7 +5,7 @@
 //   例外：help（?）在精修模式打开时间线的快捷键面板，其它页面由 App.jsx 打开「帮助 → 快捷键」。
 // 条目字段：repeat 按住连发；allowInInput 光标在输入框里也生效（只对 Ctrl 组合键和 F 键生效，见 firesInInput）；
 //   fixed 不允许自定义。帮助页、快捷键面板、工具条提示全部由这张表生成，不要在别处手写按键说明。
-// 自定义按键（契约 C11）：settings.shortcuts.overrides = { [id]: string[] }，[] 表示这个功能不设按键。
+// 自定义按键：settings.shortcuts.overrides = { [id]: string[] }，[] 表示这个功能不设按键。
 //   本模块保存「当前生效的自定义」并负责合并、校验与冲突处理；读写设置在 shortcuts/customKeys.js。
 
 export const SHORTCUT_GROUPS = ['播放', '剪辑', '选择与剪贴板', '时间线视图', '通用'];
@@ -175,7 +175,7 @@ export function isValidCombo(combo) {
 }
 
 // ---------------------------------------------------------------------------
-// 自定义按键（契约 C11）：overrides = { [id]: string[] }，[] 表示不设按键。
+// 自定义按键：overrides = { [id]: string[] }，[] 表示不设按键。
 // 运行时状态只有这一份；customKeys.js 负责从设置读写并调用 setShortcutOverrides。
 // ---------------------------------------------------------------------------
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));

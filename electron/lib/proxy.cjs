@@ -1,7 +1,7 @@
 'use strict';
 // 剪辑代理：>1080p 或 HEVC/ProRes 等重解码素材后台转 540p 全 I 帧 H.264，时间线拖动/逐帧更流畅。
 // 纯 node 模块（不 require electron）。导出成品时仍使用原片。
-// 编码器由 encoders.cjs 选（显卡优先，失败自动换下一个；契约 C12）。
+// 编码器由 encoders.cjs 选（显卡优先，失败自动换下一个）。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');

@@ -1,4 +1,4 @@
-// 色彩匹配：把「素材统计 → 目标统计」的差距换算成调色参数（CONTRACTS §B）。纯函数。
+// 色彩匹配：把「素材统计 → 目标统计」的差距换算成调色参数。纯函数。
 //
 // 统计量与参数的近似关系（与 compositor 的 ctx.filter 语义一致）：
 //   亮度  brightness(1+exposure)   → exposure ≈ 目标/当前 - 1

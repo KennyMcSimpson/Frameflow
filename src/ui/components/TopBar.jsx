@@ -1,12 +1,14 @@
-// 顶栏（PLAN-v3 §6）：左 Logo+项目名+项目菜单+保存状态；中 三模式切换；右 撤销/重做、帮助、设置、「导出」（精修模式下是唯一主按钮）。AI 状态与任务在 StatusBar。
+// Top bar: brand + project name + project menu + save state (left); mode switcher (center);
+// undo/redo, language toggle, help, settings, and export action (right).
 import React, { Suspense, lazy, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import useStore from '../store.js';
 import api from '../api.js';
+import { getLocale, normalizeLocale, setLocale, t, useLocale, useT } from '../i18n.js';
 import { Icon, Button, Tooltip, Menu, ICON_NAMES } from './ui.jsx';
 
 // ---------------------------------------------------------------------------
-// 品牌标
+// Brand Logo
 // ---------------------------------------------------------------------------
 export function Logo({ size = 26, className = '' }) {
   const raw = useId();
@@ -24,9 +26,9 @@ export function Logo({ size = 26, className = '' }) {
         </linearGradient>
       </defs>
       <rect x="1" y="1" width="30" height="30" rx="8" fill={`url(#${gid}b)`} style={{ stroke: 'var(--line-2)' }} strokeWidth="1" />
-      {/* 取景框四角 */}
+      {/* Viewfinder corners */}
       <path d="M7 11V8.5A1.5 1.5 0 018.5 7H11M21 7h2.5A1.5 1.5 0 0125 8.5V11M25 21v2.5a1.5 1.5 0 01-1.5 1.5H21M11 25H8.5A1.5 1.5 0 017 23.5V21" fill="none" style={{ stroke: 'var(--text-2)' }} strokeWidth="1.4" strokeLinecap="round" />
-      {/* 流动的光带 */}
+      {/* Flowing ribbons */}
       <path d="M8.5 18.2c2.4-3.6 4.8-3.6 7.2 0s4.9 3.6 7.8-.4" fill="none" stroke={`url(#${gid}a)`} strokeWidth="2.6" strokeLinecap="round" />
       <path d="M8.5 13.6c2.4-3.2 4.8-3.2 7.2 0s4.9 3.2 7.8-.3" fill="none" stroke={`url(#${gid}a)`} strokeWidth="1.6" strokeLinecap="round" opacity="0.45" />
     </svg>
@@ -34,17 +36,17 @@ export function Logo({ size = 26, className = '' }) {
 }
 
 // ---------------------------------------------------------------------------
-// 项目缩略图（返回首页时异步生成，失败静默）
+// Project Thumbnail (rendered asynchronously when returning home; silent fail)
 // ---------------------------------------------------------------------------
 function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))]);
 }
 
 /**
- * 用合成器把项目某一刻画成一张 JPEG（dataURL）。失败返回 ''。
- * 返回首页的项目缩略图、导出完成页的成片预览都用它。
+ * Render a single JPEG frame (dataURL) from the compositor. Returns '' on failure.
+ * Shared by home-page project thumbnails and export completion previews.
  * @param {object} project
- * @param {{ maxSide?: number, at?: number, quality?: number }} [opts] at 缺省取 30% 处（最多 3 秒）
+ * @param {{ maxSide?: number, at?: number, quality?: number }} [opts]
  */
 export async function renderProjectFrame(project, { maxSide = 480, at, quality = 0.82 } = {}) {
   if (!project || !project.tracks || !Array.isArray(project.tracks.video) || !project.tracks.video.length) return '';
@@ -58,7 +60,7 @@ export async function renderProjectFrame(project, { maxSide = 480, at, quality =
     const layout = timeline.layoutVideo(project);
     const dur = timeline.projectDuration(project, layout);
     if (!(dur > 0)) return '';
-    const t = Number.isFinite(at) ? Math.max(0, Math.min(at, dur - 0.05)) : Math.max(0, Math.min(dur * 0.3, 3, dur - 0.05));
+    const frameTime = Number.isFinite(at) ? Math.max(0, Math.min(at, dur - 0.05)) : Math.max(0, Math.min(dur * 0.3, 3, dur - 0.05));
     const W = (project.settings && project.settings.width) || 1920;
     const H = (project.settings && project.settings.height) || 1080;
     const fps = Math.max(1, Number(project.settings && project.settings.fps) || 30);
@@ -70,19 +72,18 @@ export async function renderProjectFrame(project, { maxSide = 480, at, quality =
     const ctx = canvas.getContext('2d');
     if (!ctx) return '';
     pool = mediaPool.createMediaPool({ mediaUrl: (p) => api.mediaUrl(p) });
-    try { await withTimeout(pool.seekExact(project, t, layout), 6000); } catch { /* 素材加载失败也继续画（会显示占位） */ }
-    // 帧序号按项目自己的帧率算（粒子、噪点等逐帧效果依赖它）
-    compositor.renderFrame(ctx, project, t, pool, { width: w, height: h, layout, mode: 'export', frameIndex: Math.round(t * fps) });
+    try { await withTimeout(pool.seekExact(project, frameTime, layout), 6000); } catch { /* render placeholder if media seek fails */ }
+    compositor.renderFrame(ctx, project, frameTime, pool, { width: w, height: h, layout, mode: 'export', frameIndex: Math.round(frameTime * fps) });
     return canvas.toDataURL('image/jpeg', quality);
   } catch (e) {
-    console.warn('[thumb] 渲染项目画面失败', e);
+    console.warn('[thumb] renderProjectFrame failed', e);
     return '';
   } finally {
-    try { if (pool) pool.dispose(); } catch { /* 忽略 */ }
+    try { if (pool) pool.dispose(); } catch { /* ignore */ }
   }
 }
 
-/** 用合成器为项目画一张缩略图并保存。返回是否成功。 */
+/** Render and persist a thumbnail for the project. Returns whether it succeeded. */
 export async function captureProjectThumb(project) {
   if (!project || !project.id) return false;
   if (!api.available) return false;
@@ -92,15 +93,15 @@ export async function captureProjectThumb(project) {
     await api.call('project:saveThumb', { id: project.id, dataUrl });
     return true;
   } catch (e) {
-    console.warn('[thumb] 生成项目缩略图失败', e);
+    console.warn('[thumb] captureProjectThumb failed', e);
     return false;
   }
 }
 
 /**
- * 保存并返回首页（之后异步更新缩略图）。
- * 契约 C14：closeProject 保存失败时返回 false 并自己弹「仍然关闭」提示，这时留在项目里。
- * @returns {Promise<boolean>} 是否真的回到了首页
+ * Save and return to the Start Page (updating thumbnail asynchronously afterwards).
+ * If closeProject fails to save, it returns false and shows a force-close prompt.
+ * @returns {Promise<boolean>}
  */
 export async function goHome() {
   const st = useStore.getState();
@@ -110,7 +111,7 @@ export async function goHome() {
   try {
     closed = await st.closeProject();
   } catch (e) {
-    st.toast('返回首页时保存失败：' + (e?.message || e) + '。项目仍保持打开，请检查磁盘空间后再试', 'error');
+    st.toast(t('top.goHomeSaveFailed', { error: (e && e.message) || String(e) }), 'error');
     return false;
   }
   if (closed === false || useStore.getState().project) return false;
@@ -121,20 +122,124 @@ export async function goHome() {
 }
 
 // ---------------------------------------------------------------------------
-// AI 状态
+// AI Status (provider-neutral: APIs, multi-Agent CLIs, MCP, or local rules)
 // ---------------------------------------------------------------------------
-export function describeAI(ai) {
-  if (!ai) return { kind: '', label: 'AI 检测中…', title: '正在检测可用的 AI 引擎' };
+const PROVIDER_KEY_MAP = {
+  openai: 'top.aiProvider.openai',
+  api: 'top.aiProvider.openai',
+  anthropic: 'top.aiProvider.anthropic',
+  gemini: 'top.aiProvider.geminiCli',
+  deepseek: 'top.aiProvider.deepseek',
+  openrouter: 'top.aiProvider.openrouter',
+  ollama: 'top.aiProvider.ollama',
+  codex: 'top.aiProvider.codex',
+  claude: 'top.aiProvider.claude',
+  'claude-code': 'top.aiProvider.claude',
+  'gemini-cli': 'top.aiProvider.geminiCli',
+  cli: 'top.aiProvider.cli',
+  mcp: 'top.aiProvider.mcp',
+};
+
+const API_PRESET_KEY_MAP = {
+  openai: 'top.aiProvider.openai',
+  anthropic: 'top.aiProvider.anthropic',
+  gemini: 'top.aiProvider.gemini',
+  deepseek: 'top.aiProvider.deepseek',
+  openrouter: 'top.aiProvider.openrouter',
+  ollama: 'top.aiProvider.ollama',
+};
+
+const CLI_PROVIDERS = new Set(['codex', 'claude', 'claude-code', 'gemini', 'gemini-cli', 'cli']);
+
+function providerDisplayName(ai, loc) {
+  if (ai && ai.providerLabel) return String(ai.providerLabel);
+  const resolvedLoc = loc ? normalizeLocale(loc) : getLocale();
+  const p = String((ai && ai.provider) || '').trim().toLowerCase();
+  if (p === 'openai' || p === 'api') {
+    const preset = String((ai && (ai.preset || (ai.api && ai.api.preset))) || '').trim().toLowerCase();
+    if (preset === 'lmstudio') return 'LM Studio';
+    if (preset === 'ark') return resolvedLoc === 'en-US' ? 'Volcengine Ark' : '火山方舟';
+    if (preset && API_PRESET_KEY_MAP[preset]) return t(API_PRESET_KEY_MAP[preset], null, resolvedLoc);
+  }
+  if (p === 'lmstudio') return 'LM Studio';
+  if (p === 'ark') return resolvedLoc === 'en-US' ? 'Volcengine Ark' : '火山方舟';
+  const k = PROVIDER_KEY_MAP[p];
+  return k ? t(k, null, resolvedLoc) : (ai && ai.provider) || 'AI';
+}
+
+export function describeAI(ai, localeOverride = null) {
+  if (!ai) {
+    return {
+      kind: '',
+      label: t('top.aiChecking', null, localeOverride),
+      title: t('top.aiCheckingTitle', null, localeOverride),
+    };
+  }
   const detail = ai.detail ? `\n${ai.detail}` : '';
-  if (ai.provider === 'codex' && ai.ready) return { kind: 'ai', label: 'Codex 已就绪', title: `AI 引擎：本机 Codex CLI${ai.model ? `（${ai.model}）` : ''}${detail}\n点击打开 AI 设置` };
-  if (ai.provider === 'openai' && ai.ready) return { kind: 'info', label: 'OpenAI API', title: `AI 引擎：OpenAI 兼容接口${ai.model ? `（${ai.model}）` : ''}${detail}\n点击打开 AI 设置` };
-  if (ai.provider === 'codex') return { kind: 'warn', label: 'Codex 未就绪', title: `Codex 暂不可用，当前使用本地规则${detail}\n点击打开 AI 设置` };
-  if (ai.provider === 'openai') return { kind: 'warn', label: 'API 未就绪', title: `OpenAI 接口暂不可用，当前使用本地规则${detail}\n点击打开 AI 设置` };
-  return { kind: 'warn', label: '本地规则', title: `未连接 AI，使用本地规则（中文指令解析、模板分镜、统计拆片）${detail}\n点击打开设置连接 Codex 或 API` };
+  const p = String(ai.provider || '').toLowerCase();
+  const isLocal = !p || p === 'local' || p === 'none';
+
+  if (!isLocal && ai.ready) {
+    const loc = localeOverride ? normalizeLocale(localeOverride) : getLocale();
+    const name = providerDisplayName(ai, loc);
+    const model = ai.model ? (loc === 'en-US' ? ` (${ai.model})` : `（${ai.model}）`) : '';
+    const isCli = CLI_PROVIDERS.has(p) || p === 'mcp';
+    return {
+      kind: isCli ? 'ai' : 'info',
+      label: isCli ? t('top.aiConnected', null, loc) : name,
+      title: t('top.aiReadyTitle', { name, model, detail }, loc),
+    };
+  }
+  if (!isLocal) {
+    const name = providerDisplayName(ai, localeOverride);
+    return {
+      kind: 'warn',
+      label: t('top.aiNotReady', { name }, localeOverride),
+      title: t('top.aiNotReadyTitle', { name, detail }, localeOverride),
+    };
+  }
+  return {
+    kind: 'warn',
+    label: t('top.aiLocal', null, localeOverride),
+    title: t('top.aiLocalTitle', { detail }, localeOverride),
+  };
 }
 
 // ---------------------------------------------------------------------------
-// 保存状态
+// Language Quick-Toggle (1-click zh-CN <-> en-US, persisted via settings:set)
+// ---------------------------------------------------------------------------
+export function LocaleToggle() {
+  const locale = useLocale();
+  const tr = useT();
+  const nextLocale = locale === 'zh-CN' ? 'en-US' : 'zh-CN';
+
+  const onToggle = () => {
+    setLocale(nextLocale);
+    const cur = useStore.getState().settings;
+    useStore.setState({ settings: { ...(cur || {}), ui: { ...((cur && cur.ui) || {}), locale: nextLocale } } });
+    api.call('settings:set', { ui: { locale: nextLocale } }).catch(() => {});
+  };
+
+  return (
+    <Tooltip label={tr('top.langSwitchTitle')} desc={tr('top.langSwitchDesc')}>
+      <button
+        type="button"
+        className="btn ghost sm tb-lang"
+        onClick={onToggle}
+        aria-label={tr('top.langSwitchAria')}
+        data-testid="locale-toggle"
+        style={{ padding: '0 7px', fontSize: 'var(--fs-11, 11px)', fontWeight: 600, letterSpacing: '0.02em', gap: 1 }}
+      >
+        <span style={{ opacity: locale === 'zh-CN' ? 1 : 0.45 }}>中</span>
+        <span style={{ opacity: 0.35 }}>/</span>
+        <span style={{ opacity: locale === 'en-US' ? 1 : 0.45 }}>EN</span>
+      </button>
+    </Tooltip>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Save State Indicator
 // ---------------------------------------------------------------------------
 function fmtClock(ts) {
   if (!ts) return '';
@@ -143,14 +248,15 @@ function fmtClock(ts) {
 }
 
 function SaveState() {
+  const tr = useT();
   const saveState = useStore((s) => s.saveState);
   const lastSavedAt = useStore((s) => s.lastSavedAt);
   const saveNow = useStore((s) => s.saveNow);
   const map = {
-    saved: { cls: 'ok', label: '已保存', icon: 'check', title: lastSavedAt ? `最近保存于 ${fmtClock(lastSavedAt)}` : '所有修改都已保存' },
-    saving: { cls: 'saving', label: '保存中…', icon: null, title: '正在写入磁盘' },
-    dirty: { cls: 'dirty', label: '未保存', icon: null, title: '有修改即将自动保存，点击立即保存（Ctrl+S）' },
-    error: { cls: 'error', label: '保存失败', icon: 'refresh', title: '保存失败，点击重试（Ctrl+S）' },
+    saved: { cls: 'ok', label: tr('top.save.saved'), icon: 'check', title: lastSavedAt ? tr('top.save.savedAt', { time: fmtClock(lastSavedAt) }) : tr('top.save.savedAll') },
+    saving: { cls: 'saving', label: tr('top.save.saving'), icon: null, title: tr('top.save.savingTitle') },
+    dirty: { cls: 'dirty', label: tr('top.save.dirty'), icon: null, title: tr('top.save.dirtyTitle') },
+    error: { cls: 'error', label: tr('top.save.error'), icon: 'refresh', title: tr('top.save.errorTitle') },
   };
   const m = map[saveState] || map.saved;
   return (
@@ -162,9 +268,10 @@ function SaveState() {
 }
 
 // ---------------------------------------------------------------------------
-// 项目名（点击编辑）
+// Project Name (click to inline-rename)
 // ---------------------------------------------------------------------------
 function ProjectName() {
+  const tr = useT();
   const name = useStore((s) => (s.project ? s.project.name : ''));
   const update = useStore((s) => s.update);
   const [editing, setEditing] = useState(false);
@@ -194,58 +301,62 @@ function ProjectName() {
           if (e.key === 'Enter') { e.preventDefault(); commit(); }
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setValue(name); setEditing(false); }
         }}
-        aria-label="项目名称"
+        aria-label={tr('top.projectNameAria')}
       />
     );
   }
   return (
-    <button type="button" className="tb-name" title="点击修改项目名称" onClick={() => setEditing(true)}>
-      <span className="ellipsis">{name || '未命名项目'}</span>
+    <button type="button" className="tb-name" title={tr('top.projectNameTitle')} onClick={() => setEditing(true)}>
+      <span className="ellipsis">{name || tr('app.untitledProject')}</span>
       <svg className="tb-name-pen" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" /></svg>
     </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 模式切换
+// Mode Switcher
 // ---------------------------------------------------------------------------
 export const MODES = [
-  { value: 'create', label: '创作', icon: 'sparkles', key: '1', desc: '和 AI 导演聊想法，生成分镜与实拍画面' },
-  { value: 'refine', label: '精修', icon: 'scissors', key: '2', desc: '在时间线上剪辑、调色、加字幕和音乐' },
-  { value: 'library', label: '拆片库', icon: 'book', key: '3', desc: '拆解优秀视频，沉淀可复用的技法' },
+  { value: 'create', label: '创作', labelKey: 'app.mode.create', icon: 'sparkles', key: '1', desc: '和 AI 导演聊想法，生成分镜与实拍画面', descKey: 'top.mode.createDesc' },
+  { value: 'refine', label: '精修', labelKey: 'app.mode.refine', icon: 'scissors', key: '2', desc: '在时间线上剪辑、调色、加字幕和音乐', descKey: 'top.mode.refineDesc' },
+  { value: 'library', label: '拆片库', labelKey: 'app.mode.library', icon: 'book', key: '3', desc: '拆解优秀视频，沉淀可复用的技法', descKey: 'top.mode.libraryDesc' },
 ];
 
 function ModeSwitch() {
+  const tr = useT();
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   return (
-    <nav className="mode-switch" role="tablist" aria-label="工作模式">
-      {MODES.map((m) => (
-        <Tooltip key={m.value} label={`${m.label}模式`} desc={m.desc} kbd={`Ctrl+${m.key}`}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === m.value}
-            className={'mode-btn' + (mode === m.value ? ' active' : '')}
-            onClick={() => setMode(m.value)}
-            data-mode={m.value}
-          >
-            <Icon name={m.icon} size={15} />
-            <span>{m.label}</span>
-          </button>
-        </Tooltip>
-      ))}
+    <nav className="mode-switch" role="tablist" aria-label={tr('top.modeSwitchAria')}>
+      {MODES.map((m) => {
+        const label = tr(m.labelKey);
+        return (
+          <Tooltip key={m.value} label={tr('top.modeLabelWithSuffix', { label })} desc={tr(m.descKey)} kbd={`Ctrl+${m.key}`}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === m.value}
+              className={'mode-btn' + (mode === m.value ? ' active' : '')}
+              onClick={() => setMode(m.value)}
+              data-mode={m.value}
+            >
+              <Icon name={m.icon} size={15} />
+              <span>{label}</span>
+            </button>
+          </Tooltip>
+        );
+      })}
     </nav>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 项目菜单（项目名旁的 ⋯）：历史版本、立即保存、返回首页
+// Project Menu (Version History, Save Now, Return Home)
 // ---------------------------------------------------------------------------
-/** 新图标还没进图标库时用旧图标兜底（契约 C2 的新名字由 design 包补齐） */
 const iconOr = (name, fallback) => (ICON_NAMES.includes(name) ? name : fallback);
 
 function ProjectMenu() {
+  const tr = useT();
   const openDialog = useStore((s) => s.openDialog);
   const saveNow = useStore((s) => s.saveNow);
   const [open, setOpen] = useState(false);
@@ -275,10 +386,9 @@ function ProjectMenu() {
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', close);
     window.addEventListener('blur', close);
-    // 打开后把焦点放到第一项，键盘可直接上下选择
-    const t = setTimeout(() => { const first = menuRef.current && menuRef.current.querySelector('.menu-item'); if (first) first.focus(); }, 0);
+    const timer = setTimeout(() => { const first = menuRef.current && menuRef.current.querySelector('.menu-item'); if (first) first.focus(); }, 0);
     return () => {
-      clearTimeout(t);
+      clearTimeout(timer);
       window.removeEventListener('mousedown', onDown, true);
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('resize', close);
@@ -295,20 +405,20 @@ function ProjectMenu() {
   };
 
   const items = [
-    { id: 'history', label: '历史版本…', icon: iconOr('history', 'clock'), onClick: () => openDialog('versionHistory') },
-    { id: 'save', label: '立即保存', icon: iconOr('save', 'check'), kbd: 'Ctrl+S', onClick: () => saveNow() },
+    { id: 'history', label: tr('top.menu.history'), icon: iconOr('history', 'clock'), onClick: () => openDialog('versionHistory') },
+    { id: 'save', label: tr('top.menu.saveNow'), icon: iconOr('save', 'check'), kbd: 'Ctrl+S', onClick: () => saveNow() },
     { sep: true },
-    { id: 'home', label: '保存并返回首页', icon: 'home', onClick: () => { goHome(); } },
+    { id: 'home', label: tr('top.menu.goHome'), icon: 'home', onClick: () => { goHome(); } },
   ];
 
   return (
     <>
-      <Tooltip label="项目菜单" desc="历史版本、立即保存、返回首页">
+      <Tooltip label={tr('top.menu.label')} desc={tr('top.menu.desc')}>
         <button
           ref={btnRef}
           type="button"
           className={'tb-proj-more' + (open ? ' open' : '')}
-          aria-label="项目菜单"
+          aria-label={tr('top.menu.label')}
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={toggle}
@@ -327,7 +437,7 @@ function ProjectMenu() {
   );
 }
 
-/** 历史版本对话框（契约 C6）：dialogs.versionHistory 为真时挂到 body 上，懒加载 */
+/** Lazy-loaded Version History modal host. */
 const VersionHistoryDialog = lazy(() => import('../dialogs/VersionHistoryDialog.jsx'));
 
 function VersionHistoryHost() {
@@ -344,9 +454,10 @@ function VersionHistoryHost() {
 }
 
 // ---------------------------------------------------------------------------
-// 顶栏
+// Top Bar
 // ---------------------------------------------------------------------------
 export default function TopBar({ standalone = false, onExitStandalone }) {
+  const tr = useT();
   const project = useStore((s) => s.project);
   const mode = useStore((s) => s.mode);
   const undoLabel = useStore((s) => (s.past.length ? s.past[s.past.length - 1].label : ''));
@@ -364,20 +475,20 @@ export default function TopBar({ standalone = false, onExitStandalone }) {
   };
 
   const inProject = !standalone && !!project;
-  // 一屏只有一个主按钮：「导出」只在精修模式做主按钮，创作模式让位给「生成全部画面 / 进入剪辑」
+  // Single primary CTA per screen: Export is primary in Refine mode, secondary in Create mode.
   const exportPrimary = mode === 'refine';
 
   return (
     <header className="topbar">
       <div className="tb-left">
-        <Tooltip label={standalone ? '返回首页' : '保存并返回首页'}>
-          <button type="button" className="tb-brand" onClick={onHome} disabled={leaving} aria-label="返回首页">
+        <Tooltip label={standalone ? tr('top.goHome') : tr('top.saveAndGoHome')}>
+          <button type="button" className="tb-brand" onClick={onHome} disabled={leaving} aria-label={tr('top.goHome')}>
             <Logo size={24} />
             <Icon name="home" size={14} className="tb-brand-home" />
           </button>
         </Tooltip>
         {standalone ? (
-          <div className="tb-standalone-title"><Icon name="book" size={14} /> 拆片库<span className="muted xs">（未打开项目）</span></div>
+          <div className="tb-standalone-title"><Icon name="book" size={14} /> {tr('app.mode.library')}<span className="muted xs">{tr('top.standaloneNoProject')}</span></div>
         ) : project ? (
           <div className="tb-project">
             <ProjectName />
@@ -394,15 +505,16 @@ export default function TopBar({ standalone = false, onExitStandalone }) {
       <div className="tb-right">
         {inProject && (
           <div className="tb-group">
-            <Button variant="icon" icon="undo" tip={undoLabel ? `撤销：${undoLabel}` : '没有可撤销的操作'} kbd="Ctrl+Z" onClick={() => undo()} disabled={!undoLabel} />
-            <Button variant="icon" icon="redo" tip={redoLabel ? `重做：${redoLabel}` : '没有可重做的操作'} kbd="Ctrl+Shift+Z" onClick={() => redo()} disabled={!redoLabel} />
+            <Button variant="icon" icon="undo" tip={undoLabel ? tr('top.undo', { label: undoLabel }) : tr('top.undoEmpty')} kbd="Ctrl+Z" onClick={() => undo()} disabled={!undoLabel} />
+            <Button variant="icon" icon="redo" tip={redoLabel ? tr('top.redo', { label: redoLabel }) : tr('top.redoEmpty')} kbd="Ctrl+Shift+Z" onClick={() => redo()} disabled={!redoLabel} />
           </div>
         )}
-        <Button variant="icon" icon="help" tip="帮助与快捷键" kbd="F1" onClick={() => openDialog('help')} />
-        <Button variant="icon" icon="settings" tip="设置" kbd="Ctrl+," onClick={() => openDialog('settings')} />
+        <LocaleToggle />
+        <Button variant="icon" icon="help" tip={tr('top.help')} kbd="F1" onClick={() => openDialog('help')} />
+        <Button variant="icon" icon="settings" tip={tr('top.settings')} kbd="Ctrl+," onClick={() => openDialog('settings')} />
         {inProject && (
-          <Tooltip label="导出成片" desc="选择抖音 / B站 / 4K 等预设" kbd="Ctrl+E">
-            <Button variant={exportPrimary ? 'primary' : 'secondary'} icon="export" className="tb-export" onClick={() => openDialog('export')} data-tour="export">导出</Button>
+          <Tooltip label={tr('top.exportTip')} desc={tr('top.exportDesc')} kbd="Ctrl+E">
+            <Button variant={exportPrimary ? 'primary' : 'secondary'} icon="export" className="tb-export" onClick={() => openDialog('export')} data-tour="export">{tr('top.export')}</Button>
           </Tooltip>
         )}
       </div>

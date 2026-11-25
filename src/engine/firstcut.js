@@ -1,4 +1,4 @@
-// 一键初剪（CONTRACTS §B）：按分镜把素材排上主轨，缺实拍素材的分镜用预演动画占位。纯函数，不修改入参。
+// 一键初剪：按分镜把素材排上主轨，缺实拍素材的分镜用预演动画占位。纯函数，不修改入参。
 //
 // 素材匹配优先级：shot.assetId（用户/AI 指定）> shot.aiVideoAssetId（AI 生成视频）> shot.footageAssetId（自动配的实拍参考素材）> 素材库里标签/名称/描述最贴合的视频或图片 > 预演资产。
 // 每个素材只用一次，全局按匹配分从高到低分配，避免先到的分镜抢走更适合后面分镜的素材。
@@ -9,7 +9,7 @@ import { uid, deepClone } from './ids.js';
 import { clipDuration, layoutVideo } from './timeline.js';
 
 const FOOTAGE_KINDS = new Set(['video', 'image', 'generated-image']);
-// 分镜里的转场写成字符串；首镜只能 cut 或从黑/白淡入（SPEC §3.3），不能和「前一镜」重叠
+// 分镜里的转场写成字符串；首镜只能 cut 或从黑/白淡入，不能和「前一镜」重叠
 const FIRST_CLIP_TRANSITIONS = new Set(['cut', 'dip-black', 'dip-white', 'crossfade']);
 const PACING_FACTOR = { slow: 1.1, medium: 1, fast: 0.85 };
 const PACING_TRANSITION = { slow: 0.8, medium: 0.5, fast: 0.3 };
@@ -158,7 +158,7 @@ function matchAssets(shots, assets, report) {
   }
 
   // 实拍/AI 视频素材：专属于对应分镜，不参与其他分镜的自动匹配。
-  // 优先级（PLAN-v3 §7）：用户指定 assetId > AI 视频 aiVideoAssetId > 实拍 footageAssetId > 自动匹配 > previz
+  // 画面来源优先级：用户指定 assetId > AI 视频 aiVideoAssetId > 实拍 footageAssetId > 自动匹配 > previz
   const reserved = new Set();
   for (const key of ['aiVideoAssetId', 'footageAssetId']) {
     for (const shot of shots) {
@@ -194,7 +194,7 @@ function matchAssets(shots, assets, report) {
   return { chosen, used, pool };
 }
 
-// ---------- 镜头文案 → 文字轨（PLAN-v3 R2） ----------
+// ---------- 镜头文案 → 文字轨 ----------
 
 function shotCaptionOf(clip, storyboard) {
   const own = clip && clip.caption && String(clip.caption.text || '').trim();

@@ -1,6 +1,6 @@
 'use strict';
-// 媒体 IPC：探测、导入（含兼容代理）、缩略图、胶片条、波形、色彩统计（SPEC §2.2 media.cjs）
-// 素材文件的三种路径（ROADMAP P0-9.1）：
+// 媒体 IPC：探测、导入（含兼容代理）、缩略图、胶片条、波形、色彩统计
+// 素材文件的三种路径：
 //   originalPath 原片；
 //   editPath     浏览器解不了原片时转出的高画质 H.264（≤1920，剪辑和导出都用它，此时 path = editPath）；
 //   previewPath  预览代理（≤1280、每 15 帧一个关键帧），4K / 关键帧稀疏的素材后台生成，只给预览用（同时写 proxyPath 兼容旧渲染端）。
@@ -59,7 +59,7 @@ function createGate(max) {
 }
 
 // ---------------------------------------------------------------------------
-// 内置音乐与音效（契约 C16）：读 <目录>/manifest.json，附绝对路径；只收清单目录里真实存在的音频文件
+// 内置音乐与音效：读 <目录>/manifest.json，附绝对路径；只收清单目录里真实存在的音频文件
 // ---------------------------------------------------------------------------
 const BUILTIN_AUDIO_EXT = /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/i;
 
@@ -117,7 +117,7 @@ function readBuiltinAudio(dir) {
       file,
       path: abs,
       license: normLicense(it.license),
-      // 加入工程建素材时直接用（契约 C3 / C16）
+      // 标准化来源字段，加入工程建素材时直接复用
       source: { kind: 'builtin', id, title, author, url: sourceUrl },
     });
   }
@@ -139,7 +139,7 @@ module.exports = function register({ handle, ctx }) {
   const reg = (p) => { if (typeof p === 'string' && p) ctx.registerMediaPath(p); };
   const bgGate = createGate(1);
 
-  // 编码器探测结果缓存到 userData/encoders.json（契约 C12）；启动几秒后后台预热，第一次导入/导出不用等
+  // 编码器探测结果缓存到 userData/encoders.json；启动几秒后后台预热，第一次导入/导出不用等
   try { encoders.setCacheFile(path.join(paths.userData || paths.cache, 'encoders.json')); } catch {}
   const warm = setTimeout(() => {
     try { const bin = paths.ffmpeg; if (bin) encoders.probeEncoders(bin).catch(() => {}); } catch {}
@@ -244,7 +244,7 @@ module.exports = function register({ handle, ctx }) {
     return encoders.describeEncoders(bin, { setting: encoderSetting(), force: !!refresh });
   });
 
-  /** 内置音乐与音效（契约 C16）：清单条目附绝对路径 path，并已注册到 ffmedia://；没有清单时返回 [] */
+  /** 内置音乐与音效：清单条目附绝对路径 path，并已注册到 ffmedia://；没有清单时返回 [] */
   handle('media:builtinAudio', async () => {
     const items = readBuiltinAudio(builtinAudioDir(paths));
     items.forEach((it) => reg(it.path));
@@ -437,7 +437,7 @@ module.exports = function register({ handle, ctx }) {
     return out;
   });
 
-  // 胶片条（契约 C5）：start/end（秒，可选）只在这段区间里均匀取帧——片段裁剪后胶片条跟着变。
+  // 胶片条：start/end（秒，可选）只在这段区间里均匀取帧——片段裁剪后胶片条跟着变。
   // 每帧按 文件签名 + 时间（对齐到 0.04 秒）+ 高度 缓存到磁盘，同一素材反复拖动/裁剪不重复抽帧。
   handle('media:filmstrip', async ({ path: p, duration, count = 10, height = 60, start, end } = {}) => {
     const file = requireFile(p);

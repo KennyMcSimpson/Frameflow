@@ -3,10 +3,10 @@
 const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 
 // 页面可以订阅的主进程事件
-const EVENTS = new Set(['job:progress', 'job:done', 'job:error', 'app:flush', 'app:openFile', 'app:crashRecovered']);
+const EVENTS = new Set(['job:progress', 'job:done', 'job:error', 'app:flush', 'app:openFile', 'app:crashRecovered', 'project:externalChange']);
 
 // 这两个事件可能在界面订阅之前就到了（页面刚载入、store 还没初始化）：先暂存，
-// 有订阅者之后再补发，保证双击 .ffproj、崩溃恢复提示不会丢（契约 C13）
+// 有订阅者之后再补发，保证双击 .ffproj、崩溃恢复提示不会丢
 const STICKY = ['app:openFile', 'app:crashRecovered'];
 const stickyListeners = new Map(STICKY.map((ev) => [ev, new Set()]));
 const stickyQueue = [];
@@ -46,7 +46,7 @@ async function invoke(channel, payload) {
 
 contextBridge.exposeInMainWorld('ff', {
   invoke,
-  // PLAN-v3 §4 便捷入口（渲染端统一走 src/ui/api.js）
+  // AI 视频生成 / 语音识别 / 导出单帧便捷入口（渲染端统一走 src/ui/api.js）
   videogen: {
     providers: () => invoke('videogen:providers'),
     test: (provider) => invoke('videogen:test', { provider }),
@@ -79,7 +79,7 @@ contextBridge.exposeInMainWorld('ff', {
       if (event === 'app:flush' && --flushSubs === 0) ipcRenderer.send('app:flushReady', false);
     };
   },
-  /** 回复主进程的保存请求（契约 C14）：{ ok, id, error } */
+  /** 回复主进程的保存请求：{ ok, id, error } */
   flushed(result) {
     const r = result && typeof result === 'object' ? result : {};
     const msg = { ok: r.ok !== false };
@@ -87,7 +87,7 @@ contextBridge.exposeInMainWorld('ff', {
     if (typeof r.error === 'string' && r.error) msg.error = r.error.slice(0, 300);
     ipcRenderer.send('app:flushed', msg);
   },
-  /** 拖进来的 File → 本机绝对路径，取不到时为 ''（契约 C13；Electron 32 起 File.path 已移除） */
+  /** 拖进来的 File → 本机绝对路径，取不到时为 ''（Electron 32 起 File.path 已移除） */
   pathForFile(file) {
     try { return (webUtils && webUtils.getPathForFile(file)) || ''; } catch { return ''; }
   },

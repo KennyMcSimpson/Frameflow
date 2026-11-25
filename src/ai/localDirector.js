@@ -1,4 +1,4 @@
-// 本地导演（CONTRACTS §D localDirector.js）：没有 AI 时的兜底。
+// 本地导演：没有 AI 时的兜底。
 // 基于关键词抽取需求、提问，用主题模板 × 时长生成分镜，并从拆片统计数据推断技法卡。纯函数。
 import { createBrief, createShot, createPrevizSpec, ASPECTS, LOOK_LABELS } from '../engine/model.js';
 import { uid } from '../engine/ids.js';

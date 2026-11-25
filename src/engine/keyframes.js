@@ -1,4 +1,4 @@
-// 关键帧（PLAN-v3 §1–§2）。纯函数、不可变，node 可测。
+// 关键帧。纯函数、不可变，node 可测。
 //
 // keys 结构：{ [path]: [{ t, v, ease }] }，t 为片段本地秒（升序），ease 描述「从这一帧到下一帧」的插值方式：
 //   linear | ease（缓入缓出）| easeIn | easeOut | hold（保持到下一帧再跳变）

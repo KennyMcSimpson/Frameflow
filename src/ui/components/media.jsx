@@ -17,7 +17,7 @@ export const SOURCE_META = {
 
 /**
  * 由素材推断来源。同时认旧写法（source 是字符串 'videogen' / 'stock' / 'previz'）
- * 和契约 C3 的对象写法（source.kind、asset.ai），示例素材和内置素材算「实拍素材」。
+ * 和对象写法（source.kind、asset.ai），示例素材和内置素材算「实拍素材」。
  * 网页/视频站下载的素材版权不明，不标成「实拍素材」，按用户自己导入的算。
  */
 export function assetSourceKind(asset) {

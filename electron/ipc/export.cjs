@@ -1,6 +1,6 @@
 'use strict';
 // 导出：渲染端逐帧送 JPEG → ffmpeg（image2pipe）编码 H.264，同时按 AudioPlan 混音。
-// channel：export:begin / export:frame / export:end / export:cancel。见 SPEC §2.2 export.cjs、CONTRACTS AudioPlan。
+// channel：export:begin / export:frame / export:end / export:cancel（音频混音结构由 src/export/audioPlan.js 生成）。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -9,7 +9,7 @@ const os = require('node:os');
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 let ff = null;
 try { ff = require('../lib/ff.cjs'); } catch { ff = null; }
-// 编码器选择（契约 C12，media 包提供）；模块缺失或出错时回退到旧的硬件探测 + libx264
+// 编码器选择（由 ../lib/encoders.cjs 提供）；模块缺失或出错时回退到旧的硬件探测 + libx264
 let encoders = null;
 try { encoders = require('../lib/encoders.cjs'); } catch { encoders = null; }
 
@@ -285,7 +285,7 @@ function buildExportArgs(opts = {}) {
       + `format=${pixFmt},setsar=1`,
   );
   if (videoArgs) {
-    // 编码器模块给的参数（契约 C12：已含 -c:v、质量/码率与 -pix_fmt，这里不再追加自己的 -crf/-preset）
+    // 编码器模块给的参数（已含 -c:v、质量/码率与 -pix_fmt，这里不再追加自己的 -crf/-preset）
     args.push(...videoArgs);
     // 平台预设带码率时：在质量模式上加码率上限（封顶 CRF），画质稳定、体积不超标
     if (bitrate > 0 && !videoArgs.includes('-b:v') && !videoArgs.includes('-maxrate') && (encoder === 'libx264' || encoder === 'h264_nvenc')) {
@@ -496,7 +496,7 @@ function encoderLabel(encoder) {
 }
 
 /**
- * 选视频编码器（契约 C12）：交给 encoders.pickH264（只选通过试编码的编码器，显卡优先）。
+ * 选视频编码器：交给 encoders.pickH264（只选通过试编码的编码器，显卡优先）。
  * 设置里选了「只用 CPU」（media.encoder = 'cpu'）或本次导出关闭了硬件加速（hwaccel = 'off'）时只用 CPU。
  * encoders 模块不可用时退回 ff.pickVideoEncoder，再不行用 libx264。
  * 返回 { encoder, videoArgs|null, hw, label }；videoArgs 为 null 时 buildExportArgs 用内置参数。
@@ -956,7 +956,7 @@ module.exports = function register({ handle, ctx }) {
         result.srtError = `字幕文件写入失败：${e.message}`;
       }
     }
-    // 署名文件（契约 C3）：和视频同名的 .credits.txt，带 BOM + Windows 换行，记事本直接打开不乱码
+    // 署名文件：和视频同名的 .credits.txt，带 BOM + Windows 换行，记事本直接打开不乱码
     if (session.creditsText) {
       const creditsPath = creditsPathFor(session.finalPath);
       try {

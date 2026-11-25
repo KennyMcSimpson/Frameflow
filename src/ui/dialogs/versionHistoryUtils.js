@@ -1,4 +1,4 @@
-// 历史版本对话框用的纯函数（不依赖 React，便于单测）。契约见 _ff4_notes/CONTRACTS-w4.md C6。
+// 历史版本对话框用的纯函数（不依赖 React，便于单测）。
 
 const pad2 = (n) => String(n).padStart(2, '0');
 

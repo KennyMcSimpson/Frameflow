@@ -27,7 +27,16 @@ export const SOURCE_LABELS = {
   bilibili: 'B站', youtube: 'YouTube', commons: 'Wikimedia Commons', pexels: 'Pexels', pixabay: 'Pixabay',
   openverse: 'Openverse', archive: '互联网档案馆', nasa: 'NASA 影像库',
 };
-export const PROVIDER_LABELS = { codex: 'Codex', openai: 'API', local: '本地规则' };
+export const PROVIDER_LABELS = {
+  claude: 'Claude Code',
+  codex: 'Codex CLI',
+  gemini: 'Gemini CLI',
+  anthropic: 'Anthropic Claude',
+  openai: 'OpenAI 兼容 API',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  local: '本地规则',
+};
 
 export const STATUS_META = {
   planned: { label: '已规划', kind: '' },

@@ -1,7 +1,7 @@
-// AI 调用客户端（CONTRACTS §D / C9）：统一走主进程 ai:run 后台任务。
+// AI 调用客户端：统一走主进程 ai:run 后台任务。
 // 主进程 provider=local/none 时立即失败（code==='NO_AI'，不建任务），这里转成 NoAIError，调用方据此回退到本地规则。
 // 错误穿过 contextBridge 时自定义的 code 可能丢失，所以 isNoAI 也认消息里的「未连接 AI」/ NO_AI。
-// 进度（C9）：onProgress 收到的对象保留 jobId/stage/progress/message，另带 phase（简短中文阶段）、elapsedMs、slow。
+// 进度：onProgress 收到的对象保留 jobId/stage/progress/message，另带 phase（简短中文阶段）、elapsedMs、slow。
 // 出图（ai:image）不走 runAI，但出错怎么认在这里统一：isNoImageAI（还没配出图服务）、imageErrorKind（该引导用户做什么）。
 import api from '../ui/api.js';
 

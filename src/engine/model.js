@@ -1,4 +1,4 @@
-// 数据模型：默认值、工厂函数、枚举、normalize（SPEC §3）。纯函数，node 可测。
+// 数据模型：默认值、工厂函数、枚举、normalize。纯函数，node 可测。
 import { uid, clamp } from './ids.js';
 
 export const ASPECTS = {
@@ -52,10 +52,10 @@ export const ANALYSIS_CATEGORY_LABELS = { film: '电影片段', tutorial: '拍�
 export const LIMITS = { maxClips: 200, maxDuration: 600, minClip: 0.2, maxTransition: 2, minTransition: 0.1, minSpeed: 0.1, maxSpeed: 10, speed: { min: 0.1, max: 10 }, maxOverlayTrack: 4, maxCrop: 0.45 };
 /** 工程文件结构版本（迁移见 migrations.js）。3：镜头文案字幕只在初剪/迁移时生成一次，之后完全由用户掌控 */
 export const PROJECT_VERSION = 3;
-/** 文字片段可选的行号 row（C18）：整数 0..MAX_TEXT_ROW */
+/** 文字片段可选的行号 row：整数 0..MAX_TEXT_ROW */
 export const MAX_TEXT_ROW = 7;
 
-// ---------- v3 新增（PLAN-v3 §1） ----------
+// ---------- 混合模式、遮罩与变速曲线等扩展属性 ----------
 export const BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'add'];
 export const BLEND_LABELS = { normal: '正常', multiply: '正片叠底', screen: '滤色', overlay: '叠加', darken: '变暗', lighten: '变亮', add: '线性减淡' };
 export const FIT_MODES = ['contain', 'cover', 'fill'];
@@ -79,7 +79,7 @@ export function defaultCanvas() { return { type: 'none', value: null }; }
 export function defaultTrackFlags() { return { locked: false, hidden: false, muted: false }; }
 /**
  * 轨道状态。注意：project.tracks 已被 video/text/audio 片段数组占用，
- * 因此 PLAN §1 的 `tracks:{video:{locked,hidden,muted},...}` 落在 project.trackState 上（同结构）。
+ * 因此轨道状态 `{video:{locked,hidden,muted},...}` 单独存放在 project.trackState 上。
  */
 export function defaultTrackState() {
   return {
@@ -265,7 +265,7 @@ function normTextExtra(t) {
   o.shadow = o.shadow && typeof o.shadow === 'object' ? o.shadow : (o.shadow === true ? { color: '#000000', blur: 6, x: 0, y: 2 } : null);
   o.bg = o.bg && typeof o.bg === 'object' ? o.bg : null;
   for (const k of ['animIn', 'animOut', 'animLoop']) o[k] = o[k] && typeof o[k] === 'object' && o[k].type ? { type: String(o[k].type), dur: num(o[k].dur, 0, 10, 0.5) } : null;
-  // 行号（C18）：只保留 0..7 的整数，其它值去掉，交给时间线自动排
+  // 行号：只保留 0..7 的整数，其它值去掉，交给时间线自动排
   if ('row' in o) {
     const row = Number(o.row);
     if (o.row !== null && o.row !== '' && Number.isInteger(row) && row >= 0 && row <= MAX_TEXT_ROW) o.row = row;
@@ -308,7 +308,7 @@ export function createAsset(partial = {}) {
     hasAudio: false,
     size: 0,
     thumb: null,
-    // 契约 C3：本地导入记 kind:'local'（type 为旧写法，保留兼容）；调用方传入的 source/license/ai/reference 原样保留
+    // 本地导入记 kind:'local'（type 为旧写法，保留兼容）；调用方传入的 source/license/ai/reference 原样保留
     source: { type: 'local', kind: 'local' },
     tags: [],
     description: '',

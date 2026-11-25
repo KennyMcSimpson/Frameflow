@@ -3,7 +3,7 @@
 // - summarizeDiff：把对比结果写成给用户看的中文短句。
 // - needsConfirm：由本地规则决定这次修改要不要先给用户确认（大范围删除、时长大变、全片调色/转场、解锁等），
 //   不让模型自己评估风险；其余修改直接生效，用户随时可以撤销。
-import { projectDuration } from '../engine/timeline.js';
+import { projectDuration, trackFlags } from '../engine/timeline.js';
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -228,13 +228,103 @@ export const CONFIRM_RULES = Object.freeze({
   minDurationDelta: 2,   // 且至少变化 2 秒（很短的片子不因零点几秒就打扰用户）
 });
 
-const COLOR_TYPES = new Set(['setColor', 'setLook', 'harmonize', 'matchColor']);
+const NON_HARMONIZE_COLOR_TYPES = new Set(['setColor', 'setLook', 'matchColor']);
 
-function targetsAll(op, clipCount) {
-  const t = op && op.target;
+function normalizeTargetObj(target) {
+  if (typeof target === 'string') return { mode: target };
+  return target && typeof target === 'object' ? target : null;
+}
+
+function parseTrackRef(track) {
+  if (track === 'video' || track === 'text' || track === 'audio') return { kind: track };
+  if (typeof track === 'string') {
+    const m = /^overlay[:\s-]?([1-4])$/.exec(track);
+    if (m) return { kind: 'overlay', n: Number(m[1]) };
+  }
+  if (track && typeof track === 'object' && !Array.isArray(track)) {
+    if (track.kind === 'overlay' && Number.isInteger(track.n) && track.n >= 1 && track.n <= 4) {
+      return { kind: 'overlay', n: track.n };
+    }
+    if (track.kind === 'video' || track.kind === 'text' || track.kind === 'audio') {
+      return { kind: track.kind };
+    }
+  }
+  return null;
+}
+
+function resolvedTargetZeroIndices(op, clipCount, clipIds) {
+  const t = normalizeTargetObj(op && op.target);
+  if (!t || clipCount <= 0) return null;
+  if (t.mode === 'all') return Array.from({ length: clipCount }, (_, i) => i);
+  if (t.mode === 'ids' && Array.isArray(t.ids)) {
+    const idToIdx = new Map();
+    if (Array.isArray(clipIds)) clipIds.forEach((id, i) => { if (typeof id === 'string') idToIdx.set(id, i); });
+    const out = new Set();
+    for (const id of t.ids) {
+      if (typeof id === 'string' && idToIdx.has(id)) out.add(idToIdx.get(id));
+    }
+    return Array.from(out);
+  }
+  if ((t.mode === 'index' || t.mode === 'indices') && Array.isArray(t.indices)) {
+    const out = new Set();
+    for (const idx of t.indices) {
+      const n = Number(idx);
+      if (Number.isInteger(n) && n >= 1 && n <= clipCount) out.add(n - 1);
+    }
+    return Array.from(out);
+  }
+  if (t.mode === 'range') {
+    const rawStart = t.start ?? t.from ?? (Array.isArray(t.range) ? t.range[0] : undefined);
+    const rawEnd = t.end ?? t.to ?? (Array.isArray(t.range) ? t.range[1] : undefined);
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      const s = Number(rawStart);
+      const e = Number(rawEnd);
+      if (Number.isFinite(s) && Number.isFinite(e)) {
+        const lo = Math.max(0, Math.ceil(Math.min(s, e)));
+        const hi = Math.min(clipCount - 1, Math.floor(Math.max(s, e)));
+        const out = [];
+        for (let i = lo; i <= hi; i += 1) out.push(i);
+        return out;
+      }
+    }
+  }
+  return null;
+}
+
+function targetsAll(op, clipCount, clipIds) {
+  const t = normalizeTargetObj(op && op.target);
   if (!t) return false;
   if (t.mode === 'all') return true;
-  if (clipCount > 1 && t.mode === 'index' && Array.isArray(t.indices) && new Set(t.indices).size >= clipCount) return true;
+  if (clipCount <= 0) return false;
+  if (t.mode === 'ids' && Array.isArray(t.ids)) {
+    const validIds = clipIds instanceof Set ? clipIds : new Set(Array.isArray(clipIds) ? clipIds : []);
+    const matched = new Set();
+    for (const id of t.ids) {
+      if (typeof id === 'string' && (validIds.size === 0 || validIds.has(id))) matched.add(id);
+    }
+    if (matched.size >= clipCount) return true;
+  }
+  if ((t.mode === 'index' || t.mode === 'indices') && Array.isArray(t.indices)) {
+    const validIdx = new Set();
+    for (const idx of t.indices) {
+      const n = Number(idx);
+      if (Number.isInteger(n) && n >= 1 && n <= clipCount) validIdx.add(n);
+    }
+    if (validIdx.size >= clipCount) return true;
+  }
+  if (t.mode === 'range') {
+    const rawStart = t.start ?? t.from ?? (Array.isArray(t.range) ? t.range[0] : undefined);
+    const rawEnd = t.end ?? t.to ?? (Array.isArray(t.range) ? t.range[1] : undefined);
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      const s = Number(rawStart);
+      const e = Number(rawEnd);
+      if (Number.isFinite(s) && Number.isFinite(e)) {
+        const lo = Math.min(s, e);
+        const hi = Math.max(s, e);
+        if (lo <= 0 && hi >= clipCount - 1) return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -246,8 +336,11 @@ function targetsAll(op, clipCount) {
 export function needsConfirm({ ops = [], before, after, diff } = {}) {
   const d = diff || (after ? diffProject(before, after) : null);
   const reasons = [];
-  const clipCount = list(before, 'video').length;
+  const beforeClips = list(before, 'video');
+  const clipCount = beforeClips.length;
+  const clipIds = beforeClips.map((c) => c && c.id).filter((id) => typeof id === 'string');
   const list_ = Array.isArray(ops) ? ops : [];
+  const survivingClips = d ? Math.max(0, d.clipCountBefore - d.clips.removed.length) : clipCount;
 
   if (d && d.clips.removed.length >= CONFIRM_RULES.removeClips) reasons.push(`会删除 ${d.clips.removed.length} 个片段`);
   if (d && d.durationBefore > 0) {
@@ -256,14 +349,80 @@ export function needsConfirm({ ops = [], before, after, diff } = {}) {
       reasons.push(`总时长会从 ${r1(d.durationBefore)} 秒变成 ${r1(d.durationAfter)} 秒`);
     }
   }
-  const colorAll = list_.some((op) => COLOR_TYPES.has(op.type) && op.type !== 'harmonize' && targetsAll(op, clipCount))
-    || (!list_.some((o) => o && o.type === 'harmonize') && d && clipCount > 2 && d.clips.changed.filter((c) => c.fields.includes('调色')).length >= clipCount);
+
+  // 全片调色：仅当批次内所有调色类操作全部严格为 harmonize 时才豁免，混入任意非 harmonize 调色操作即关闭豁免
+  const hasHarmonize = list_.some((o) => o && o.type === 'harmonize');
+  const hasNonHarmonizeColor = list_.some((o) => o && (
+    NON_HARMONIZE_COLOR_TYPES.has(o.type)
+    || (o.type === 'pasteAttributes' && (!Array.isArray(o.keys) || !o.keys.length || o.keys.includes('color')))
+  ));
+  const harmonizeOnly = hasHarmonize && !hasNonHarmonizeColor;
+
+  const colorCoveredIndices = new Set();
+  for (const op of list_) {
+    if (!op || !NON_HARMONIZE_COLOR_TYPES.has(op.type)) continue;
+    const idxs = resolvedTargetZeroIndices(op, clipCount, clipIds);
+    if (idxs) idxs.forEach((i) => colorCoveredIndices.add(i));
+  }
+  const colorChangedCount = d ? d.clips.changed.filter((c) => c.fields.includes('调色')).length : 0;
+  const colorAll = clipCount > 1 && (
+    list_.some((op) => op && NON_HARMONIZE_COLOR_TYPES.has(op.type) && targetsAll(op, clipCount, clipIds))
+    || colorCoveredIndices.size >= clipCount
+    || (!harmonizeOnly && d && survivingClips > 0 && colorChangedCount >= survivingClips)
+  );
   if (colorAll) reasons.push('会改动全片的调色');
-  const transitionAll = list_.some((op) => op.type === 'setTransitionAll' || (op.type === 'setTransition' && targetsAll(op, clipCount)));
+
+  // 全片转场：涵盖 setTransitionAll、targetsAll，以及分批/按边界修改全部可转场片段（clipCount >= 2）
+  const transitionTouchedIndices = new Set();
+  for (const op of list_) {
+    if (!op || op.type !== 'setTransition') continue;
+    const idxs = resolvedTargetZeroIndices(op, clipCount, clipIds);
+    if (idxs) idxs.forEach((i) => transitionTouchedIndices.add(i));
+  }
+  const transitionOpsCoverAllBoundaries = clipCount > 1
+    && transitionTouchedIndices.size >= clipCount - 1
+    && Array.from({ length: clipCount - 1 }, (_, i) => i + 1).every((idx) => transitionTouchedIndices.has(idx));
+
+  const transitionChanged = d ? d.clips.changed.filter((c) => c.fields.includes('转场')) : [];
+  const survivingBoundaryCount = d
+    ? Math.max(0, Math.max(0, d.clipCountAfter - 1) - d.clips.added.filter((c) => c.index >= 2).length)
+    : 0;
+  const boundaryTransitionChangedCount = transitionChanged.filter((c) => c.index >= 2).length;
+  const transitionAllByDiff = Boolean(
+    clipCount > 1 && d && (
+      (survivingClips > 0 && transitionChanged.length >= survivingClips)
+      || (survivingBoundaryCount > 0 && boundaryTransitionChangedCount >= survivingBoundaryCount)
+    ),
+  );
+  const transitionAll = list_.some((op) => op && op.type === 'setTransitionAll')
+    || (clipCount > 1 && list_.some((op) => op && op.type === 'setTransition' && targetsAll(op, clipCount, clipIds)))
+    || transitionOpsCoverAllBoundaries
+    || transitionAllByDiff;
   if (transitionAll) reasons.push('会改动全片的转场');
-  if (list_.some((op) => op.type === 'unlock')) reasons.push('会解锁被锁定的片段');
-  if (list_.some((op) => op.type === 'clearCaptions')) reasons.push('会清空全部自动字幕');
-  if ((d && d.aspect) || (!d && list_.some((op) => op.type === 'setProject' && op.settings && op.settings.aspect))) reasons.push('会改变画幅');
+
+  if (list_.some((op) => op && op.type === 'unlock')) reasons.push('会解锁被锁定的片段');
+
+  let unlockTrack = list_.some((op) => {
+    if (!op || op.type !== 'setTrack' || !op.patch || op.patch.locked !== false) return false;
+    const ref = parseTrackRef(op.track);
+    return ref ? trackFlags(before, ref.kind, ref.n).locked : false;
+  });
+  if (!unlockTrack && before && after) {
+    const refs = [
+      { kind: 'video' },
+      { kind: 'text' },
+      { kind: 'audio' },
+      { kind: 'overlay', n: 1 },
+      { kind: 'overlay', n: 2 },
+      { kind: 'overlay', n: 3 },
+      { kind: 'overlay', n: 4 },
+    ];
+    unlockTrack = refs.some((ref) => trackFlags(before, ref.kind, ref.n).locked && !trackFlags(after, ref.kind, ref.n).locked);
+  }
+  if (unlockTrack) reasons.push('解锁已锁定的轨道');
+
+  if (list_.some((op) => op && op.type === 'clearCaptions')) reasons.push('会清空全部自动字幕');
+  if ((d && d.aspect) || (!d && list_.some((op) => op && op.type === 'setProject' && op.settings && op.settings.aspect))) reasons.push('会改变画幅');
 
   return { need: reasons.length > 0, reasons: Array.from(new Set(reasons)) };
 }

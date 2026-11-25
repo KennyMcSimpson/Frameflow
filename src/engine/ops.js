@@ -1,4 +1,4 @@
-// 编辑操作协议（SPEC §4）：AI、本地指令、检查器、技法卡共用的唯一修改入口。
+// 编辑操作协议：AI、本地指令、检查器、技法卡共用的唯一修改入口。
 //
 // 约定：
 // - 原子性：所有操作在工作副本上依次执行，任何一条失败都返回原 project（同一对象）。
@@ -30,7 +30,7 @@ const CLIP_OPS = [
   'matchColor', 'harmonize', 'applyPacing',
 ];
 const GLOBAL_OPS = ['insertAsset', 'addText', 'updateText', 'removeText', 'addAudio', 'updateAudio', 'removeAudio', 'setProject'];
-/** v3 扩展操作（PLAN-v3 §3）：按 id/ids/at 定位，不使用 target */
+/** 扩展操作：按 id/ids/at 定位，不使用 target */
 export const EXT_OPS = [
   'setClipProps', 'freezeFrame', 'setSpeedCurve', 'setKeyframe', 'removeKeyframe', 'roll', 'slip', 'slide', 'rippleDelete', 'trimLeft', 'trimRight',
   'addOverlay', 'updateOverlay', 'removeOverlay', 'setTrack', 'addMarker', 'updateMarker', 'removeMarker', 'addCaptions', 'updateCaptionStyle', 'clearCaptions',
@@ -950,7 +950,7 @@ const globalHandlers = {
   },
 };
 
-// ---------- v3 扩展操作（PLAN-v3 §3）：均不走 target 语义，按 id/ids 指定对象 ----------
+// ---------- 扩展操作：均不走 target 语义，按 id/ids 指定对象 ----------
 
 const CLIP_PROP_KEYS = ['reverse', 'mirror', 'crop', 'fit', 'canvas', 'opacity', 'blend', 'mask', 'muted', 'denoise'];
 const CLIP_PROP_LABELS = { reverse: '倒放', mirror: '镜像', crop: '裁切', fit: '画面适配', canvas: '背景画布', opacity: '不透明度', blend: '混合模式', mask: '蒙版', muted: '原声静音', audioFadeIn: '声音淡入', audioFadeOut: '声音淡出', denoise: '降噪' };
@@ -1103,7 +1103,7 @@ function parseTrack(track) {
 }
 function trackName(t) { return t.kind === 'overlay' ? `画中画 ${t.n}` : TRACK_LABELS[t.kind]; }
 
-/** 内联版 segmentsToTexts（W10 的 captions.js 提供同名函数；这里保持零依赖，行为一致） */
+/** 内联版 segmentsToTexts（captions.js 提供同名函数；这里保持零依赖，行为一致） */
 export function captionTextsFromSegments(segments, { preset = 'subtitle', aspect = '16:9', style = null } = {}) {
   const y = aspect === '9:16' ? 0.72 : 0.86;
   const out = [];
@@ -1817,7 +1817,7 @@ export function describeOp(op, project) {
 
 // ---------- 主入口 ----------
 
-// 轨道锁（契约 C15）：轨道头上了锁，这条轨道上的内容任何操作都不能改。
+// 轨道锁：轨道头上了锁，这条轨道上的内容任何操作都不能改。
 // 各操作会改哪条轨道在这里集中登记，新增操作时记得补上。setTrack（解锁本身）、setProject、标记不受限制。
 const VIDEO_TRACK_OPS = new Set([
   ...CLIP_OPS, 'insertAsset',

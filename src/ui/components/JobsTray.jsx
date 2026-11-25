@@ -2,25 +2,30 @@
 import React, { useEffect, useRef, useState } from 'react';
 import useStore from '../store.js';
 import api from '../api.js';
+import { useLocale } from '../i18n.js';
 import { Icon, Button, ProgressBar, EmptyState } from './ui.jsx';
 
 const STATUS_TEXT = { done: '已完成', error: '失败', cancelled: '已取消' };
+const STATUS_TEXT_EN = { done: 'Completed', error: 'Failed', cancelled: 'Cancelled' };
 
 export function isRunning(job) { return !job.status || job.status === 'running'; }
 
 function JobRow({ job }) {
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   const [cancelling, setCancelling] = useState(false);
   const running = isRunning(job);
   const pct = Number.isFinite(job.progress) ? Math.max(0, Math.min(1, job.progress)) : 0;
-  const isAI = /^(ai|analysis|videogen|asr)/.test(job.kind || '') || /AI|拆片|分析|生成|识别/.test(job.label || '');
+  const isAI = /^(ai|analysis|videogen|asr)/.test(job.kind || '') || /AI|拆片|分析|生成|识别|Breakdown|Generate|Analyze/i.test(job.label || '');
+  const statusMap = isEn ? STATUS_TEXT_EN : STATUS_TEXT;
   const sub = running
-    ? [job.stage, job.message].filter(Boolean).join(' · ') || '准备中…'
-    : job.status === 'error' ? (job.message || '任务失败') : STATUS_TEXT[job.status] || '';
+    ? [job.stage, job.message].filter(Boolean).join(' · ') || L('准备中…', 'Preparing…')
+    : job.status === 'error' ? (job.message || L('任务失败', 'Job failed')) : statusMap[job.status] || '';
 
   const onCancel = async () => {
     if (!job.jobId || cancelling) return;
     setCancelling(true);
-    try { await api.cancel(job.jobId); } catch (e) { useStore.getState().toast('取消失败：' + e.message, 'error'); setCancelling(false); }
+    try { await api.cancel(job.jobId); } catch (e) { useStore.getState().toast(L('取消失败：', 'Failed to cancel: ') + e.message, 'error'); setCancelling(false); }
   };
 
   return (
@@ -29,13 +34,13 @@ function JobRow({ job }) {
         <span className="job-status-icon">
           {running ? <span className={'spinner' + (isAI ? ' ai' : '')} /> : job.status === 'done' ? <Icon name="check" size={14} stroke={2} /> : job.status === 'cancelled' ? <Icon name="minus" size={14} stroke={2} /> : <Icon name="close" size={14} stroke={2} />}
         </span>
-        <span className="job-label ellipsis" title={job.label}>{job.label || '后台任务'}</span>
+        <span className="job-label ellipsis" title={job.label}>{job.label || L('后台任务', 'Background Job')}</span>
         {running && <span className="job-pct mono">{pct > 0 ? `${Math.round(pct * 100)}%` : ''}</span>}
         {running && (
-          <Button variant="ghost" size="sm" icon="close" title={cancelling ? '正在取消…' : '取消此任务'} onClick={onCancel} disabled={cancelling || !job.jobId} />
+          <Button variant="ghost" size="sm" icon="close" title={cancelling ? L('正在取消…', 'Cancelling…') : L('取消此任务', 'Cancel job')} onClick={onCancel} disabled={cancelling || !job.jobId} />
         )}
       </div>
-      <div className="job-sub ellipsis" title={sub}>{cancelling && running ? '正在取消…' : sub}</div>
+      <div className="job-sub ellipsis" title={sub}>{cancelling && running ? L('正在取消…', 'Cancelling…') : sub}</div>
       {running && <ProgressBar value={pct} ai={isAI} indeterminate={!(pct > 0)} />}
     </div>
   );
@@ -43,6 +48,8 @@ function JobRow({ job }) {
 
 /** 弹出面板。anchorRef：StatusBar 中触发按钮（点击它不算“外部点击”）。 */
 export default function JobsTray({ anchorRef }) {
+  const isEn = useLocale() === 'en-US';
+  const L = (zh, en) => (isEn ? en : zh);
   const jobs = useStore((s) => s.jobs);
   const open = useStore((s) => s.jobsOpen);
   const setJobsOpen = useStore((s) => s.setJobsOpen);
@@ -63,17 +70,17 @@ export default function JobsTray({ anchorRef }) {
   const list = Object.values(jobs || {}).filter(Boolean);
   const running = list.filter(isRunning).length;
   return (
-    <section className="jobs-pop" ref={ref} aria-label="后台任务">
+    <section className="jobs-pop" ref={ref} aria-label={L('后台任务', 'Background Jobs')}>
       <div className="jobs-pop-head">
-        <b>后台任务</b>
-        <span className="muted xs">{running ? `${running} 个进行中` : list.length ? '全部结束' : ''}</span>
+        <b>{L('后台任务', 'Background Jobs')}</b>
+        <span className="muted xs">{running ? (isEn ? `${running} running` : `${running} 个进行中`) : list.length ? L('全部结束', 'All finished') : ''}</span>
         <span className="grow" />
-        <Button variant="ghost" size="sm" icon="close" title="收起" onClick={() => setJobsOpen(false)} />
+        <Button variant="ghost" size="sm" icon="close" title={L('收起', 'Collapse')} onClick={() => setJobsOpen(false)} />
       </div>
       <div className="jobs-list">
         {list.length
           ? list.map((j) => <JobRow key={j.jobId} job={j} />)
-          : <EmptyState icon="clock" title="没有后台任务" desc="生成画面、导出、拆片等耗时操作会显示在这里，可随时取消。" />}
+          : <EmptyState icon="clock" title={L('没有后台任务', 'No Background Jobs')} desc={L('生成画面、导出、拆片等耗时操作会显示在这里，可随时取消。', 'Long-running tasks like rendering, exporting, and breakdown appear here and can be cancelled anytime.')} />}
       </div>
     </section>
   );

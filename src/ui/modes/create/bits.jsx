@@ -206,7 +206,7 @@ export function LookSwatch({ colors }) {
   );
 }
 
-// ---------- v3 创作模式小组件（W1 设计系统组件未就绪时的本地实现，接口与 PLAN-v3 §6 一致） ----------
+// ---------- 创作模式通用小组件 ----------
 
 /** 主按钮 + 下拉。items: [{ id, label, icon, desc, onClick, disabled }] */
 export function CrSplitButton({ label, icon, onClick, items = [], disabled, variant = 'primary', size = 'md', className = '', menuWidth = 248, ...rest }) {

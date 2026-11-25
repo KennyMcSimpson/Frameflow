@@ -15,7 +15,7 @@ export const useTimelineUI = create((set, get) => ({
     const on = !!v;
     writePref('ff.refine.link', on);
     set({ link: on });
-    // 联动开关写入 project.timeline.linked，由 ops 读取（PLAN-v3 R2）
+    // 联动开关写入 project.timeline.linked，由 ops 读取
     const s = useStore.getState();
     const cur = s.project ? !(s.project.timeline && s.project.timeline.linked === false) : on;
     if (s.project && cur !== on) s.commit([{ type: 'setProject', target: { mode: 'none', indices: [], ids: [] }, settings: { linked: on } }], on ? '开启联动' : '关闭联动');
@@ -199,11 +199,11 @@ export function jumpToClip(clipId) {
   if (item) { pause(); seek(item.start); }
 }
 
-// ======================= v3：W5 op 调用（store.apply） =======================
-// PLAN-v3 §3：UI 经 store.apply(op, {label, mergeKey}) 调用。W5 未就绪时退回 commit([op])，
+// ======================= 单条 Op 调用（store.apply） =======================
+// UI 经 store.apply(op, {label, mergeKey}) 调用；未实现 apply 时退回 commit([op])，
 // 引擎不认识的 op 会被校验拒绝并由 store 提示，不会破坏工程。
 
-/** 执行一个 W5 op；返回是否成功 */
+/** 执行单条编辑 op；返回是否成功 */
 export function applyOp(op, label, opts = {}) {
   const s = st();
   if (!s.project) return false;
@@ -277,7 +277,7 @@ export function toggleMirror() {
   return clipPatch(it, { mirror: { ...m, h: !m.h } }, m.h ? '取消镜像' : '水平镜像');
 }
 
-/** 让检查器切到某个分页（裁剪 / 变速）。W9 可读 store.inspectorTab 或监听 ff:inspector-tab 事件 */
+/** 让检查器切到某个分页（裁剪 / 变速）。检查器面板可读取 store.inspectorTab 或监听 ff:inspector-tab 事件 */
 export function openInspectorTab(tab) {
   const s = st();
   const it = primaryClip();

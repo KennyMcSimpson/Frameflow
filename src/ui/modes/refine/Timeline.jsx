@@ -86,7 +86,7 @@ export default function Timeline() {
   const LANE_PAD_R = 48;
   const laneW = Math.ceil(Math.max((duration + TAIL_SECONDS) * pps + LANE_PAD_R, laneViewW));
 
-  // 行号稳定（契约 C18）：优先用工程里保存的 row，其次保持上一次所在的行
+  // 行号稳定：优先用工程里保存的 row，其次保持上一次所在的行
   const textPack = useMemo(() => {
     const prev = prevTextRows.current;
     const pack = packRows(texts.map((t) => {
@@ -502,7 +502,7 @@ export default function Timeline() {
     const slot = dropSlot(layout, t);
     tools.hideGuide();
     if (hasDragFiles(e)) {
-      // 资源管理器里的文件（契约 C13）：取到路径就导入并按落点放置；取不到交给全局拖放（会打开导入窗口）
+      // 资源管理器里的文件：取到路径就导入并按落点放置；取不到交给全局拖放（会打开导入窗口）
       const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
       const paths = files.map((f) => { try { return api.pathForFile?.(f) || ''; } catch { return ''; } }).filter(Boolean);
       if (!paths.length) return;

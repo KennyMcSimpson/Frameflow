@@ -1,12 +1,13 @@
-// 通用 UI 组件（W1 设计系统，PLAN-v3 §6）。各模块统一使用，保持风格一致。
+// 通用 UI 组件（设计系统）。各模块统一使用，保持风格一致。
 // 导出：Icon Button SplitButton Menu Drawer Segmented Tabs Tooltip EmptyState(Empty) KeyframeButton Slider
 //      Select Switch Field Modal ProgressBar Spinner Chip Kbd fmtTime fmtBytes ICON_NAMES hasIcon
 // 图标路径：部分移植自 Lucide（ISC License，https://lucide.dev，© Lucide Contributors）
 //          与 Feather（MIT License，https://feathericons.com，© Cole Bemis），按 24 网格改写为单条 path。
-// 无障碍（Frameflow4 · design）：Modal/Drawer 共用浮层栈，Esc 只关最上层；Modal 焦点圈定、关闭后焦点回到键盘用户的触发处；
+// 无障碍：Modal/Drawer 共用浮层栈，Esc 只关最上层；Modal 焦点圈定、关闭后焦点回到键盘用户的触发处；
 //          Menu ↑↓/Home/End；Segmented/Tabs 方向键切换（单一 Tab 停靠点）；Slider 点数值可直接输入、Shift+方向键大步。
 import React, { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocale } from '../i18n.js';
 
 // ---------- 图标（内联 SVG，24 网格，Lucide 风格 1.5px 描边） ----------
 const P = {
@@ -105,7 +106,7 @@ const P = {
   chevronUp: 'M18 15l-6-6-6 6',
   chevronRight: 'M9 6l6 6-6 6',
   chevronLeft: 'M15 6l-6 6 6 6',
-  // 三个实心圆点（在 FILLED 中）：原来是 0.01 长的圆头线段，16px 下几乎看不见（v-create B1）
+  // 三个实心圆点（在 FILLED 中）：改用闭合圆路径，避免 16px 小尺寸下极短圆头线段几乎不可见
   dots: 'M5 10.25a1.75 1.75 0 110 3.5 1.75 1.75 0 010-3.5zM12 10.25a1.75 1.75 0 110 3.5 1.75 1.75 0 010-3.5zM19 10.25a1.75 1.75 0 110 3.5 1.75 1.75 0 010-3.5z',
   more: 'M5 10.25a1.75 1.75 0 110 3.5 1.75 1.75 0 010-3.5zM12 10.25a1.75 1.75 0 110 3.5 1.75 1.75 0 010-3.5zM19 10.25a1.75 1.75 0 110 3.5 1.75 1.75 0 010-3.5z',
   menu: 'M4 6h16M4 12h16M4 18h16',
@@ -120,7 +121,7 @@ const P = {
   panelLeft: 'M3 4h18v16H3zM9 4v16',
   panelRight: 'M3 4h18v16H3zM15 4v16',
   pin: 'M12 17v5M5 17h14l-2-4V4H7v9z',
-  // ---- Frameflow4 新增（契约 C2）----
+  // ---- 扩展图标 ----
   // 设备 / 平台
   smartphone: 'M7 2h10a2 2 0 012 2v16a2 2 0 01-2 2H7a2 2 0 01-2-2V4a2 2 0 012-2zM12 18h.01',
   monitor: 'M4 3h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2zM8 21h8M12 17v4',
@@ -171,7 +172,7 @@ export const ICON_NAMES = Object.keys(P);
 /** 图标名是否存在（调用方可据此选备用图标） */
 export const hasIcon = (name) => typeof name === 'string' && Object.prototype.hasOwnProperty.call(P, name);
 
-// 未知图标名：画一个中性小圆点，开发模式下每个名字只提醒一次，绝不抛错（契约 C2）
+// 未知图标名：画一个中性小圆点，开发模式下每个名字只提醒一次，绝不抛错
 const warnedIcons = new Set();
 const IS_DEV = (() => { try { return !!(import.meta.env && import.meta.env.DEV); } catch { return false; } })();
 function warnUnknownIcon(name) {
@@ -324,6 +325,7 @@ export function Menu({ items = [], onClose, align = 'left', style, autoFocus, cl
 
 /** 主操作 + 下拉更多选项 */
 export function SplitButton({ label, onClick, items = [], variant = 'secondary', size, icon, disabled, title, className = '' }) {
+  const isEn = useLocale() === 'en-US';
   const [open, setOpen] = useState(false);
   const [byKey, setByKey] = useState(false);
   const ref = useRef(null);
@@ -332,7 +334,7 @@ export function SplitButton({ label, onClick, items = [], variant = 'secondary',
   return (
     <div className={'split-btn ' + className} ref={ref}>
       <Button variant={variant} size={size} icon={icon} onClick={onClick} disabled={disabled} title={title}>{label}</Button>
-      <Button variant={variant} size={size} className="split-caret" icon="chevronDown" title="更多选项" onClick={(e) => { setByKey(e.detail === 0); setOpen(!open); }} disabled={disabled || !items.length} aria-haspopup="menu" aria-expanded={open} />
+      <Button variant={variant} size={size} className="split-caret" icon="chevronDown" title={isEn ? 'More options' : '更多选项'} onClick={(e) => { setByKey(e.detail === 0); setOpen(!open); }} disabled={disabled || !items.length} aria-haspopup="menu" aria-expanded={open} />
       {open && <Menu items={items} onClose={close} align="right" autoFocus={byKey} style={{ top: 'calc(100% + 4px)' }} />}
     </div>
   );
@@ -386,6 +388,7 @@ function useLatest(v) {
 // ---------- 抽屉 ----------
 /** 在最近的 position:relative 容器内滑出。Esc 关闭；上面还有对话框或更晚打开的浮层时让给它们。 */
 export function Drawer({ open, side = 'right', width = 380, title, icon, onClose, children, actions, backdrop = false, className = '' }) {
+  const isEn = useLocale() === 'en-US';
   const isTop = useLayer(!!open);
   const closeRef = useLatest(onClose);
   useEffect(() => {
@@ -407,7 +410,7 @@ export function Drawer({ open, side = 'right', width = 380, title, icon, onClose
           <div className="drawer-head">
             <h3>{icon && <Icon name={icon} size={16} />}{title}</h3>
             {actions}
-            {onClose && <Button variant="ghost" size="sm" icon="close" title="关闭（Esc）" onClick={onClose} />}
+            {onClose && <Button variant="ghost" size="sm" icon="close" title={isEn ? 'Close (Esc)' : '关闭（Esc）'} onClick={onClose} />}
           </div>
         )}
         <div className="drawer-body">{children}</div>
@@ -486,18 +489,24 @@ export function Tabs({ value, onChange, items, options, variant, className = '',
 // ---------- 关键帧按钮 ----------
 /** ◆ 添加/删除当前时间的关键帧，‹ › 跳到上/下一关键帧。 */
 export function KeyframeButton({ active, onToggle, onPrev, onNext, disabled, hasKeys, label, count }) {
-  const what = label ? `「${label}」` : '';
-  const tip = disabled ? '当前不可打关键帧'
-    : active ? `删除此处${what}关键帧（此参数共 ${count || 1} 个关键帧）`
-      : hasKeys ? `在播放头处为${what}添加关键帧（已有 ${count || 0} 个，参数会在关键帧之间渐变）`
-        : `在播放头处为${what}添加关键帧：打两个以上关键帧即可做出动画`;
+  const isEn = useLocale() === 'en-US';
+  const what = label ? (isEn ? ` "${label}"` : `「${label}」`) : '';
+  const tip = isEn
+    ? (disabled ? 'Keyframing unavailable'
+      : active ? `Remove${what} keyframe here (${count || 1} total)`
+        : hasKeys ? `Add${what} keyframe at playhead (${count || 0} existing; value animates between keyframes)`
+          : `Add${what} keyframe at playhead: add 2 or more keyframes to animate`)
+    : (disabled ? '当前不可打关键帧'
+      : active ? `删除此处${what}关键帧（此参数共 ${count || 1} 个关键帧）`
+        : hasKeys ? `在播放头处为${what}添加关键帧（已有 ${count || 0} 个，参数会在关键帧之间渐变）`
+          : `在播放头处为${what}添加关键帧：打两个以上关键帧即可做出动画`);
   return (
     <span className={'kf-btn' + (hasKeys ? ' has-keys' : '')}>
-      {onPrev && <button type="button" className="kf-nav" title={hasKeys ? `跳到上一个${what}关键帧` : '还没有关键帧'} aria-label="上一个关键帧" onClick={onPrev} disabled={disabled || !hasKeys}><Icon name="chevronLeft" size={12} /></button>}
+      {onPrev && <button type="button" className="kf-nav" title={hasKeys ? (isEn ? `Jump to previous${what} keyframe` : `跳到上一个${what}关键帧`) : (isEn ? 'No keyframes yet' : '还没有关键帧')} aria-label={isEn ? 'Previous keyframe' : '上一个关键帧'} onClick={onPrev} disabled={disabled || !hasKeys}><Icon name="chevronLeft" size={12} /></button>}
       <button type="button" className={'kf-toggle' + (active ? ' on' : '') + (hasKeys ? ' has' : '')} title={tip} aria-label={tip} onClick={onToggle} disabled={disabled} aria-pressed={!!active}>
         <Icon name={active ? 'keyframeFill' : 'keyframe'} size={16} stroke={2} />
       </button>
-      {onNext && <button type="button" className="kf-nav" title={hasKeys ? `跳到下一个${what}关键帧` : '还没有关键帧'} aria-label="下一个关键帧" onClick={onNext} disabled={disabled || !hasKeys}><Icon name="chevronRight" size={12} /></button>}
+      {onNext && <button type="button" className="kf-nav" title={hasKeys ? (isEn ? `Jump to next${what} keyframe` : `跳到下一个${what}关键帧`) : (isEn ? 'No keyframes yet' : '还没有关键帧')} aria-label={isEn ? 'Next keyframe' : '下一个关键帧'} onClick={onNext} disabled={disabled || !hasKeys}><Icon name="chevronRight" size={12} /></button>}
     </span>
   );
 }
@@ -572,6 +581,7 @@ function sliderEditSpec(format, unit, min, max, step) {
  * 键盘：←→ 一步，Shift+←→ 十步，PageUp/PageDown 十分之一量程，Home/End 最小/最大。
  */
 export function Slider({ label, value, min = -1, max = 1, step = 0.01, onChange, onCommit, onReset, format, disabled, resetValue, keyframe, unit }) {
+  const isEn = useLocale() === 'en-US';
   const [local, setLocal] = useState(value);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -662,8 +672,8 @@ export function Slider({ label, value, min = -1, max = 1, step = 0.01, onChange,
           <span className={'slider-edit-wrap' + (bad ? ' bad' : '')}>
             <input
               ref={editRef} className="slider-edit" type="text" inputMode="decimal" spellCheck={false} autoComplete="off"
-              value={draft} aria-label={name ? `输入「${name}」的数值` : '输入数值'} aria-invalid={bad || undefined}
-              title={bad ? '请输入数字，例如 50' : 'Enter 确认，Esc 取消'}
+              value={draft} aria-label={name ? (isEn ? `Enter value for "${name}"` : `输入「${name}」的数值`) : (isEn ? 'Enter value' : '输入数值')} aria-invalid={bad || undefined}
+              title={bad ? (isEn ? 'Enter a number, e.g. 50' : '请输入数字，例如 50') : (isEn ? 'Enter to confirm, Esc to cancel' : 'Enter 确认，Esc 取消')}
               onChange={(e) => { setDraft(e.target.value); if (bad) setBad(false); }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); refocus.current = true; finishEdit(true); }
@@ -676,12 +686,12 @@ export function Slider({ label, value, min = -1, max = 1, step = 0.01, onChange,
         ) : editable ? (
           <button
             ref={valueRef} type="button" className="slider-value editable" onClick={onValueClick} onDoubleClick={onValueDouble}
-            title={canReset ? '单击输入数值，双击恢复默认' : '单击输入数值'} aria-label={`${name ? name + ' ' : ''}${shown}，单击输入数值`}
+            title={canReset ? (isEn ? 'Click to type value, double-click to reset' : '单击输入数值，双击恢复默认') : (isEn ? 'Click to type value' : '单击输入数值')} aria-label={isEn ? `${name ? name + ' ' : ''}${shown}, click to type value` : `${name ? name + ' ' : ''}${shown}，单击输入数值`}
           >{shown}</button>
         ) : (
-          <span className="slider-value" onDoubleClick={canReset ? doReset : undefined} title={canReset && !disabled ? '双击恢复默认' : undefined}>{shown}</span>
+          <span className="slider-value" onDoubleClick={canReset ? doReset : undefined} title={canReset && !disabled ? (isEn ? 'Double-click to reset' : '双击恢复默认') : undefined}>{shown}</span>
         )}
-        {canReset && <button type="button" className="slider-reset" title="恢复默认" aria-label={name ? `「${name}」恢复默认` : '恢复默认'} onClick={doReset} disabled={disabled || isDefault}><Icon name="reset" size={11} stroke={1.8} /></button>}
+        {canReset && <button type="button" className="slider-reset" title={isEn ? 'Reset to default' : '恢复默认'} aria-label={name ? (isEn ? `Reset "${name}" to default` : `「${name}」恢复默认`) : (isEn ? 'Reset to default' : '恢复默认')} onClick={doReset} disabled={disabled || isDefault}><Icon name="reset" size={11} stroke={1.8} /></button>}
         {keyframe && <KeyframeButton disabled={disabled} {...keyframe} label={keyframe.label || name} />}
       </div>
       <input
@@ -746,6 +756,7 @@ export function Field({ label, children, hint, htmlFor, className = '' }) {
  * onClose 不传（如正在处理中）时 Esc 和点遮罩都不关闭。
  */
 export function Modal({ title, onClose, children, footer, wide, className = '' }) {
+  const isEn = useLocale() === 'en-US';
   const boxRef = useRef(null);
   const titleId = useId();
   const isTop = useLayer(true);
@@ -785,7 +796,7 @@ export function Modal({ title, onClose, children, footer, wide, className = '' }
       <div ref={boxRef} tabIndex={-1} className={'modal ' + (wide ? 'wide ' : '') + className} role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined}>
         <div className="modal-head">
           <h2 id={titleId}>{title}</h2>
-          {onClose && <Button variant="ghost" icon="close" title="关闭（Esc）" onClick={onClose} />}
+          {onClose && <Button variant="ghost" icon="close" title={isEn ? 'Close (Esc)' : '关闭（Esc）'} onClick={onClose} />}
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
@@ -813,11 +824,12 @@ export function Empty({ icon = 'film', title, children, action }) {
 
 /** 进度条：value 为 0–1；indeterminate 为不确定进度（来回滑动）。label 给读屏用。 */
 export function ProgressBar({ value, ai, indeterminate, label }) {
+  const isEn = useLocale() === 'en-US';
   const pct = Math.max(0, Math.min(100, Math.round((Number(value) || 0) * 100)));
   return (
     <div
       className={'progress' + (ai ? ' ai' : '') + (indeterminate ? ' indeterminate' : '')}
-      role="progressbar" aria-label={label || '进度'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={indeterminate ? undefined : pct}
+      role="progressbar" aria-label={label || (isEn ? 'Progress' : '进度')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={indeterminate ? undefined : pct}
     >
       <div style={{ width: `${pct}%` }} />
     </div>

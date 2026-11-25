@@ -13,7 +13,7 @@ import {
   normalizeAnalysis, attachTechniqueToAnalysis, sanitizeTechnique, mergeIds, detectPlatform,
 } from './libraryUtils.js';
 
-// 契约 C1：提示类型只有 info/success/warn/error；旧代码里的 'ok' 统一映射为 success
+// 提示类型只有 info/success/warn/error；旧代码里的 'ok' 统一映射为 success
 const toast = (msg, kind) => useStore.getState().toast(msg, kind === 'ok' ? 'success' : kind);
 
 export const QUEUE_ACTIVE = ['running', 'ai', 'saving'];
@@ -415,7 +415,7 @@ async function runItem(id) {
       const cur = getItem(id);
       if (cur && cur.cancelRequested) api.cancel(jobId);
     });
-    // 契约 C4：视频站链接先过同意框（主进程报 NEED_CONSENT 时弹出，同意后自动重试）
+    // 视频站链接先过同意框（主进程报 NEED_CONSENT 时弹出，同意后自动重试）
     const raw = item.kind === 'url' ? await withConsent(start, 'videoSites') : await start();
     analysis = normalizeAnalysis(raw);
     if (!analysis || !analysis.id) throw new Error('分析结果为空');
@@ -481,7 +481,7 @@ async function annotate(id, analysis, useAI) {
           onProgress: (p) => {
             const cur = getItem(id);
             if (!cur || cur.skipAIRequested) return;
-            // 契约 C9：显示阶段 + 已用时；明显变慢时提示可以跳过
+            // 显示阶段 + 已用时；明显变慢时提示可以跳过
             const phase = (p && (p.phase || p.message)) || 'AI 正在观察关键帧';
             const took = p && Number(p.elapsedMs) > 0 ? ` · 已用时 ${fmtElapsed(p.elapsedMs)}` : '';
             const slow = p && p.slow ? '（比平时慢，可点「跳过 AI」改用本地统计）' : '';

@@ -38,7 +38,7 @@ const MIN_PROMPT_TECHNIQUES = 4;
 const BATCH_STEP_DELAY_MS = 90;
 
 const S = () => useStore.getState();
-// 第 4 参数 opts（key / action）按契约 C1 透传；旧版 store 会忽略它
+// 第 4 参数 opts（key / action）透传给 store.toast；不支持扩展参数时会忽略它
 const toast = (message, kind, ms, opts) => S().toast(message, kind, ms, opts);
 // ai-core 的 isNoAI 之外再按文案兜底：任务通道丢了错误码时也能退回本地规则
 const noAI = (e) => { try { if (isNoAI(e)) return true; } catch { /* 旧实现不认的情况交给下面 */ } return isNoAIError(e); };
@@ -189,7 +189,7 @@ async function runDirector(text, messageId, { forceLocal = false } = {}) {
           patchChat({ jobId });
           if (getUI().chat.cancelling) api.cancel(jobId).catch(() => {});
         },
-        // 优先显示阶段文字（契约 C9 的 phase），旧实现只有 message
+        // 优先显示阶段文字（phase），缺省时回退到 message
         onProgress: (p) => { const stage = p && (p.phase || p.message); if (current() && stage) patchChat({ stage }); },
       });
       out = { parsed: parseDirectorResponse(r.data, { brief, validTechniqueIds }), provider: r.provider };
@@ -654,7 +654,7 @@ export async function fillAllFootage({ quiet = false, onlyMissing = false } = {}
 /** 旧名保留 */
 export const findAllFootage = () => fillAllFootage();
 
-// ---------- AI 真人视频生成（api.videogen，PLAN-v3 §4） ----------
+// ---------- AI 真人视频生成（api.videogen） ----------
 
 const VIDEOGEN_SECONDS = 5;
 const RUNNING_STATES = new Set(['queued', 'running', 'pending', 'submitted']);
@@ -706,7 +706,7 @@ async function providerOrHint() {
 function finishVideo(projectId, shotId, asset, provider, taskId) {
   if (!sameProject(projectId) || !asset) return false;
   const vg = { ...((asset.meta && asset.meta.videogen) || {}), provider, taskId };
-  // source 保留旧字符串 'videogen'（多处按它判断），另按契约 C3/C10 补 ai 标记和许可
+  // source 保留旧字符串 'videogen'（多处按它判断），同时补齐 ai 标记与许可字段
   const aiMark = asset.ai || { provider: provider || 'unknown', createdAt: new Date().toISOString() };
   if (!asset.ai && vg.model) aiMark.model = vg.model;
   if (!asset.ai && vg.prompt) aiMark.prompt = String(vg.prompt).slice(0, 1000);
@@ -1138,12 +1138,12 @@ export async function generateShotImage(shotId) {
       duration: shot.duration,
       width,
       height,
-      // type 给旧读法（素材面板按 type 分类），kind 给契约 C3
+      // type 兼容按类型分类的读法，kind 标识统一来源分类
       source: { kind: 'ai', type: 'ai-image', ...(aiProvider ? { provider: aiProvider } : {}) },
       tags: ['AI 画面'],
       description: [shot.subject, shot.action].filter(Boolean).join('，'),
     });
-    // 契约 C3/C10：AI 生成标记，导出时据此加「AI 生成」角标和隐式标识
+    // AI 生成标记，导出时据此加「AI 生成」角标和隐式标识
     const aiMark = { provider: aiProvider || 'unknown', createdAt: new Date().toISOString(), prompt: String(prompt || '').slice(0, 1000) };
     if (out && out.model) aiMark.model = out.model;
     asset.ai = asset.ai || aiMark;
@@ -1230,7 +1230,7 @@ export async function firstCut() {
     if (answer === 'alt') { if (sameProject(project.id)) S().setMode('refine'); return; }
     if (!answer || !sameProject(project.id)) return;
   }
-  // 新建项目首次初剪：缺画面的镜头先自动配实拍素材（PLAN-v3 §7：用户素材 > AI 视频 > 实拍 > previz）
+  // 新建项目首次初剪：缺画面的镜头先自动配实拍素材（优先级：用户素材 > AI 视频 > 实拍 > previz）
   if (!clipCount) {
     const missing = project.storyboard.filter((s) => !shotMediaPick(s, project.assets).kind || shotMediaPick(s, project.assets).kind === 'previz');
     if (missing.length) {

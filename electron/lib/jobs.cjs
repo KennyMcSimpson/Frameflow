@@ -1,5 +1,5 @@
 'use strict';
-// 后台任务：进度、取消、结果推送。见 SPEC §2.1
+// 后台任务：进度、取消、结果推送。
 // 每个任务的开始/完成/失败/取消和耗时都写进日志（log.cjs），方便排查用户反馈。
 const crypto = require('node:crypto');
 const log = require('./log.cjs');

@@ -126,7 +126,7 @@ export function writePref(key, value) {
 }
 
 // ---------------- 素材来源分类 ----------------
-/** 素材来源类型：'stock'|'videogen'|'previz'|'local'|'web'|'builtin'|'ai'…（契约 C3 的 source.kind 优先，兼容旧对象形式 source:{type|platform}） */
+/** 素材来源类型：'stock'|'videogen'|'previz'|'local'|'web'|'builtin'|'ai'…（优先取 source.kind，兼容旧对象形式 source:{type|platform}） */
 export function assetSourceType(a) {
   if (!a) return '';
   if (typeof a.source === 'string') return a.source;
@@ -147,7 +147,7 @@ export function displayAssetName(a) {
   return n.replace(/^\s*(AI\s*)?预演\s*[:：·\-]\s*/i, '').trim() || '未命名素材';
 }
 
-// ---------------- 内置音乐与音效（契约 C16） ----------------
+// ---------------- 内置音乐与音效 ----------------
 // 清单条目来自 media:builtinAudio：{ id, kind:'music'|'sfx', title, mood?, bpm?, duration, file, license:{id,name,url}, author?, sourceUrl?, path }
 
 /** 许可：接受对象或字符串 id，统一成 { id, name?, url? }；缺省按未知处理 */
@@ -235,7 +235,7 @@ export function findBuiltinAssetId(project, builtinId) {
   return null;
 }
 
-/** 清单条目 → 项目素材（source.kind='builtin' 并带许可，契约 C3/C16） */
+/** 清单条目 → 项目素材（source.kind='builtin' 并带许可） */
 export function builtinAudioAsset(item, existingId) {
   const safe = String(item.id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'audio';
   const source = { kind: 'builtin', id: item.id, title: item.title };
@@ -277,7 +277,7 @@ export function planBuiltinClip({ duration, at = 0, total = 0, kind = 'music' })
   return { start, out, role: 'music', fadeIn: Math.min(0.5, out / 4), fadeOut: trimmed ? Math.min(1.5, out / 3) : Math.min(0.8, out / 4), trimmed };
 }
 
-// ---------------- 从资源管理器拖入（契约 C13） ----------------
+// ---------------- 从资源管理器拖入 ----------------
 /** 外部文件拖入：有 Files 且不是应用内素材拖拽 */
 export function isExternalFileDrag(dataTransfer, internalType = 'application/x-ff-asset') {
   const types = Array.from((dataTransfer && dataTransfer.types) || []);
